@@ -1,0 +1,167 @@
+# OpenClaw Finance Agent v4 - Schedule Configuration
+# Version: 1.0
+# Last Updated: 2026-03-04
+
+# ========================
+# JOB SCHEDULES
+# ========================
+schedules:
+  # Daily universe scan at market open
+  daily_scan:
+    enabled: true
+    schedule_type: "cron"            # "cron" or "interval"
+    cron_expression: "0 9 * * MON-FRI"  # 9 AM weekdays
+    # OR
+    # interval_type: "hours"
+    # interval_value: 24
+    description: "Scan all themes for trading opportunities"
+    on_error: "log_and_continue"     # log_and_continue | stop
+    timeout_sec: 300                 # 5 minutes max
+  
+  # Hourly data refresh during market hours
+  hourly_update:
+    enabled: true
+    schedule_type: "interval"
+    interval_type: "hours"
+    interval_value: 1
+    description: "Refresh price data for open positions"
+    # Time windows (UTC)
+    market_hours_only: true
+    market_open_utc: "13:30"         # 9:30 AM ET
+    market_close_utc: "20:00"        # 4 PM ET
+    on_error: "log_and_continue"
+    timeout_sec: 60                  # 1 minute max
+  
+  # Weekly backtest on Sunday evening
+  weekly_backtest:
+    enabled: true
+    schedule_type: "cron"
+    cron_expression: "0 20 * * SUN"  # 8 PM Sunday
+    description: "Run full backtest on previous week's strategy"
+    on_error: "notify_telegram"      # notify_telegram | log_and_continue | stop
+    timeout_sec: 600                 # 10 minutes max
+    backtest_lookback_days: 365      # 1 year backtest
+  
+  # Daily portfolio rebalance check (not enabled by default)
+  daily_rebalance_check:
+    enabled: false
+    schedule_type: "cron"
+    cron_expression: "0 17 * * MON-FRI"  # 5 PM weekdays
+    description: "Check if rebalance is needed"
+    on_error: "log_and_continue"
+    timeout_sec: 120
+  
+  # Portfolio health check every 30 minutes
+  portfolio_health_check:
+    enabled: true
+    schedule_type: "interval"
+    interval_type: "minutes"
+    interval_value: 30
+    market_hours_only: false
+    description: "Check portfolio P&L, drawdown, exposure"
+    on_error: "log_and_continue"
+    timeout_sec: 30
+  
+  # Telegram status report daily at close
+  daily_status_report:
+    enabled: true
+    schedule_type: "cron"
+    cron_expression: "0 21 * * MON-FRI"  # 5 PM ET
+    market_hours_only: false
+    description: "Send daily P&L report to Telegram"
+    on_error: "log_and_continue"
+    timeout_sec: 30
+
+# ========================
+# MARKET HOURS CONFIGURATION
+# ========================
+market_hours:
+  # US Stock Market hours (in UTC)
+  us_stocks:
+    timezone: "America/New_York"
+    open_time: "09:30"
+    close_time: "16:00"
+    market_days: [1, 2, 3, 4, 5]     # Monday=1, Friday=5
+    holidays:                        # US stock market holidays
+      - "2026-01-01"                 # New Year's Day
+      - "2026-01-20"                 # MLK Day
+      - "2026-02-17"                 # Presidents Day
+      - "2026-03-27"                 # Good Friday
+      - "2026-05-25"                 # Memorial Day
+      - "2026-07-03"                 # Independence Day observed
+      - "2026-09-07"                 # Labor Day
+      - "2026-11-26"                 # Thanksgiving
+      - "2026-12-25"                 # Christmas
+
+# ========================
+# TASK QUEUE CONFIGURATION
+# ========================
+task_queue:
+  backend: "apscheduler"             # or "celery", "rq"
+  max_retries: 3                     # Retry failed tasks 3 times
+  retry_backoff_multiplier: 2.0      # Exponential backoff
+  
+  # Job persistence
+  persist_jobs: true                 # Save job state to SQLite
+  
+  # Job execution
+  executor_type: "threadpool"        # threadpool | processpool
+  max_workers: 4                     # Thread pool size
+  
+  # Monitoring
+  log_all_executions: true
+  send_completion_notification: false
+
+# ========================
+# NOTIFICATION CONFIGURATION
+# ========================
+notifications:
+  # Trade notifications
+  notify_on_trade: true
+  notify_on_approval_request: true
+  notify_on_backtest_complete: true
+  notify_on_portfolio_alert: true
+  
+  # Telegram notification settings
+  telegram:
+    enabled: true
+    bot_token_env: "TELEGRAM_BOT_TOKEN"     # Read from env
+    chat_id_env: "TELEGRAM_CHAT_ID"         # Read from env
+    include_charts: false                   # Include equity curve attachment
+    max_retries: 3
+  
+  # Slack notification settings (optional)
+  slack:
+    enabled: false
+    webhook_url_env: "SLACK_WEBHOOK_URL"
+    channel: "#trading"
+  
+  # Email notification settings (optional)
+  email:
+    enabled: false
+    smtp_enabled: false
+    from_address: "trading-bot@example.com"
+    recipient_addresses: []
+
+# ========================
+# ERROR HANDLING & RETRY
+# ========================
+error_handling:
+  # On data fetch failure
+  fetch_failure_retry: true
+  fetch_max_retries: 3
+  fetch_retry_delay_sec: 5
+  
+  # On rate limit
+  rate_limit_handling: "backoff"     # backoff | retry_later | skip
+  rate_limit_backoff_sec: 10
+  
+  # On execution failure
+  execution_failure_action: "cancel" # cancel | retry | manual_review
+  
+  # On approval timeout
+  approval_timeout_action: "reject"  # reject | auto_execute | retry
+  
+  # Telegram notification on errors
+  notify_on_error: true
+  error_notification_cooldown_sec: 300  # Don't spam Telegram every second

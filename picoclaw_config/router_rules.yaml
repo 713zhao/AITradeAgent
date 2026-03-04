@@ -1,0 +1,65 @@
+"""
+Router rules for PicoClaw Intent Detection
+
+Determines whether to activate Finance mode for a message
+"""
+
+routing_rules:
+  
+  # Finance Intent Indicators
+  finance_keywords:
+    - "stock|equity|trading|portfolio|invest"
+    - "buy|sell|bullish|bearish|short|long"
+    - "rsi|macd|bollinger|moving average|trend"
+    - "dividend|earnings|revenue|p/e ratio"
+    - "backtest|strategy|signal|candle"
+    - "portfolio|position|hedge|margin"
+  
+  ticker_patterns:
+    # Common stock tickers (NYSE/NASDAQ)
+    - "\\b[A-Z]{1,5}\\b"  # AAPL, TSLA, NVDA, etc.
+    - "\\b\\$[A-Z]{1,5}\\b"  # $AAPL format
+  
+  finance_actions:
+    - "analyze|backtest|simulate|paper trade"
+    - "what is the price|quote|get data"
+    - "should i (buy|sell|hold)"
+    - "position|sizing|risk|drawdown"
+  
+  # Activation Rules
+  rules:
+    - if_any_keyword_and_ticker:
+        load_context: finance
+        mode: finance_analysis
+    
+    - if_finance_action:
+        load_context: finance
+        mode: finance_execution
+    
+    - if_ticker_only:
+        confidence: 0.7
+        load_context: finance
+        mode: finance_quote
+  
+  exclusions:
+    # NOT finance if these appear
+    - "learn about|explain finance concepts"  # Educational, not trading
+    - "compare brokers|which app"  # Meta, not analysis
+  
+  # Fallback
+  default:
+    mode: general_chat
+    load_context: none
+
+# Finance Context Initialization
+finance_context:
+  system_prompt: "finance_system_prompt.md"
+  tool_schemas: "tool_schemas.json"
+  tool_policy: "finance_tool_policy.md"
+  available_models:
+    - baseline_rule_strategy
+    - technical_analysis_only
+  portfolio:
+    initial_cash: 100000
+    slippage: 0.0005
+  cache_enabled: true

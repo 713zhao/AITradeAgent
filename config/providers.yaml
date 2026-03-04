@@ -1,0 +1,162 @@
+# OpenClaw Finance Agent v4 - Data Provider Configuration
+# Version: 1.0
+# Last Updated: 2026-03-04
+
+# ========================
+# DATA PROVIDERS
+# ========================
+providers:
+  # Primary provider: yfinance (free, no API key needed)
+  yfinance:
+    enabled: true
+    primary: true
+    
+    # Rate limiting configuration
+    rate_limit:
+      max_requests_per_minute: 60
+      max_requests_per_hour: 2000
+      batch_size: 10                 # Fetch 10 symbols per request
+      batch_delay_sec: 1.0           # Wait 1 second between batches
+      request_jitter_sec: 0.5        # Random jitter per request
+    
+    # Backoff strategy
+    backoff:
+      enabled: true
+      initial_wait_sec: 1
+      max_wait_sec: 60
+      multiplier: 1.5
+    
+    # Timeout and retry
+    timeout_sec: 30
+    max_retries: 3
+    retry_delay_sec: 5
+    
+    # Data quality checks
+    validate_prices: true
+    drop_zeros: true
+    require_volume: true
+    min_volume: 100000               # At least 100k shares volume
+  
+  # Secondary provider: OpenBB (more features)
+  openbb:
+    enabled: true
+    primary: false
+    fallback_to_yfinance: true       # If OpenBB fails, use yfinance
+    
+    # API configuration
+    api_key_env: "OPENBB_API_KEY"    # Read API key from env
+    use_local_backend: true          # Use local OpenBB backend
+    
+    # Rate limiting
+    rate_limit:
+      max_requests_per_minute: 120
+      timeout_sec: 30
+      max_retries: 3
+    
+    # Features
+    include_fundamentals: false      # Don't fetch fundamental data
+    include_technicals: true         # Include technical indicators
+    include_sentiment: false         # Don't fetch sentiment
+  
+  # Alternative provider: AlphaVantage (if needed)
+  alphavantage:
+    enabled: false
+    primary: false
+    
+    # API configuration
+    api_key_env: "ALPHA_VANTAGE_API_KEY"
+    timeout_sec: 20
+    
+    # Rate limiting: AlphaVantage has strict free limits
+    rate_limit:
+      max_requests_per_minute: 5     # Free tier: 5 per min
+      batch_size: 1                  # Must fetch one at a time
+    
+    # Note: Use OpenBB or yfinance instead for better performance
+
+# ========================
+# CACHE CONFIGURATION
+# ========================
+cache:
+  # Cache backend
+  backend: "sqlite"                  # sqlite | redis
+  
+  # SQLite cache
+  sqlite:
+    database_path: "storage/cache.sqlite"
+    
+    # Cache strategies
+    cache_ttl_minutes: 1440          # 1 day TTL
+    cache_policy: "recent"           # recent | popular
+    max_cache_size_mb: 500
+    
+    # Cache invalidation
+    invalidate_after_error: false    # Keep bad data during errors
+    validate_cache_on_load: true     # Validate data integrity
+  
+  # Redis cache (optional, if you want faster caching)
+  redis:
+    enabled: false
+    host: "localhost"
+    port: 6379
+    db: 0
+    password_env: "REDIS_PASSWORD"
+    ttl_seconds: 86400               # 1 day
+  
+  # Cache behavior
+  use_cache_on_provider_error: true  # Use stale cache if provider fails
+  cache_incomplete_data: false       # Don't cache if data is incomplete
+
+# ========================
+# DATA QUALITY CONFIGURATION
+# ========================
+data_quality:
+  # Validation rules
+  reject_if_missing_data: true       # Reject symbols with missing candles
+  reject_if_low_volume: true
+  min_volume_threshold: 100000       # At least 100k daily volume
+  
+  # Price validation
+  reject_if_price_zero: true
+  reject_if_no_price_change: true    # All OHLC same = invalid
+  
+  # Historical data requirements
+  min_bars_required: 50              # At least 50 candles
+  
+  # Outlier detection
+  detect_price_outliers: true
+  outlier_std_devs: 5.0              # Flag prices > 5 sigma
+
+# ========================
+# API CREDENTIALS (read from environment)
+# ========================
+credentials:
+  # These should be set in environment variables, NOT here
+  # Example: export OPENBB_API_KEY="your-key-here"
+  
+  telegram_bot_token_env: "TELEGRAM_BOT_TOKEN"
+  telegram_chat_id_env: "TELEGRAM_CHAT_ID"
+  
+  openbb_api_key_env: "OPENBB_API_KEY"
+  alpha_vantage_key_env: "ALPHA_VANTAGE_API_KEY"
+  
+  slack_webhook_url_env: "SLACK_WEBHOOK_URL"
+  smtp_password_env: "SMTP_PASSWORD"
+
+# ========================
+# QUERY/RESPONSE LOGGING
+# ========================
+logging:
+  # Log all API requests and responses
+  log_requests: true
+  log_responses: false               # Don't log OHLC data
+  
+  # Log file locations
+  request_log_dir: "logs/api_requests"
+  
+  # Sensitive data masking
+  mask_api_keys: true
+  mask_credentials: true
+  
+  # Log levels
+  level: "INFO"                      # DEBUG | INFO | WARNING | ERROR

@@ -1,0 +1,233 @@
+{
+  "tools": [
+    {
+      "name": "analyze_symbol",
+      "description": "Analyze a single symbol with data + indicators + strategy decision",
+      "parameters": {
+        "symbol": {
+          "type": "string",
+          "description": "Ticker symbol (e.g., AAPL, TSLA)",
+          "required": true
+        },
+        "lookback_days": {
+          "type": "integer",
+          "description": "Historical data lookback in days (default 252)",
+          "required": false,
+          "default": 252
+        }
+      },
+      "returns": {
+        "task_id": "uuid",
+        "symbol": "string",
+        "decision": "BUY|SELL|HOLD",
+        "confidence": "float 0-1",
+        "signals": {
+          "trend": "up|down|flat",
+          "rsi": "number or null",
+          "sma50": "number or null"
+        },
+        "position": {
+          "action_qty": "shares to buy/sell",
+          "action_value": "USD value"
+        },
+        "risk": {
+          "risk_level": "low|medium|high",
+          "max_loss_estimate": "USD",
+          "stop_loss": "price or null",
+          "take_profit": "price or null"
+        },
+        "required_approval": "boolean"
+      }
+    },
+    {
+      "name": "get_price_historical",
+      "description": "Fetch OHLCV historical price data",
+      "parameters": {
+        "symbol": {
+          "type": "string",
+          "description": "Ticker symbol",
+          "required": true
+        },
+        "start_date": {
+          "type": "string",
+          "description": "ISO format (YYYY-MM-DD), optional",
+          "required": false
+        },
+        "end_date": {
+          "type": "string",
+          "description": "ISO format (YYYY-MM-DD), optional",
+          "required": false
+        },
+        "interval": {
+          "type": "string",
+          "description": "1day, 1hour, 15min, etc.",
+          "required": false,
+          "default": "1day"
+        }
+      },
+      "returns": {
+        "symbol": "string",
+        "dates": ["YYYY-MM-DD", "..."],
+        "open": [100.0, 101.0, "..."],
+        "high": [102.0, "..."],
+        "low": [99.0, "..."],
+        "close": [101.5, "..."],
+        "volume": [1000000, "..."]
+      }
+    },
+    {
+      "name": "calc_rsi",
+      "description": "Calculate Relative Strength Index",
+      "parameters": {
+        "prices": {
+          "type": "array of float",
+          "description": "Closing prices",
+          "required": true
+        },
+        "period": {
+          "type": "integer",
+          "description": "RSI period (default 14)",
+          "required": false,
+          "default": 14
+        }
+      },
+      "returns": {
+        "type": "array of float",
+        "description": "RSI values (0-100)"
+      }
+    },
+    {
+      "name": "calc_atr",
+      "description": "Calculate Average True Range",
+      "parameters": {
+        "highs": {
+          "type": "array of float",
+          "required": true
+        },
+        "lows": {
+          "type": "array of float",
+          "required": true
+        },
+        "closes": {
+          "type": "array of float",
+          "required": true
+        },
+        "period": {
+          "type": "integer",
+          "default": 14
+        }
+      },
+      "returns": {
+        "type": "array of float",
+        "description": "ATR values"
+      }
+    },
+    {
+      "name": "validate_trade",
+      "description": "Validate proposed trade against risk policies",
+      "parameters": {
+        "symbol": {
+          "type": "string",
+          "required": true
+        },
+        "action": {
+          "type": "string",
+          "enum": ["BUY", "SELL"],
+          "required": true
+        },
+        "qty": {
+          "type": "float",
+          "required": true
+        },
+        "price": {
+          "type": "float",
+          "required": true
+        }
+      },
+      "returns": {
+        "valid": "boolean",
+        "errors": ["list of constraint violations"],
+        "warnings": ["list of warnings"],
+        "position_pct": "percent of portfolio"
+      }
+    },
+    {
+      "name": "propose_trade",
+      "description": "Propose a trade (dry-run, no execution)",
+      "parameters": {
+        "decision": {
+          "type": "object",
+          "description": "Decision output from analyze_symbol",
+          "required": true
+        }
+      },
+      "returns": {
+        "valid": "boolean",
+        "summary": "string",
+        "details": {
+          "trade": "object",
+          "validation": "object"
+        }
+      }
+    },
+    {
+      "name": "execute_trade",
+      "description": "Execute a proposed trade after approval",
+      "parameters": {
+        "task_id": {
+          "type": "string",
+          "description": "UUID from propose_trade",
+          "required": true
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "Approval transaction ID",
+          "required": false
+        }
+      },
+      "returns": {
+        "success": "boolean",
+        "message": "string",
+        "portfolio_state": "object"
+      }
+    },
+    {
+      "name": "portfolio_get_state",
+      "description": "Get current portfolio state",
+      "parameters": {},
+      "returns": {
+        "cash": "float",
+        "equity": "float",
+        "total_value": "float",
+        "positions": {
+          "SYMBOL": {
+            "qty": "float",
+            "current_price": "float",
+            "market_value": "float",
+            "unrealized_pnl": "float"
+          }
+        }
+      }
+    },
+    {
+      "name": "portfolio_get_performance",
+      "description": "Get portfolio performance metrics",
+      "parameters": {},
+      "returns": {
+        "portfolio": "object",
+        "returns": {
+          "total_return_pct": "float",
+          "cagr": "float",
+          "volatility": "float"
+        },
+        "drawdown": {
+          "max_drawdown_pct": "float",
+          "current_drawdown_pct": "float"
+        },
+        "sharpe": {
+          "sharpe_ratio": "float"
+        }
+      }
+    }
+  ]
+}

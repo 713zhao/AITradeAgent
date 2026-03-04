@@ -1,0 +1,202 @@
+# PicoClaw Dashboard Configuration - Finance Agent Integration
+# Load this config in PicoClaw to enable finance mode
+
+name: Finance Agent Configuration
+version: 1.0.0
+created: 2026-03-03
+
+# Service Configuration
+services:
+  finance:
+    enabled: true
+    endpoint: http://localhost:5000
+    type: rest
+    health_check: /health
+    timeout: 30
+    retry_count: 3
+    cache_enabled: true
+    cache_ttl: 300
+
+# Context Definitions
+contexts:
+  finance:
+    name: Finance Analysis
+    description: Stock analysis, trading, portfolio management
+    
+    # System Prompt
+    system_prompt_file: ./picoclaw_config/finance_system_prompt.md
+    
+    # Tool Schemas
+    tool_schemas_file: ./picoclaw_config/tool_schemas.json
+    
+    # Tool Policy
+    policy_file: ./picoclaw_config/finance_tool_policy.md
+    
+    # Available Tools
+    tools:
+      - analyze_symbol
+      - get_price_quote
+      - portfolio_state
+      - portfolio_performance
+      - execute_trade_proposal
+    
+    # Router Configuration
+    router:
+      mode: intent_based
+      trigger_patterns:
+        - ticker_symbols: '[A-Z]{1,5}(?:\s|$)'
+        - finance_keywords:
+            - stock|equity|trading|portfolio
+            - buy|sell|bullish|bearish
+            - rsi|macd|trend|momentum
+            - earnings|valuation|p/e
+        - finance_actions:
+            - analyze|backtest|simulate
+            - what is the price|get quote
+            - should i (buy|sell|hold)
+      
+      confidence_threshold: 0.6
+      auto_activate: true
+      fallback_context: general_chat
+    
+    # Safety Configuration
+    safety:
+      require_approval: true
+      approval_methods:
+        - telegram
+        - slack
+        - manual_cli
+      max_position_size: 0.20
+      max_portfolio_exposure: 0.90
+      max_daily_loss_pct: 3.0
+      max_drawdown_pct: 10.0
+    
+    # Logging
+    logging:
+      level: INFO
+      audit_trail: enabled
+      log_all_trades: true
+      log_all_analysis: true
+
+# Intent Routing Rules
+routing:
+  rules:
+    - pattern: '(analyze|analyze\s+)?[A-Z]{1,5}'
+      action: finance.analyze_symbol
+      context: finance
+      confidence: 0.95
+    
+    - pattern: '(what is|what.*?|get).*(price|quote).*[A-Z]{1,5}'
+      action: finance.get_price_quote
+      context: finance
+      confidence: 0.90
+    
+    - pattern: '(show|get|what.*?).*(portfolio|positions|holdings)'
+      action: finance.portfolio_state
+      context: finance
+      confidence: 0.90
+    
+    - pattern: '(performance|returns|sharpe|drawdown)'
+      action: finance.portfolio_performance
+      context: finance
+      confidence: 0.85
+    
+    - pattern: '(buy|sell|execute|trade).+[A-Z]{1,5}'
+      action: finance.execute_trade_proposal
+      context: finance
+      confidence: 0.85
+      confirm_required: true
+    
+    - pattern: '.*'  # Catch-all
+      action: general_chat
+      context: general
+      confidence: 0.1
+
+# Approval Gate Configuration
+approval_gate:
+  type: telegram
+  
+  # Telegram Bot (if using Telegram)
+  telegram:
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+    timeout_seconds: 300
+  
+  # Slack (if using Slack)
+  slack:
+    bot_token: ${SLACK_BOT_TOKEN}
+    channel: ${SLACK_CHANNEL}
+    timeout_seconds: 300
+  
+  # Manual CLI (default fallback)
+  manual:
+    enabled: true
+    prompt_style: interactive
+    allow_timeout: true
+
+# Message Templates
+templates:
+  analysis_result: |
+    📊 **{symbol} Analysis**
+    
+    **Decision:** {decision} (Confidence: {confidence:.0%})
+    
+    **Signals:**
+    - Trend: {trend}
+    - RSI: {rsi}
+    - Risk Level: {risk_level}
+    
+    **Position:** {action_qty} shares @ ${price:.2f}
+    **Max Loss:** ${max_loss:.2f}
+    
+    {rationale}
+    
+    {approval_prompt}
+  
+  approval_request: |
+    🤖 **TRADE APPROVAL REQUIRED**
+    
+    **Proposal:** {proposal}
+    **Task ID:** {task_id}
+    **Confidence:** {confidence:.0%}
+    
+    **Risk Assessment:**
+    {risk_details}
+    
+    Reply **YES** to execute or **NO** to cancel.
+    Timeout: {timeout}s
+  
+  trade_executed: |
+    ✅ **Trade Executed**
+    
+    {symbol}: {action} {quantity} @ ${price:.2f}
+    
+    **Portfolio Update:**
+    - Cash: ${cash:.2f}
+    - Equity: ${equity:.2f}
+    - Total: ${total:.2f}
+    - PnL: ${pnl:.2f} ({pnl_pct:.2f}%)
+
+# Performance Monitoring
+monitoring:
+  enabled: true
+  metrics:
+    - trades_executed
+    - portfolio_value
+    - daily_pnl
+    - win_rate
+    - average_confidence
+  
+  alerts:
+    daily_loss_threshold: 3.0
+    max_drawdown_threshold: 10.0
+    trade_failure_threshold: 5
+  
+  retention_days: 365
+
+# Defaults
+defaults:
+  initial_capital: 100000
+  slippage: 0.0005
+  strategy: baseline_rule
+  lookback_days: 252

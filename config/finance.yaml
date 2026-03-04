@@ -1,0 +1,314 @@
+# OpenClaw Finance Agent v4 - Finance Configuration
+# Version: 1.0
+# Last Updated: 2026-03-04
+
+# ========================
+# UNIVERSE CONFIGURATION
+# ========================
+universe:
+  # Theme-based universe scanning (AI, semiconductor, cloud, energy, healthcare)
+  themes:
+    - name: "AI"
+      symbols:
+        - NVDA  # NVIDIA
+        - PLTR  # Palantir
+        - UPST  # Upstart
+        - AVGO  # Broadcom
+        - MSTR  # MicroStrategy
+    
+    - name: "Semiconductor"
+      symbols:
+        - TSM   # Taiwan Semiconductor
+        - QCOM  # Qualcomm
+        - AMD   # AMD
+        - ASR   # Amkor Technology
+        - ASML  # ASML
+    
+    - name: "Cloud"
+      symbols:
+        - CRWD  # CrowdStrike
+        - DDOG  # Datadog
+        - NET   # Cloudflare
+        - MDB   # MongoDB
+        - SNOW  # Snowflake
+    
+    - name: "Energy"
+      symbols:
+        - XLE   # Energy sector ETF
+        - CVX   # Chevron
+        - COP   # ConocoPhillips
+    
+    - name: "Healthcare"
+      symbols:
+        - ISRG  # Intuitive Surgical
+        - VEEV  # Veeva Systems
+        - DXCM  # Dexcom
+
+  # Global symbol list (available for manual selection)
+  all_symbols:
+    - NVDA
+    - PLTR
+    - UPST
+    - AVGO
+    - MSTR
+    - TSM
+    - QCOM
+    - AMD
+    - ASR
+    - ASML
+    - CRWD
+    - DDOG
+    - NET
+    - MDB
+    - SNOW
+    - XLE
+    - CVX
+    - COP
+    - ISRG
+    - VEEV
+    - DXCM
+
+  # Whitelist mode (set enabled=true to restrict to these symbols)
+  whitelist:
+    enabled: false
+    symbols: []
+
+# ========================
+# RISK CONFIGURATION
+# ========================
+risk:
+  # Position sizing
+  max_position_size_pct: 20          # Max % of portfolio per trade
+  max_exposure_pct: 90               # Max % total deployed
+  max_daily_loss_pct: 3              # Daily loss stop (3% = -$3k on $100k)
+  max_drawdown_pct: 10               # Max drawdown stop (10%)
+  
+  # Risk per trade
+  default_risk_budget_pct: 1.0       # 1% of portfolio per trade
+  stop_loss_default_pct: 2.0         # Default SL if not specified (2%)
+  take_profit_default_pct: 3.0       # Default TP if not specified (3%)
+  
+  # Position limits
+  max_concurrent_positions: 10       # Max open trades at once
+  min_position_size_usd: 100         # Minimum position size ($100)
+  
+  # Trading rules
+  allow_short_selling: false         # Only long trades
+  margin_enabled: false              # No margin, cash only
+
+# ========================
+# STRATEGY CONFIGURATION
+# ========================
+strategy:
+  # Strategy type (baseline_rule, ml_classifier, etc.)
+  type: "baseline_rule"
+  
+  # Auto-execution settings
+  auto_execute:
+    enabled: true
+    confidence_threshold: 0.75       # Auto-execute at 75%+ confidence
+    require_approval: true           # Always notify, but auto-execute on high confidence
+  
+  # Approval workflow
+  approval:
+    telegram_enabled: true           # Send Telegram button approvals
+    approval_timeout_sec: 300        # 5-minute approval window
+    require_human_approval: false    # False = auto-execute on threshold
+    fallback_to_reject: true         # Timeout = reject (not execute)
+  
+  # Indicators (enabled/disabled)
+  indicators:
+    rsi:
+      enabled: true
+      period: 14
+      overbought: 70
+      oversold: 30
+    
+    macd:
+      enabled: true
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+    
+    sma:
+      enabled: true
+      periods: [20, 50, 200]
+    
+    ema:
+      enabled: true
+      periods: [12, 26]
+    
+    atr:
+      enabled: true
+      period: 14
+    
+    bollinger:
+      enabled: true
+      period: 20
+      std_dev: 2
+    
+    stochastic:
+      enabled: true
+      k_period: 14
+      d_period: 3
+  
+  # Strategy rules
+  rules:
+    # Entry signals
+    rsi_entry_oversold: true         # Buy when RSI < 30
+    macd_crossover: true             # Entries on MACD crossovers
+    price_above_sma20: true          # Only trade above SMA20
+    
+    # Exit signals
+    rsi_exit_overbought: true        # Sell when RSI > 70
+    macd_signal_exit: true           # Exit on MACD signal cross
+    stop_loss_enabled: true          # Use ATR-based stops
+    take_profit_enabled: true        # Use TP targets
+
+# ========================
+# PHASE 2: INDICATOR-BASED STRATEGIES
+# ========================
+strategies:
+  # Entry rules (must match indicator names from IndicatorCalculator)
+  entry_rules:
+    - name: "rsi_oversold"
+      type: "entry"
+      indicator: "rsi"
+      condition: "less_than"
+      value: 30
+      enabled: true
+    
+    - name: "price_above_sma20"
+      type: "entry"
+      indicator: "sma_20"
+      condition: "greater_than"
+      value: 0  # This is a price-based check vs indicator line - will need review
+      enabled: true
+    
+    - name: "macd_bullish"
+      type: "entry"
+      indicator: "macd"
+      condition: "greater_than"
+      value: 0
+      enabled: false
+    
+    - name: "bb_oversold"
+      type: "entry"
+      indicator: "bb"
+      condition: "less_than"
+      value: 0
+      enabled: true
+  
+  # Exit rules (must match indicator names from IndicatorCalculator)
+  exit_rules:
+    - name: "rsi_overbought"
+      type: "exit"
+      indicator: "rsi"
+      condition: "greater_than"
+      value: 70
+      enabled: true
+    
+    - name: "macd_bearish"
+      type: "exit"
+      indicator: "macd"
+      condition: "less_than"
+      value: 0
+      enabled: false
+    
+    - name: "bb_overbought"
+      type: "exit"
+      indicator: "bb"
+      condition: "greater_than"
+      value: 100
+      enabled: true
+
+
+# ========================
+# BACKTESTING CONFIGURATION
+# ========================
+backtest:
+  enabled: true
+  
+  # Backtest period
+  start_date: "2023-01-01"           # Backtest from this date
+  end_date: null                     # null = today
+  lookback_days: 252                 # 1 year historical data before start_date
+  
+  # Backtesting parameters
+  initial_capital: 100000            # $100k starting capital
+  commission_pct: 0.001              # 0.1% commission per trade
+  slippage_pct: 0.0005               # 0.05% slippage on each trade
+  
+  # Metrics to compute
+  metrics:
+    - cagr                           # Compound annual growth rate
+    - total_return                   # Total % return
+    - max_drawdown                   # Max drawdown
+    - sharpe_ratio                   # Sharpe ratio (assuming 2% risk-free rate)
+    - win_rate                       # % of winning trades
+    - profit_factor                  # Gross profit / gross loss
+  
+  # Backtest reporting
+  generate_report: true
+  store_results: true                # Save to SQLite
+  plot_equity_curve: true
+
+# ========================
+# DATA CONFIGURATION
+# ========================
+data:
+  # Historical data settings
+  default_interval: "1day"           # Can be "1min", "5min", "1h", "1day"
+  default_lookback_days: 252         # 1 year
+  
+  # Data refresh settings
+  cache_ttl_minutes: 1440            # Cache data for 1 day
+  cache_enabled: true
+  
+  # Batch fetching optimization
+  batch_size: 10                     # Fetch 10 symbols at a time
+  batch_delay_sec: 0.5              # Delay between batches
+  
+  # Request jitter (prevent rate-limiting)
+  request_jitter_sec: 0.5            # Random delay 0-0.5s per request
+  
+  # Backoff strategy for rate limits
+  backoff:
+    enabled: true
+    initial_wait_sec: 1              # Start with 1 second
+    max_wait_sec: 30                 # Cap at 30 seconds
+    multiplier: 2.0                  # Exponential backoff multiplier
+
+# ========================
+# PERFORMANCE TUNING
+# ========================
+performance:
+  # Parallel processing
+  max_workers: 4                     # Thread pool size for data fetching
+  
+  # Logging
+  verbose: false                     # Set true for debug logging
+  log_trades: true                   # Log all trades
+  
+  # Database
+  buffer_batch_inserts: true         # Batch SQL inserts for speed
+  buffer_size: 100                   # Insert every 100 records
+  
+  # API timeouts
+  api_timeout_sec: 30                # HTTP request timeout
+  api_retries: 3                     # Retry failed requests
+
+# ========================
+# PORTFOLIO INITIALIZATION
+# ========================
+portfolio:
+  initial_cash: 100000               # $100k starting capital
+  base_currency: "USD"
+  
+  # Reset behavior
+  reset_on_startup: false            # Don't reset portfolio on restart
+  archive_trades_on_reset: true      # Archive old trades when resetting
+  
+  # Portfolio rebalancing
+  auto_rebalance_enabled: false      # Manual rebalance only
+  rebalance_frequency: "monthly"     # Could be "weekly", "monthly", "quarterly"

@@ -1,0 +1,17 @@
+[Unit]
+Description=PicoClaw Finance Agent Daily Backtest
+Documentation=https://github.com/picoclaw/picotradeagent
+
+[Timer]
+# Run backtest at 7 AM every business day (Mon-Fri)
+OnCalendar=Mon-Fri *-*-* 07:00:00
+# Randomize start time by up to 10 minutes to avoid thundering herd
+RandomizedDelaySec=600
+
+# Run again on market open (9:30 AM ET)
+OnCalendar=Mon-Fri *-*-* 09:30:00
+
+Persistent=true
+
+[Install]
+WantedBy=timers.target
