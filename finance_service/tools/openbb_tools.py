@@ -153,7 +153,7 @@ class OpenBBTools:
             return {"error": error_msg, "symbol": symbol}
     
     def get_quote(self, symbol: str) -> Dict[str, Any]:
-        """Get latest quote"""
+        """Get latest quote in dashboard-compatible format"""
         cache_key = f"quote_{symbol}"
         cached = self.cache.get(cache_key)
         if cached:
@@ -161,22 +161,30 @@ class OpenBBTools:
         
         try:
             ticker = yf.Ticker(symbol.upper())
+            
+            # Get current day's data
+            hist = ticker.history(period="1d")
             info = ticker.info
             
-            if not info:
+            if hist.empty or not info:
                 return {"error": f"No quote data available for {symbol}"}
             
+            # Extract the latest candle (today)
+            latest = hist.iloc[-1]
+            
+            # Return in dashboard-compatible format (with close, open, high, low, volume)
             result = {
                 "symbol": symbol.upper(),
-                "price": info.get("currentPrice", info.get("last_price", 0)),
-                "data": {
-                    "price": info.get("currentPrice", 0),
-                    "bid": info.get("bid", 0),
-                    "ask": info.get("ask", 0),
-                    "volume": info.get("volume", 0),
-                    "market_cap": info.get("marketCap", 0),
-                    "timestamp": datetime.now().isoformat(),
-                }
+                "open": float(latest.get("Open", 0)),
+                "high": float(latest.get("High", 0)),
+                "low": float(latest.get("Low", 0)),
+                "close": float(latest.get("Close", 0)),
+                "volume": int(latest.get("Volume", 0)),
+                "timestamp": datetime.now().isoformat(),
+                # Extra fields from info
+                "bid": float(info.get("bid", 0)),
+                "ask": float(info.get("ask", 0)),
+                "price": float(latest.get("Close", 0)),  # For backward compatibility
             }
             
             self.cache.set(cache_key, result, ttl_seconds=300)  # 5 min cache
