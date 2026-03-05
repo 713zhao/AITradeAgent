@@ -16,11 +16,11 @@ class FinanceServiceConnector:
     Connector for PicoClaw to communicate with Finance Service
     
     Usage in PicoClaw:
-        connector = FinanceServiceConnector("http://localhost:5000")
+        connector = FinanceServiceConnector("http://localhost:8801")
         result = connector.analyze("AAPL")
     """
     
-    def __init__(self, base_url: str = "http://localhost:5000", timeout: int = 30):
+    def __init__(self, base_url: str = "http://localhost:8801", timeout: int = 30):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.session = requests.Session()
@@ -125,7 +125,7 @@ class FinanceServiceConnector:
 # Singleton instance
 _connector = None
 
-def get_connector(base_url: str = "http://localhost:5000") -> FinanceServiceConnector:
+def get_connector(base_url: str = "http://localhost:8801") -> FinanceServiceConnector:
     """Get or create connector instance"""
     global _connector
     if _connector is None:

@@ -146,10 +146,12 @@ class IndicatorTools:
         
         # Calculate true range
         tr1 = highs - lows
-        tr2 = np.abs(highs - closes[:-1])
-        tr3 = np.abs(lows - closes[:-1])
+        # Handle previous close: pad with first close value for the first bar
+        prev_closes = np.concatenate([[closes[0]], closes[:-1]])
+        tr2 = np.abs(highs - prev_closes)
+        tr3 = np.abs(lows - prev_closes)
         
-        tr = np.concatenate([[tr1[0]], np.maximum(tr1[1:], np.maximum(tr2, tr3))])
+        tr = np.maximum(np.maximum(tr1, tr2), tr3)
         
         # Calculate ATR
         atr = np.zeros_like(tr)

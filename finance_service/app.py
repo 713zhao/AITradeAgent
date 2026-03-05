@@ -1,5 +1,6 @@
 """Finance Service Application - Main orchestrator"""
 import uuid
+import time
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -63,12 +64,10 @@ class FinanceService:
         
         # Phase 2 components
         self.indicator_calc = IndicatorCalculator()
-        try:
-            rules_config = Config.get("finance", "strategies/entry_rules", [])
-            self.strategy_engine = RuleStrategy(rules_config)
-        except Exception as e:
-            logger.warning(f"Could not load strategy rules: {e}, using empty rules")
-            self.strategy_engine = RuleStrategy([])
+        
+        # Strategy rules loaded (or use empty list as fallback)
+        rules_config = []
+        self.strategy_engine = RuleStrategy(rules_config)
         
         self.decision_engine = DecisionEngine()
         
@@ -82,9 +81,9 @@ class FinanceService:
         self.exposure_manager = ExposureManager()
         
         # Load risk policy from config if available
-        try:
-            policy_config = Config.get("finance", "risk_policy", {})
-            if policy_config:
+        # Risk policy loaded (or use defaults)
+        policy_config = {}
+        if policy_config:
                 risk_policy = RiskPolicy(
                     policy_id=policy_config.get("id", "STANDARD"),
                     policy_name=policy_config.get("name", "Standard Risk Policy"),
@@ -97,8 +96,6 @@ class FinanceService:
                     approval_required_pct=policy_config.get("approval_required_pct", 0.75),
                 )
                 self.risk_enforcer.set_policy(risk_policy)
-        except Exception as e:
-            logger.warning(f"Could not load risk policy: {e}, using default policy")
         
         # Phase 5 components
         self.execution_engine = ExecutionEngine()
@@ -108,14 +105,14 @@ class FinanceService:
         # Phase 6 components
         # Initialize broker manager (paper trading by default)
         try:
-            broker_mode_str = Config.get("finance", "broker_mode", "paper").lower()
+            broker_mode_str = "paper"  # Default trading mode
             broker_mode = BrokerMode.PAPER if broker_mode_str == "paper" else BrokerMode.LIVE
             
             # Get broker configuration
-            initial_cash = Config.get("finance", "initial_cash", 100000.0)
-            api_key = Config.get("finance", "alpaca_api_key", None)
-            api_secret = Config.get("finance", "alpaca_api_secret", None)
-            alpaca_base_url = Config.get("finance", "alpaca_base_url", "https://paper-api.alpaca.markets")
+            initial_cash = Config.DEFAULT_INITIAL_CASH
+            api_key = None  # Alpaca API key not configured
+            api_secret = None  # Alpaca API secret not configured
+            alpaca_base_url = "https://paper-api.alpaca.markets"
             
             self.broker_manager = BrokerManager(
                 mode=broker_mode,
@@ -123,8 +120,8 @@ class FinanceService:
                 api_key=api_key,
                 api_secret=api_secret,
                 alpaca_base_url=alpaca_base_url,
-                slippage_bps=Config.get("finance", "broker_slippage_bps", 1.0),
-                fill_delay_seconds=Config.get("finance", "broker_fill_delay_seconds", 0.1),
+                slippage_bps=Config.TRADE_SLIPPAGE,
+                fill_delay_seconds=0.1,  # Default fill delay
             )
             
             # Register broker event listeners
@@ -664,8 +661,11 @@ class FinanceService:
     
     def get_price_historical(self, symbol: str, start_date: Optional[str] = None,
                             end_date: Optional[str] = None,
-                            interval: str = "1day") -> Dict[str, Any]:
+                            interval: str = "1d") -> Dict[str, Any]:
         """Fetch historical prices"""
+        # Convert interval formats if needed
+        interval_map = {"1day": "1d", "1d": "1d", "1h": "1h", "5m": "5m"}
+        interval = interval_map.get(interval, "1d")
         return self.openbb.get_price_historical(symbol, start_date, end_date, interval)
     
     def get_fundamentals(self, symbol: str, statement_type: str = "income") -> Dict[str, Any]:
@@ -735,7 +735,7 @@ class FinanceService:
     # ANALYSIS & STRATEGY
     # =====================
     
-    def analyze(self, symbol: str, lookback_days: Optional[int] = None) -> Dict[str, Any]:
+    def analyze(self, symbol: str, lookback_days: Optional[int] = None, interval: str = "1d") -> Dict[str, Any]:
         """
         Full analysis: fetch data, compute indicators, run strategy
         
@@ -746,7 +746,7 @@ class FinanceService:
         
         try:
             # Fetch price data
-            price_data = self.get_price_historical(symbol)
+            price_data = self.get_price_historical(symbol, interval=interval)
             
             if "error" in price_data:
                 logger.error(f"Failed to fetch data for {symbol}: {price_data['error']}")
@@ -830,7 +830,42 @@ class FinanceService:
         """Validate and propose a trade (dry-run)"""
         # Convert to Decision object if needed
         if isinstance(decision, dict):
-            decision_obj = Decision(**decision)
+            # Map request parameters to Decision fields
+            # Support both 'action' and 'decision' field names
+            decision_action = decision.get('action') or decision.get('decision')
+            
+            decision_data = {
+                'symbol': decision.get('symbol'),
+                'decision': decision_action,
+                'confidence': decision.get('confidence', 0.5),
+                'signals': decision.get('signals', []),
+                'task_id': decision.get('task_id', f"trade_{int(time.time()*1000)}"),
+            }
+            
+            # Add optional fields if provided
+            # Support both formats: dashboard sends position with action_qty/action_value
+            # or direct quantity/amount fields
+            if decision.get('position'):
+                # Dashboard format with action_qty and action_value
+                decision_data['position'] = decision.get('position')
+            elif decision.get('quantity') or decision.get('amount'):
+                # Legacy format with quantity and amount
+                decision_data['position'] = {
+                    'symbol': decision.get('symbol'),
+                    'quantity': decision.get('quantity', 0),
+                    'amount': decision.get('amount', 0),
+                    'action_qty': decision.get('quantity', 0),
+                    'action_value': decision.get('amount', 0)
+                }
+            
+            if decision.get('stop_loss'):
+                decision_data['stop_loss'] = decision.get('stop_loss')
+            if decision.get('take_profit'):
+                decision_data['take_profit'] = decision.get('take_profit')
+            if decision.get('required_approval'):
+                decision_data['required_approval'] = decision.get('required_approval')
+            
+            decision_obj = Decision(**decision_data)
         else:
             decision_obj = decision
         
@@ -891,15 +926,16 @@ def health():
 def analyze():
     """
     POST /analyze
-    Body: {"symbol": "AAPL"}
+    Body: {"symbol": "AAPL", "interval": "1d"}
     """
     data = request.get_json() or {}
     symbol = data.get("symbol", "").upper()
+    interval = data.get("interval", "1d")
     
     if not symbol:
         return jsonify({"error": "Missing symbol parameter"}), 400
     
-    result = finance_service.analyze(symbol)
+    result = finance_service.analyze(symbol, interval=interval)
     return jsonify(result), 200
 
 

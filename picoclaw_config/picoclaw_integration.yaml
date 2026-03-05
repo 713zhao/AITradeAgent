@@ -9,7 +9,7 @@ created: 2026-03-03
 services:
   finance:
     enabled: true
-    endpoint: http://localhost:5000
+    endpoint: http://localhost:8801
     type: rest
     health_check: /health
     timeout: 30

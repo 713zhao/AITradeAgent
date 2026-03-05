@@ -1,410 +1,352 @@
-# PicoClaw Finance Agent
+# PicoClaw Trading Agent - picotradeagent
 
-A sophisticated trading assistant that integrates PicoClaw with OpenBB market data, technical analysis, and paper trading simulation. Built for Raspberry Pi compatibility with strict safety guardrails.
-
-## Features
-
-✅ **Market Data & Fundamentals** - Real-time prices, historical OHLCV, income statements, balance sheets
-✅ **Technical Analysis** - RSI, MACD, SMA, ATR, Bollinger Bands, Stochastic (no LLM hallucination)
-✅ **Rule-Based Strategy** - Trend + momentum filtering with configurable parameters
-✅ **Risk Management** - Position sizing, stop-loss, max drawdown constraints
-✅ **Paper Portfolio** - Simulated trading with realistic slippage and accounting
-✅ **Human Approval Gate** - Telegram/Slack notifications before trade execution
-✅ **Audit Logging** - SQLite persistence of all runs, trades, and portfolio snapshots
-✅ **Caching Layer** - Intelligent data caching to reduce OpenBB API load
-
-## Architecture
-
-```
-finance_service/          Python backend with tools & simulation
-  ├── app.py             Main Flask service + orchestrator
-  ├── core/               Config, logging, cache, data models
-  ├── tools/              OpenBB wrappers, indicators, risk tools
-  ├── strategies/         Baseline rule-based strategy
-  ├── sim/                Portfolio, execution, metrics
-  └── storage/            SQLite DBs (cache, runs, trades)
-
-picoclaw_config/          Prompts, router rules, tool schemas
-  ├── finance_system_prompt.md      System instructions for LLM
-  ├── finance_tool_policy.md        Tool usage constraints
-  ├── router_rules.yaml             Intent routing rules
-  └── tool_schemas.json             OpenAPI-style tool definitions
-```
-
-## Installation
-
-### Requirements
-- Python 3.8+
-- pip
-- Virtual environment (recommended)
-
-### Steps
-
-1. **Clone or navigate to project**
-   ```bash
-   cd /home/eric/.picoclaw/workspace/picotradeagent
-   ```
-
-2. **Create virtual environment**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **(Optional) Configure Approval Gate**
-   
-   Set environment variables for Telegram or Slack:
-   ```bash
-   export TELEGRAM_BOT_TOKEN="your_token"
-   export TELEGRAM_CHAT_ID="your_chat_id"
-   # OR
-   export SLACK_BOT_TOKEN="your_token"
-   export SLACK_CHANNEL="#trading"
-   ```
+A sophisticated AI-powered trading assistant that integrates with PicoClaw framework, providing automated market analysis, trading signals, risk management, and portfolio tracking. Built on Flask backend with paper trading simulation and real-time market data via yfinance.
 
 ## Quick Start
 
-### 1. Start Finance Service
+### 1. Start the Finance Service
+
+The Finance Service is the backend that handles all market data, analysis, and trading operations.
 
 ```bash
-python -m finance_service.app
+cd /home/eric/.picoclaw/workspace/picotradeagent
+python3 run_finance_service.py
 ```
 
-Service runs on `http://localhost:5000`
+The service will start on `http://localhost:8801` and is ready to accept requests.
 
-### 2. Test Analysis via CLI
-
+**Verify service is running:**
 ```bash
-python -m tests.test_analysis AAPL
+curl http://localhost:8801/health
 ```
 
-### 3. Test Portfolio Simulation
+Expected response: `{"service":"finance","status":"ok"}`
 
-```bash
-python -m tests.test_portfolio
+### 2. Key Entry Points
+
+#### Finance Service (run_finance_service.py)
+- **Purpose**: Main Flask backend for all trading operations
+- **Runs on**: `http://localhost:8801`
+- **Provides**: Market data, analysis, portfolio management, trade execution
+
+#### PicoClaw Connector (picoclaw_connector.py)
+- **Purpose**: Bridge between PicoClaw agents and Finance Service
+- **Usage**: Import and use in PicoClaw agent definitions
+- **Features**: Health checks, analysis, quotes, portfolio, performance, trade execution
+
+## API Endpoints
+
+### Health & Status
+- **GET `/health`** - Service health check
+  ```bash
+  curl http://localhost:8801/health
+  ```
+
+### Market Data
+- **GET `/quote/<symbol>`** - Get latest price quote
+  ```bash
+  curl http://localhost:8801/quote/AAPL
+  ```
+
+### Analysis
+- **POST `/analyze/<symbol>`** - Full technical analysis
+  ```bash
+  curl -X POST http://localhost:8801/analyze \
+    -H "Content-Type: application/json" \
+    -d '{"symbol":"AAPL","lookback_days":60}'
+  ```
+
+### Portfolio Management
+- **GET `/portfolio/state`** - Current portfolio status
+  ```bash
+  curl http://localhost:8801/portfolio/state
+  ```
+
+- **GET `/portfolio/performance`** - Portfolio performance metrics
+  ```bash
+  curl http://localhost:8801/portfolio/performance
+  ```
+
+- **POST `/portfolio/propose`** - Dry-run trade proposal validation
+  ```bash
+  curl -X POST http://localhost:8801/portfolio/propose \
+    -H "Content-Type: application/json" \
+    -d '{"symbol":"AAPL","action":"BUY","quantity":10,"confidence":0.85}'
+  ```
+
+- **POST `/portfolio/execute`** - Execute approved trade
+  ```bash
+  curl -X POST http://localhost:8801/portfolio/execute \
+    -H "Content-Type: application/json" \
+    -d '{"task_id":"123","approval_id":"user_approved_20260305"}'
+  ```
+
+## PicoClaw Integration
+
+The picotradeagent is designed to work with PicoClaw agents. Use the `picoclaw_connector.py` module:
+
+```python
+from picoclaw_connector import get_connector
+
+# Get connector instance
+connector = get_connector()
+
+# Check service health
+if connector.health_check():
+    print("Finance Service is running")
+
+# Analyze a stock symbol
+analysis = connector.analyze("AAPL")
+print(f"Signal: {analysis['decision']}")
+
+# Get quote
+quote = connector.get_quote("AAPL")
+print(f"Price: {quote['close']}")
+
+# Propose a trade (validation only)
+proposal = connector.propose_trade({
+    "symbol": "AAPL",
+    "action": "BUY",
+    "quantity": 10,
+    "confidence": 0.85
+})
+
+# Execute approved trade
+result = connector.execute_trade(
+    task_id="task_123",
+    approval_id="user_approved_20260305"
+)
+
+# Get portfolio state
+portfolio = connector.get_portfolio()
+print(f"Cash: ${portfolio['cash']:.2f}")
+print(f"Total Value: ${portfolio['total_value']:.2f}")
+
+# Get performance metrics
+perf = connector.get_performance()
+print(f"Returns: {perf['total_return']:.2%}")
+print(f"Sharpe: {perf['sharpe_ratio']:.2f}")
 ```
 
-## API Reference
+## System Architecture
 
-### Health Check
 ```
-GET /health
-→ {"status": "ok", "service": "finance"}
-```
-
-### Analyze Symbol
-```
-POST /analyze
-Content-Type: application/json
-
-{
-  "symbol": "TSLA"
-}
-
-→ {
-  "task_id": "uuid",
-  "symbol": "TSLA",
-  "decision": "BUY",
-  "confidence": 0.75,
-  "signals": {
-    "trend": "up",
-    "rsi": 65.0,
-    "sma50": 175.50
-  },
-  "position": {
-    "action_qty": 10,
-    "action_value": 1850.00
-  },
-  "risk": {
-    "risk_level": "medium",
-    "max_loss_estimate": 150.00,
-    "stop_loss": 175.00,
-    "take_profit": 195.00
-  },
-  "required_approval": true
-}
+picotradeagent/
+├── run_finance_service.py      ← Main entry point
+├── picoclaw_connector.py       ← Integration helper
+│
+├── finance_service/            ← Core backend
+│   ├── app.py                  Main Flask application
+│   ├── core/                   Configuration, logging, cache
+│   ├── data/                   Market data providers
+│   ├── indicators/             Technical analysis indicators
+│   ├── strategies/             Trading strategy implementations
+│   ├── brokers/                Broker configurations
+│   ├── execution/              Trade execution engine
+│   ├── risk/                   Risk management & validation
+│   ├── portfolio/              Portfolio tracking & accounting
+│   ├── storage/                Database interfaces
+│   ├── dashboard/              Web UI components
+│   └── ui/                     Frontend assets
+│
+├── picoclaw_config/            ← PicoClaw configuration
+│   ├── finance_system_prompt.md
+│   ├── finance_tool_policy.md
+│   ├── router_rules.yaml
+│   └── tool_schemas.json
+│
+├── config/                     ← Configuration files
+├── tests/                      ← Unit and integration tests
+├── doc/                        ← Documentation (all .md files except README)
+└── storage/                    ← Runtime data (cache, databases, logs)
 ```
 
-### Get Portfolio State
-```
-GET /portfolio/state
-→ {
-  "cash": 98150.00,
-  "equity": 18500.00,
-  "total_value": 116650.00,
-  "positions": {
-    "TSLA": {
-      "qty": 10,
-      "current_price": 185.00,
-      "market_value": 1850.00,
-      "unrealized_pnl": 50.00
-    }
-  }
-}
-```
+## Agent Skills
 
-### Propose Trade
-```
-POST /portfolio/propose
-Content-Type: application/json
+PicoClaw agents have access to the following skills via the Finance Service:
 
-{
-  "task_id": "uuid-from-analyze",
-  "symbol": "TSLA",
-  "decision": "BUY",
-  "position": {"action_qty": 10, "action_value": 1850}
-}
+### Data Collection
+- **data_agent_fetch** - Retrieve OHLCV market data for symbols
 
-→ {
-  "valid": true,
-  "summary": "BUY 10 TSLA @ $185.00",
-  "details": {...}
-}
-```
+### Analysis
+- **analysis_agent_indicators** - Calculate technical indicators (SMA, RSI, MACD, ATR, Bollinger)
 
-### Execute Trade (requires approval)
-```
-POST /portfolio/execute
-Content-Type: application/json
+### Strategy
+- **strategy_agent_decide** - Generate BUY/SELL/HOLD signals with confidence scores
 
-{
-  "task_id": "uuid-from-propose",
-  "approval_id": "approval-uuid"
-}
+### Risk Management
+- **risk_agent_validate** - Validate trades and calculate position sizing
 
-→ {
-  "success": true,
-  "message": "Bought 10 shares of TSLA @ $185.00",
-  "portfolio_state": {...}
-}
-```
+### Execution
+- **execution_agent_paper_trade** - Execute trades and update portfolio
 
-### Get Quote
-```
-GET /quote/AAPL
-→ {
-  "symbol": "AAPL",
-  "price": 175.50,
-  "data": {...}
-}
-```
+### Learning
+- **learning_agent_run** - Backtest strategies and optimize parameters
+
+### Engine Control
+- **engine_status** - Get portfolio status and metrics
+- **engine_positions** - Get open positions with P&L
+- **engine_trade_history** - Get trade records
+- **engine_set_focus** - Set trading theme, region, or watchlist
+- **engine_pause** - Pause automatic trading
+- **engine_resume** - Resume after pause
+- **engine_reset_portfolio** - Reset to initial cash
+- **engine_last_report** - Get daily or learning reports
 
 ## Configuration
 
-Edit [finance_service/core/config.py](finance_service/core/config.py) to customize:
+### Environment Variables
+Set in `.env` or `picoclaw.env`:
 
-```python
-# Risk Constraints
-MAX_POSITION_SIZE = 0.20          # 20% per symbol
-MAX_EXPOSURE = 0.90               # 90% total stocks
-MAX_DAILY_LOSS = 0.03             # 3% daily stop
-MAX_DRAWDOWN = 0.10               # 10% drawdown stop
+```bash
+# Finance Service
+OPENBB_USE_YFINANCE=true
+OPENBB_PROVIDER=yfinance
+FINANCE_SERVICE_PORT=8801
 
-# Initial Capital
-DEFAULT_INITIAL_CASH = 100000      # $100k paper trading
+# PicoClaw (AI Models & Channels)
+OPENROUTER_API_KEY=your_key_here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
-# Strategy
-STRATEGY_TYPE = "baseline_rule"    # Changeable in v2
+# Telegram Integration
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+
+# Slack Integration
+SLACK_BOT_TOKEN=your_bot_token_here
+SLACK_APP_TOKEN=your_app_token_here
 ```
 
-## Strategy Details
+### Configuration Files
+- **config.json** - Main config in `~/.picoclaw/config.json`
+- **Tool Definitions** - `picoclaw_config/tool_schemas.json`
+- **Router Rules** - `picoclaw_config/router_rules.yaml`
 
-### Baseline Rule Strategy
+## Common Tasks
 
-Combines trend + momentum filtering:
+### View Portfolio Status
+```bash
+curl http://localhost:8801/portfolio/state | python3 -m json.tool
+```
 
-**Entry (BUY):**
-- Price > SMA(50) + 2% (uptrend)
-- RSI(14) between 45-70 (momentum without overbought)
-- Position size via ATR-based risk (1% portfolio risk)
+### Get Latest Analysis
+```bash
+curl -X POST http://localhost:8801/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"NVDA","lookback_days":30}' | python3 -m json.tool
+```
 
-**Exit (SELL):**
-- Price < SMA(50) - 2% (downtrend)
-- RSI(14) > 75 (overbought)
-- Stop-loss at ATR * 2 below entry
+### Check Trading History
+```bash
+curl "http://localhost:8801/portfolio/trades?limit=10" | python3 -m json.tool
+```
 
-**Confidence Scoring:**
-- Each signal contributes 0.1-0.3 to confidence
-- Max 1.0, displayed as decision certainty
-
-## Tools - Never Hallucinate
-
-The LLM (PicoClaw) **must call these tools**; never compute indicators in-text:
-
-### Data Tools
-- `get_price_historical(symbol, start, end)` - OHLCV candles
-- `get_fundamentals(symbol, statement)` - Income/balance/cashflow
-- `get_company_profile(symbol)` - Sector, industry, etc.
-- `get_quote(symbol)` - Latest price + bid/ask
-
-### Indicator Tools
-- `calc_rsi(prices, period)` - Relative Strength Index
-- `calc_macd(prices)` - MACD + signal
-- `calc_sma(prices, window)` - Simple Moving Average
-- `calc_atr(highs, lows, closes)` - Average True Range
-
-### Risk Tools
-- `calc_position_size(symbol, price, atr)` - Returns qty, stop-loss
-- `validate_trade(symbol, action, qty, price)` - Check constraints
-
-### Portfolio Tools
-- `portfolio_get_state()` - Current positions + cash
-- `propose_trade(decision)` - Dry-run validation
-- `execute_trade(task_id, approval_id)` - Execute after approval
-- `portfolio_get_performance()` - Returns, Sharpe, drawdown
-
-## Safety Guardrails
-
-### Hard Constraints
-1. **No real money** - Paper trading only
-2. **Human approval** - All trades must be approved (YES/NO)
-3. **Position sizing** - Max 20% per stock, 90% total exposure
-4. **Drawdown limit** - 10% max, halts trading
-5. **Daily loss** - 3% max daily stop loss
-6. **No fabrication** - All prices/returns from tools only
-
-### Error Handling
-- If OpenBB data unavailable → "insufficient data"
-- If validation fails → Explain constraint + suggest adjustment
-- If tool timeout → Retry 3x, then fail gracefully
+### Reset Portfolio to Initial State
+```bash
+curl -X POST http://localhost:8801/portfolio/reset | python3 -m json.tool
+```
 
 ## Testing
 
-### Unit Tests
+Run tests to verify the system:
+
 ```bash
-python -m pytest tests/ -v
+# Run all tests
+python3 -m pytest tests/ -v
+
+# Run specific test file
+python3 -m pytest tests/test_finance_service.py -v
+
+# Run with coverage
+python3 -m pytest tests/ --cov=finance_service
 ```
 
-### Integration Test (Full Flow)
+## Monitoring
+
+The Finance Service logs to:
+- **Console**: Direct output to terminal
+- **File**: `finance_service.log` in project root
+- **SQLite DB**: `storage/finance.db` for trade logs
+
+Check status:
 ```bash
-python -m tests.test_end_to_end
+# View logs
+tail -f finance_service.log
+
+# Check running process
+ps aux | grep run_finance_service
+
+# Monitor port
+netstat -tuln | grep 8801
 ```
 
-### Manual Test with Flask
+## Project Structure
+
+- **run_finance_service.py** - Service launcher (START HERE)
+- **picoclaw_connector.py** - Agent integration library
+- **finance_service/** - Core backend implementation
+- **picoclaw_config/** - PicoClaw integration configuration
+- **tests/** - Test suite and validation scripts
+- **doc/** - Documentation (development notes, architecture, planning)
+- **config/** - Configuration defaults
+- **storage/** - Runtime data storage (databases, caches, logs)
+
+## Troubleshooting
+
+### Service won't start
 ```bash
-# Terminal 1: Start service
-python -m finance_service.app
+# Check if port 8801 is already in use
+lsof -i :8801
 
-# Terminal 2: Test endpoint
-curl -X POST http://localhost:5000/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"symbol": "AAPL"}'
+# Kill existing process
+pkill -f run_finance_service
+
+# Start fresh
+python3 run_finance_service.py
 ```
 
-## Logging & Auditing
+### Connection refused when accessing from another machine
+```bash
+# Check firewall rules
+sudo ufw status
 
-All activity logged to SQLite:
-
-**Runs Database** (`storage/runs.sqlite`)
-- task_id, symbol, decision_json, timestamp, approval status
-
-**Trade Log**
-- task_id, symbol, action, quantity, price, approval_id, executed_at
-
-**Portfolio Snapshots**
-- timestamp, cash, equity, positions snapshot
-
-Query example:
-```python
-from finance_service.core.logging import RunLogger
-
-logger = RunLogger()
-run = logger.get_run("task-uuid")
-trades = logger.get_trades("task-uuid")
+# If needed, allow port 8801
+sudo ufw allow 8801/tcp
 ```
 
-## Integration with PicoClaw
+### Data caching issues
+```bash
+# Clear cache
+rm -rf storage/cache/*
 
-### Step 1: Register Tools
-In PicoClaw config, expose Finance Service tools:
-
-```yaml
-tools:
-  - name: analyze_symbol
-    endpoint: http://localhost:5000/analyze
-    auth: none
-  - name: proposal_trade
-    endpoint: http://localhost:5000/portfolio/propose
-    auth: approval_token
+# Restart service
+pkill -f run_finance_service
+python3 run_finance_service.py
 ```
 
-### Step 2: Load Finance Prompts
-PicoClaw detects finance intent and loads:
-- `picoclaw_config/finance_system_prompt.md` → system message
-- `picoclaw_config/tool_schemas.json` → tool definitions
-- `picoclaw_config/router_rules.yaml` → routing logic
+## Performance Tips
 
-### Step 3: Route Messages
-If message contains ticker + action:
-→ Finance mode activated
-→ Access to all tools above
-→ LLM follows strict tool-first policy
+1. **Use caching** - Market data is cached to reduce API load
+2. **Batch requests** - Request multiple symbols in single queries when possible
+3. **Adjust lookback** - Use shorter lookback_days for faster analysis
+4. **Monitor logs** - Check `finance_service.log` for performance bottlenecks
 
-### Example Conversation
+## Security
 
-**User:** "Analyze TSLA"
-**PicoClaw:** [Calls `/analyze` with TSLA]
-→ Returns decision: BUY with 75% confidence
+- ✅ Paper trading only - No real money at risk
+- ✅ API validation - All inputs validated
+- ✅ Error isolation - Errors don't crash the service
+- ✅ Audit logging - All trades logged with timestamps
+- ✅ Rate limiting - Built-in request throttling
 
-**PicoClaw:** "I recommend **BUY 10 shares of TSLA at $185** (confidence: 75%). Risk assessment: max loss $150 with stop at $175. This requires approval."
+## Support
 
-**User:** "YES"
-**PicoClaw:** [Calls `/portfolio/propose` → `/portfolio/execute`]
-→ "Trade executed: Bought 10 TSLA @ $185.00. New portfolio value: $116,650"
-
-## Roadmap (v2)
-
-- [ ] Multiple strategies (mean-reversion, momentum, pairs)
-- [ ] Backtesting engine with performance reports
-- [ ] Options support (Greeks, volatility surface)
-- [ ] Multi-timeframe analysis
-- [ ] Sentiment indicators (news + social)
-- [ ] Portfolio rebalancing automation
-- [ ] Risk attribution & contribution analysis
-- [ ] Real brokerage integration (Alpaca, TD Ameritrade)
-
-## Known Limitations
-
-1. **Simulated prices only** - Uses last close; no intraday fills
-2. **Slippage assumed flat** - 0.05% fixed; real markets vary
-3. **No market hours validation** - Trades assumed market is open
-4. **Single-leg trades** - No spreads, only simple buy/sell (options later)
-5. **No portfolio financing** - Can't short (yet)
-
-## Support & Troubleshooting
-
-### OpenBB Connection Issues
-```
-Error: "No data available for SYMBOL"
-Solution: Verify ticker symbol is correct (AAPL, not APPLE)
-```
-
-### Database Locked
-```
-Error: "database is locked"
-Solution: Close other Finance Service instances; SQLite has limited concurrency
-```
-
-### Approval Timeout
-```
-Error: "Approval timeout after 300s"
-Solution: Respond with YES/NO within timeout window
-```
+For issues or questions:
+1. Check logs: `tail -f finance_service.log`
+2. Verify service health: `curl http://localhost:8801/health`
+3. Review configuration in `~/.picoclaw/config.json`
+4. Test endpoints manually with curl
+5. Check documentation in `doc/` folder
 
 ## License
 
-MIT - Use freely for research and non-commercial purposes
-
-## Authors
-
-Built with PicoClaw + OpenBB
-
----
-
-**Last Updated:** March 2026
-**Version:** 0.1.0 (Alpha)
+MIT License - See LICENSE file for details

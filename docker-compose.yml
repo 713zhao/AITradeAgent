@@ -33,6 +33,39 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Streamlit Dashboard UI
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: picotradeagent-dashboard
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: 1
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_CLIENT_LOGGER_LEVEL: "info"
+      API_BASE_URL: "http://picotradeagent:5000"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./finance_service/ui:/app/finance_service/ui:ro
+      - ./tests:/app/tests:ro
+    networks:
+      - picotradeagent-net
+    depends_on:
+      - picotradeagent
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # Redis Cache (Optional)
   redis:
     image: redis:7-alpine

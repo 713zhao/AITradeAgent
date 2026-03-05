@@ -5,8 +5,13 @@ import logging
 from datetime import datetime, timedelta
 from ..core.cache import Cache
 from ..core.config import Config
+import os
 
 logger = logging.getLogger(__name__)
+
+# Force OpenBB to use yfinance provider before import
+os.environ['OPENBB_USE_YFINANCE'] = 'true'
+os.environ['OPENBB_PROVIDER'] = 'yfinance'
 
 class OpenBBTools:
     """Wrapper around OpenBB SDK for market data"""
@@ -50,29 +55,53 @@ class OpenBBTools:
             if not self.obb:
                 return self._mock_price_data(symbol)
             
+            # Convert interval format to OpenBB format (1day -> 1d)
+            interval_map = {"1day": "1d", "1d": "1d", "1h": "1h", "5m": "5m"}
+            normalized_interval = interval_map.get(interval, "1d")
+            
             data = self.obb.equity.price.historical(
                 symbol=symbol.upper(),
                 start_date=start_date,
                 end_date=end_date,
-                interval=interval
+                interval=normalized_interval
             )
             
-            if data.empty:
+            # Convert OBBobject results to DataFrame
+            if hasattr(data, 'results') and isinstance(data.results, list):
+                # OBB returns a list of YFinanceEquityHistoricalData objects
+                df = pd.DataFrame([
+                    {
+                        'date': r.date if hasattr(r, 'date') else r.get('date'),
+                        'open': float(r.open) if hasattr(r, 'open') else float(r.get('open', 0)),
+                        'high': float(r.high) if hasattr(r, 'high') else float(r.get('high', 0)),
+                        'low': float(r.low) if hasattr(r, 'low') else float(r.get('low', 0)),
+                        'close': float(r.close) if hasattr(r, 'close') else float(r.get('close', 0)),
+                        'volume': float(r.volume) if hasattr(r, 'volume') else float(r.get('volume', 0)),
+                    }
+                    for r in data.results
+                ])
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+            else:
+                return {"error": "Unexpected data format from OBB"}
+            
+            if df.empty:
                 logger.warning(f"No data returned for {symbol}")
                 return {"error": "No data available"}
             
+            # Extract OHLCV data
             result = {
                 "symbol": symbol.upper(),
-                "dates": data.index.strftime("%Y-%m-%d").tolist(),
-                "open": data["Open"].tolist() if "Open" in data.columns else [],
-                "high": data["High"].tolist() if "High" in data.columns else [],
-                "low": data["Low"].tolist() if "Low" in data.columns else [],
-                "close": data["Close"].tolist() if "Close" in data.columns else [],
-                "volume": data["Volume"].tolist() if "Volume" in data.columns else [],
+                "dates": df.index.strftime("%Y-%m-%d").tolist(),
+                "open": df["open"].tolist(),
+                "high": df["high"].tolist(),
+                "low": df["low"].tolist(),
+                "close": df["close"].tolist(),
+                "volume": df["volume"].tolist(),
             }
             
             self.cache.set(cache_key, result, ttl_seconds=3600)
-            logger.info(f"Fetched {len(data)} rows for {symbol}")
+            logger.info(f"Fetched {len(df)} rows for {symbol}")
             return result
         
         except Exception as e:

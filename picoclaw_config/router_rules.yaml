@@ -1,65 +1,48 @@
-"""
-Router rules for PicoClaw Intent Detection
+# PicoClaw Finance Router Rules
+routing:
+  patterns:
+    # Status/Monitoring
+    - intent: "check_status"
+      keywords: ["status", "portfolio", "pnl", "equity"]
+      tool: "engine_status"
+      confidence: 0.95
 
-Determines whether to activate Finance mode for a message
-"""
+    - intent: "check_positions"
+      keywords: ["positions", "holdings", "open"]
+      tool: "engine_positions"
+      confidence: 0.95
 
-routing_rules:
-  
-  # Finance Intent Indicators
-  finance_keywords:
-    - "stock|equity|trading|portfolio|invest"
-    - "buy|sell|bullish|bearish|short|long"
-    - "rsi|macd|bollinger|moving average|trend"
-    - "dividend|earnings|revenue|p/e ratio"
-    - "backtest|strategy|signal|candle"
-    - "portfolio|position|hedge|margin"
-  
-  ticker_patterns:
-    # Common stock tickers (NYSE/NASDAQ)
-    - "\\b[A-Z]{1,5}\\b"  # AAPL, TSLA, NVDA, etc.
-    - "\\b\\$[A-Z]{1,5}\\b"  # $AAPL format
-  
-  finance_actions:
-    - "analyze|backtest|simulate|paper trade"
-    - "what is the price|quote|get data"
-    - "should i (buy|sell|hold)"
-    - "position|sizing|risk|drawdown"
-  
-  # Activation Rules
-  rules:
-    - if_any_keyword_and_ticker:
-        load_context: finance
-        mode: finance_analysis
-    
-    - if_finance_action:
-        load_context: finance
-        mode: finance_execution
-    
-    - if_ticker_only:
-        confidence: 0.7
-        load_context: finance
-        mode: finance_quote
-  
-  exclusions:
-    # NOT finance if these appear
-    - "learn about|explain finance concepts"  # Educational, not trading
-    - "compare brokers|which app"  # Meta, not analysis
-  
-  # Fallback
-  default:
-    mode: general_chat
-    load_context: none
+    - intent: "check_trades"
+      keywords: ["trades", "history", "executed"]
+      tool: "engine_trade_history"
+      confidence: 0.90
 
-# Finance Context Initialization
-finance_context:
-  system_prompt: "finance_system_prompt.md"
-  tool_schemas: "tool_schemas.json"
-  tool_policy: "finance_tool_policy.md"
-  available_models:
-    - baseline_rule_strategy
-    - technical_analysis_only
-  portfolio:
-    initial_cash: 100000
-    slippage: 0.0005
-  cache_enabled: true
+    # Control
+    - intent: "pause_trading"
+      keywords: ["pause", "stop", "halt"]
+      tool: "engine_pause"
+      confidence: 0.95
+
+    - intent: "resume_trading"
+      keywords: ["resume", "continue", "start"]
+      tool: "engine_resume"
+      confidence: 0.95
+
+    - intent: "reset_portfolio"
+      keywords: ["reset", "clear"]
+      tool: "engine_reset_portfolio"
+      confidence: 0.90
+
+    - intent: "set_focus"
+      keywords: ["focus on", "theme", "watchlist"]
+      tool: "engine_set_focus"
+      confidence: 0.85
+
+    # Analysis
+    - intent: "analyze_symbol"
+      keywords: ["analyze", "what about", "signal"]
+      routing: "orchestrator_full_pipeline"
+      confidence: 0.85
+
+fallback:
+  strategy: "delegate_to_orchestrator_prompt"
