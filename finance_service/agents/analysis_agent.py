@@ -1,27 +1,30 @@
-"""Technical indicator calculations"""
+import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple
-from .models import IndicatorResult, IndicatorsSnapshot, SignalType
-import logging
+from typing import Dict, Tuple, Optional
+from finance_service.agents.agent_interface import Agent, AgentReport
+from finance_service.core.events import Event, Events, get_event_bus
+from finance_service.indicators.models import IndicatorResult, IndicatorsSnapshot, SignalType
 
 logger = logging.getLogger(__name__)
 
 
-class IndicatorCalculator:
-    """Computes technical indicators from OHLCV data"""
-    
+class AnalysisAgent(Agent):
+    """Analysis Agent - Computes technical indicators and transforms data into actionable signals."""
+
+    @property
+    def agent_id(self) -> str:
+        return "analysis_agent"
+
+    @property
+    def goal(self) -> str:
+        return "Transform raw market data into actionable technical analysis signals."
+
     def __init__(self, periods_config: Dict = None):
-        """
-        Initialize IndicatorCalculator
-        
-        Args:
-            periods_config: Dict with indicator periods, e.g.
-                {'rsi': 14, 'sma': [20, 50], 'atr': 14, ...}
-        """
         self.periods = periods_config or self._default_periods()
-        logger.info(f"IndicatorCalculator initialized with periods: {self.periods}")
-    
+        self.event_bus = get_event_bus()
+        logger.info(f"AnalysisAgent initialized with periods: {self.periods}")
+
     @staticmethod
     def _default_periods():
         """Default indicator periods"""
@@ -38,8 +41,62 @@ class IndicatorCalculator:
             'stoch_k': 14,
             'stoch_d': 3,
         }
-    
-    def calculate_all(self, df: pd.DataFrame, symbol: str) -> IndicatorsSnapshot:
+
+    async def run(self, data_payload: Dict[str, Any], symbol: str) -> Optional[AgentReport]:
+        """
+        Calculates all configured indicators for a given symbol using a DataFrame reconstructed from data_payload.
+        """
+        logger.info(f"AnalysisAgent run: Calculating indicators for {symbol}")
+        
+        try:
+            # Reconstruct DataFrame from the data_payload
+            df = pd.DataFrame.from_dict(data_payload)
+            # Ensure the index is datetime if it was originally so. Assuming 'Date' is the index name.
+            if 'Date' in df.columns:
+                df.set_index('Date', inplace=True)
+            df.index = pd.to_datetime(df.index)
+            
+            snapshot = self._calculate_all(df, symbol)
+            message = f"Indicators calculated for {symbol} at {snapshot.timestamp.isoformat()}"
+            payload = snapshot.model_dump() # Convert Pydantic model to dict
+            
+            self.event_bus.publish(Event(
+                event_type=Events.ANALYSIS_COMPLETE,
+                data=payload
+            ))
+            
+            return AgentReport(
+                agent_id=self.agent_id,
+                status="success",
+                message=message,
+                payload=payload
+            )
+        except ValueError as e:
+            logger.warning(f"AnalysisAgent failed for {symbol}: {e}")
+            # Publish ANALYSIS_FAILED event
+            self.event_bus.publish(Event(
+                event_type=Events.ANALYSIS_FAILED,
+                data={"symbol": symbol, "reason": str(e)}
+            ))
+            return AgentReport(
+                agent_id=self.agent_id,
+                status="failure",
+                message=f"Failed to calculate indicators for {symbol}: {e}"
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error in AnalysisAgent for {symbol}: {e}")
+            # Publish ANALYSIS_FAILED event
+            self.event_bus.publish(Event(
+                event_type=Events.ANALYSIS_FAILED,
+                data={"symbol": symbol, "reason": str(e)}
+            ))
+            return AgentReport(
+                agent_id=self.agent_id,
+                status="error",
+                message=f"Unexpected error during analysis for {symbol}: {e}"
+            )
+
+    def _calculate_all(self, df: pd.DataFrame, symbol: str) -> IndicatorsSnapshot:
         """
         Calculate all indicators for a symbol
         

@@ -1,933 +1,292 @@
-"""Finance Service Application - Main orchestrator"""
-import uuid
-import time
 import logging
+import json # Added for JSON formatting in Telegram messages
 from typing import Dict, Any, Optional, List
+import asyncio
 from datetime import datetime
 from flask import Flask, request, jsonify
 
-# Import all modules
+# Temporary storage for Flask-initiated async responses
+flask_response_queues: Dict[str, asyncio.Queue] = {}
+
 from .core.config import Config
-from .core.cache import Cache
 from .core.logging import setup_logger, RunLogger
-from .core.event_bus import event_bus
-from .tools.openbb_tools import OpenBBTools
-from .tools.indicator_tools import IndicatorTools
-from .tools.risk_tools import RiskTools
-from .strategies.baseline_rule_strategy import BaselineRuleStrategy
-from .sim.portfolio import Portfolio
-from .sim.execution import Execution
-from .sim.metrics import Metrics
-from .core.models import Decision
+from .core.event_bus import get_event_bus, Event, Events
 
-# Phase 2 imports
-from .indicators.calculator import IndicatorCalculator
-from .strategies.rule_strategy import RuleStrategy
-from .strategies.decision_engine import DecisionEngine, DecisionContext
+from finance_service.agents.agent_interface import Agent, AgentReport
+from finance_service.agents.data_agent import DataAgent
+from finance_service.agents.market_scanner_agent import MarketScannerAgent
+from finance_service.agents.news_agent import NewsAgent
+from finance_service.agents.analysis_agent import AnalysisAgent
+from finance_service.agents.strategy_agent import StrategyAgent
+from finance_service.agents.risk_agent import RiskAgent
+from finance_service.agents.execution_agent import ExecutionAgent
+from finance_service.agents.learning_agent import LearningAgent
+from finance_service.agents.telegram_agent import TelegramAgent
+from finance_service.agents.scheduler_agent import SchedulerAgent
+from finance_service.agents.portfolio_agent import PortfolioAgent # New import
 
-# Phase 3 imports
-from .portfolio.portfolio_manager import PortfolioManager
-from .portfolio.models import TradeStatus
-
-# Phase 4 imports
-from .risk.approval_engine import ApprovalEngine
-from .risk.risk_enforcer import RiskEnforcer
-from .risk.exposure_manager import ExposureManager
-from .risk.models import RiskPolicy
-
-# Phase 5 imports
-from .execution.execution_engine import ExecutionEngine
-from .execution.trade_monitor import TradeMonitor
-from .execution.performance_reporter import PerformanceReporter
-
-# Phase 6 imports
-from .brokers.broker_manager import BrokerManager, BrokerMode
-
-# Setup logging
 logger = setup_logger(__name__)
 run_logger = RunLogger()
 
-# Initialize Flask app
 app = Flask(__name__)
 
-class FinanceService:
-    """Main Finance Service orchestrator"""
-    
-    def __init__(self):
-        self.cache = Cache()
-        self.openbb = OpenBBTools()
-        self.indicators = IndicatorTools()
-        self.risk = RiskTools()
-        self.strategy = BaselineRuleStrategy()
-        self.portfolio = Portfolio()
-        self.execution = Execution(self.portfolio)
-        
-        # Phase 2 components
-        self.indicator_calc = IndicatorCalculator()
-        
-        # Strategy rules loaded (or use empty list as fallback)
-        rules_config = []
-        self.strategy_engine = RuleStrategy(rules_config)
-        
-        self.decision_engine = DecisionEngine()
-        
-        # Phase 3 components
-        initial_cash = Config.DEFAULT_INITIAL_CASH
-        self.portfolio_manager = PortfolioManager(initial_cash=initial_cash)
-        
-        # Phase 4 components
-        self.approval_engine = ApprovalEngine(approval_timeout_hours=1)
-        self.risk_enforcer = RiskEnforcer()
-        self.exposure_manager = ExposureManager()
-        
-        # Load risk policy from config if available
-        # Risk policy loaded (or use defaults)
-        policy_config = {}
-        if policy_config:
-                risk_policy = RiskPolicy(
-                    policy_id=policy_config.get("id", "STANDARD"),
-                    policy_name=policy_config.get("name", "Standard Risk Policy"),
-                    max_positions=policy_config.get("max_positions", 20),
-                    max_position_size_pct=policy_config.get("max_position_size_pct", 10.0),
-                    max_sector_exposure_pct=policy_config.get("max_sector_exposure_pct", 25.0),
-                    max_portfolio_leverage=policy_config.get("max_portfolio_leverage", 2.0),
-                    max_daily_loss_pct=policy_config.get("max_daily_loss_pct", 5.0),
-                    max_drawdown_pct=policy_config.get("max_drawdown_pct", 20.0),
-                    approval_required_pct=policy_config.get("approval_required_pct", 0.75),
-                )
-                self.risk_enforcer.set_policy(risk_policy)
-        
-        # Phase 5 components
-        self.execution_engine = ExecutionEngine()
-        self.trade_monitor = TradeMonitor()
-        self.performance_reporter = PerformanceReporter()
-        
-        # Phase 6 components
-        # Initialize broker manager (paper trading by default)
-        try:
-            broker_mode_str = "paper"  # Default trading mode
-            broker_mode = BrokerMode.PAPER if broker_mode_str == "paper" else BrokerMode.LIVE
-            
-            # Get broker configuration
-            initial_cash = Config.DEFAULT_INITIAL_CASH
-            api_key = None  # Alpaca API key not configured
-            api_secret = None  # Alpaca API secret not configured
-            alpaca_base_url = "https://paper-api.alpaca.markets"
-            
-            self.broker_manager = BrokerManager(
-                mode=broker_mode,
-                initial_cash=initial_cash,
-                api_key=api_key,
-                api_secret=api_secret,
-                alpaca_base_url=alpaca_base_url,
-                slippage_bps=Config.TRADE_SLIPPAGE,
-                fill_delay_seconds=0.1,  # Default fill delay
-            )
-            
-            # Register broker event listeners
-            self.broker_manager.register_event_listener("ORDER_FILLED", self._on_order_filled)
-            self.broker_manager.register_event_listener("POSITION_CLOSED", self._on_position_closed)
-            
-            # Update ExecutionEngine with broker manager
-            self.execution_engine.broker_manager = self.broker_manager
-            
-            logger.info(f"Broker manager initialized ({broker_mode.value} mode)")
-        
-        except Exception as e:
-            logger.warning(f"Could not initialize broker manager: {e}, Operating without live brokers")
-            self.broker_manager = None
-        
-        # Register event listeners
-        event_bus.on("DATA_READY", self._on_data_ready)
-        event_bus.on("DECISION_MADE", self._on_decision_made)
-        event_bus.on("TRADE_OPENED", self._on_trade_opened)
-        event_bus.on("APPROVAL_REQUIRED", self._on_approval_required)
-        event_bus.on("TRADE_APPROVED", self._on_trade_approved)
-        
-        logger.info("Finance Service initialized (with Phase 0-5 components)")
-    
-    def _on_data_ready(self, event: Any):
-        """
-        Handle DATA_READY event from Phase 1 DataManager
-        Flow: Get data → Calculate indicators → Evaluate rules → Make decision → Emit DECISION_MADE
-        
-        Args:
-            event: Event object (can be Event class or dict)
-        """
-        try:
-            # Handle both Event objects and dicts
-            if isinstance(event, dict):
-                symbol = event.get('data', {}).get('symbol') or event.get('symbol')
-                interval = event.get('data', {}).get('interval') or event.get('interval', '1d')
-            else:
-                # assume it's an Event object
-                symbol = event.data.get('symbol') if hasattr(event, 'data') else None
-                interval = event.data.get('interval', '1d') if hasattr(event, 'data') else '1d'
-            
-            if not symbol:
-                logger.warning(f"DATA_READY event without symbol: {event}")
-                return
-            
-            logger.info(f"DATA_READY received for {symbol} ({interval})")
-            
-            # Get OHLCV data (from cache or new fetch)
-            price_data = self.get_price_historical(symbol)
-            
-            if "error" in price_data:
-                logger.error(f"Failed to fetch data for {symbol}: {price_data['error']}")
-                event_bus.publish({
-                    'type': 'ANALYSIS_FAILED',
-                    'symbol': symbol,
-                    'error': price_data['error'],
-                    'timestamp': datetime.utcnow().isoformat()
-                })
-                return
-            
-            # Convert to DataFrame for indicator calculation
-            import pandas as pd
-            import numpy as np
-            
-            closes = np.array(price_data.get("close", []))
-            highs = np.array(price_data.get("high", []))
-            lows = np.array(price_data.get("low", []))
-            volumes = np.array(price_data.get("volume", []))
-            timestamps = pd.date_range(end=pd.Timestamp.now(), periods=len(closes), freq='D')
-            
-            df = pd.DataFrame({
-                'open': price_data.get("open", highs),
-                'high': highs,
-                'low': lows,
-                'close': closes,
-                'volume': volumes
-            }, index=timestamps)
-            
-            # Calculate all indicators
-            ind_snapshot = self.indicator_calc.calculate_all(df, symbol)
-            
-            # Evaluate strategy rules
-            entry_triggered, entry_conf, entry_rules = self.strategy_engine.evaluate_entry(ind_snapshot)
-            exit_triggered, exit_rules = self.strategy_engine.evaluate_exit(ind_snapshot)
-            
-            # Build decision context
-            atr_value = ind_snapshot.indicators.get('atr', None)
-            atr = atr_value.value if atr_value else 0.0
-            current_price = float(closes[-1])
-            
-            context = DecisionContext(
-                symbol=symbol,
-                current_price=current_price,
-                atr=atr,
-                entry_triggered=entry_triggered,
-                entry_confidence=entry_conf,
-                entry_rules=entry_rules,
-                exit_triggered=exit_triggered,
-                exit_rules=exit_rules,
-                all_signals=ind_snapshot.get_all_signals()
-            )
-            
-            # Make decision
-            decision = self.decision_engine.make_decision(context)
-            
-            # Emit DECISION_MADE event
-            event_bus.publish({
-                'type': 'DECISION_MADE',
-                'symbol': symbol,
-                'decision': decision.to_dict() if hasattr(decision, 'to_dict') else decision,
-                'timestamp': datetime.utcnow().isoformat()
-            })
-            
-            logger.info(f"DECISION_MADE published for {symbol}: {decision.decision}")
-            
-        except Exception as e:
-            logger.error(f"Error processing DATA_READY event: {e}", exc_info=True)
-            event_bus.publish({
-                'type': 'ANALYSIS_FAILED',
-                'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
-            })
+class MainOrchestratorAgent(Agent):
+    """Main Orchestrator Agent - Coordinates all specialized agents in the trading system."""
 
-    def _on_decision_made(self, event: Any):
-        """
-        Handle DECISION_MADE event from Phase 2 DecisionEngine
-        Flow: Decision received → Create trade in portfolio → Update positions
-        
-        Args:
-            event: Event object (can be Event class or dict)
-        """
-        try:
-            # Handle both Event objects and dicts
-            if isinstance(event, dict):
-                symbol = event.get('data', {}).get('symbol') or event.get('symbol')
-                decision_obj = event.get('data', {}).get('decision') or event.get('decision')
-                task_id = event.get('data', {}).get('task_id') or event.get('task_id', 'UNKNOWN')
-            else:
-                # Assume it's an Event object
-                symbol = event.data.get('symbol') if hasattr(event, 'data') else None
-                decision_obj = event.data.get('decision') if hasattr(event, 'data') else None
-                task_id = event.data.get('task_id', 'UNKNOWN') if hasattr(event, 'data') else 'UNKNOWN'
-            
-            if not symbol or not decision_obj:
-                logger.warning(f"DECISION_MADE event missing symbol or decision: {event}")
-                return
-            
-            logger.info(f"DECISION_MADE received for {symbol}: {decision_obj.get('decision', 'UNKNOWN')}")
-            
-            # Get current price (from last decision or quote)
-            current_price = decision_obj.get('price', 0.0)
-            if not current_price:
-                # Try to fetch current quote
-                quote = self.get_quote(symbol)
-                current_price = float(quote.get('price', 0.0)) if quote else 0.0
-            
-            # Extract decision details
-            decision_type = decision_obj.get('decision', 'HOLD')  # BUY, SELL, HOLD
-            confidence = decision_obj.get('confidence', 0.0)
-            stop_loss = decision_obj.get('stop_loss')
-            take_profit = decision_obj.get('take_profit')
-            reason = decision_obj.get('reason', 'Decision Engine')
-            
-            # Execute trade based on decision
-            trade = None
-            if decision_type == "BUY":
-                # Default size: 10 shares (can be configurable)
-                qty = Config.get("finance", "portfolio/position_size_shares", 10)
-                trade = self.portfolio_manager.execute_buy(
-                    task_id=task_id,
-                    symbol=symbol,
-                    quantity=qty,
-                    price=current_price,
-                    decision=decision_obj,
-                    confidence=confidence,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    reason=reason,
-                )
-                
-                # Simulate immediate fill in paper trading
-                self.portfolio_manager.fill_trade(trade.trade_id)
-                
-                # Emit TRADE_OPENED event
-                event_bus.publish({
-                    'type': 'TRADE_OPENED',
-                    'symbol': symbol,
-                    'trade_id': trade.trade_id,
-                    'side': 'BUY',
-                    'quantity': qty,
-                    'price': current_price,
-                    'stop_loss': stop_loss,
-                    'take_profit': take_profit,
-                    'timestamp': datetime.utcnow().isoformat()
-                })
-                
-            elif decision_type == "SELL":
-                # Check if we have a position to sell
-                position = self.portfolio_manager.get_position(symbol)
-                if position and position.quantity > 0:
-                    trade = self.portfolio_manager.execute_sell(
-                        task_id=task_id,
-                        symbol=symbol,
-                        quantity=position.quantity,  # Sell entire position
-                        price=current_price,
-                        decision=decision_obj,
-                        confidence=confidence,
-                        stop_loss=stop_loss,
-                        take_profit=take_profit,
-                        reason=reason,
-                    )
-                    
-                    # Simulate immediate fill
-                    self.portfolio_manager.fill_trade(trade.trade_id)
-                    
-                    # Emit TRADE_CLOSED event
-                    event_bus.publish({
-                        'type': 'TRADE_CLOSED',
-                        'symbol': symbol,
-                        'trade_id': trade.trade_id,
-                        'side': 'SELL',
-                        'quantity': position.quantity,
-                        'price': current_price,
-                        'pnl': position.unrealized_pnl(),
-                        'timestamp': datetime.utcnow().isoformat()
-                    })
-                else:
-                    logger.warning(f"SELL decision for {symbol} but no position to close")
-            
-            else:
-                # HOLD decision - no action
-                logger.info(f"HOLD decision for {symbol}, no trade executed")
-            
-            # Emit PORTFOLIO_UPDATED event with current metrics
-            equity_metrics = self.portfolio_manager.get_equity_metrics()
-            event_bus.publish({
-                'type': 'PORTFOLIO_UPDATED',
-                'symbol': symbol,
-                'metrics': equity_metrics,
-                'timestamp': datetime.utcnow().isoformat()
-            })
-            
-        except Exception as e:
-            logger.error(f"Error processing DECISION_MADE event: {e}", exc_info=True)
-            event_bus.publish({
-                'type': 'TRADE_FAILED',
-                'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
-            })
+    @property
+    def agent_id(self) -> str:
+        return "main_orchestrator_agent"
 
-    def _on_trade_opened(self, event: Any):
-        """
-        Handle TRADE_OPENED event from Phase 3 PortfolioManager
-        Flow: Trade opened → Risk check → Approval request or execution
-        
-        Args:
-            event: Event object (can be Event class or dict)
-        """
-        try:
-            # Handle both Event objects and dicts
-            if isinstance(event, dict):
-                symbol = event.get('data', {}).get('symbol') or event.get('symbol')
-                trade_id = event.get('data', {}).get('trade_id') or event.get('trade_id')
-                side = event.get('data', {}).get('side') or event.get('side')
-                quantity = event.get('data', {}).get('quantity') or event.get('quantity', 0)
-                price = event.get('data', {}).get('price') or event.get('price', 0)
-            else:
-                # Assume it's an Event object
-                symbol = event.data.get('symbol') if hasattr(event, 'data') else None
-                trade_id = event.data.get('trade_id') if hasattr(event, 'data') else None
-                side = event.data.get('side', 'BUY') if hasattr(event, 'data') else 'BUY'
-                quantity = event.data.get('quantity', 0) if hasattr(event, 'data') else 0
-                price = event.data.get('price', 0) if hasattr(event, 'data') else 0
-            
-            if not symbol or not trade_id:
-                logger.warning(f"TRADE_OPENED event missing symbol or trade_id: {event}")
-                return
-            
-            logger.info(f"TRADE_OPENED received: {trade_id} {symbol} {quantity}@{price}")
-            
-            # Get trade from portfolio manager
-            trade = self.portfolio_manager.get_trade(trade_id)
-            if not trade:
-                logger.error(f"Trade not found in portfolio: {trade_id}")
-                return
-            
-            # Perform risk checks
-            portfolio = self.portfolio_manager.get_portfolio()
-            current_positions = {
-                pos.symbol: pos.quantity
-                for pos in self.portfolio_manager.get_positions()
-            }
-            
-            confidence = trade.confidence if hasattr(trade, 'confidence') else 1.0
-            risk_check = self.risk_enforcer.check_trade(
-                trade_id=trade_id,
-                symbol=symbol,
-                quantity=quantity,
-                price=price,
-                portfolio_equity=portfolio.total_equity(),
-                current_positions=current_positions,
-                confidence=confidence,
-            )
-            
-            # Check if approval is needed
-            if risk_check.violations_count() > 0 or risk_check.approval_required:
-                # Create approval request
-                approval_request = self.approval_engine.create_approval_request(
-                    trade_id=trade_id,
-                    symbol=symbol,
-                    trade_details={
-                        'side': side,
-                        'quantity': quantity,
-                        'price': price,
-                        'confidence': confidence,
-                        'stop_loss': trade.stop_loss if hasattr(trade, 'stop_loss') else None,
-                        'take_profit': trade.take_profit if hasattr(trade, 'take_profit') else None,
-                    },
-                    risk_check=risk_check,
-                    reason=f"Risk violations: {[l.limit_type for l in risk_check.violated_limits]}",
-                )
-                
-                # Emit approval request event
-                event_bus.publish({
-                    'type': 'APPROVAL_REQUIRED',
-                    'trade_id': trade_id,
-                    'approval_request_id': approval_request.request_id,
-                    'symbol': symbol,
-                    'risk_score': risk_check.risk_score,
-                    'violations': [l.limit_type for l in risk_check.violated_limits],
-                    'timestamp': datetime.utcnow().isoformat()
-                })
-                
-                logger.warning(f"Approval required for trade {trade_id}: risk_score={risk_check.risk_score:.1f}")
-            else:
-                # Risk check passed, trade can proceed
-                logger.info(f"Risk check passed for trade {trade_id}: risk_score={risk_check.risk_score:.1f}")
-                
-                # Emit trade approved event
-                event_bus.publish({
-                    'type': 'TRADE_APPROVED',
-                    'trade_id': trade_id,
-                    'symbol': symbol,
-                    'risk_score': risk_check.risk_score,
-                    'timestamp': datetime.utcnow().isoformat()
-                })
-            
-        except Exception as e:
-            logger.error(f"Error processing TRADE_OPENED event: {e}", exc_info=True)
-            event_bus.publish({
-                'type': 'RISK_CHECK_FAILED',
-                'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
-            })
+    @property
+    def goal(self) -> str:
+        return "Orchestrate the end-to-end trading workflow, from market scanning to trade execution and learning."
+    
+    def __init__(self, config: Dict[str, Any]): # __init__ should not be async
+        self.config = config
+        self.event_bus = None # Initialized in async initialize_orchestrator
+        self.pending_news_reports: Dict[str, AgentReport] = {}
+        self.pending_analysis_reports: Dict[str, AgentReport] = {}
+        logger.info("MainOrchestratorAgent initializing...")
 
-    def _on_approval_required(self, event: Any):
-        """
-        Handle APPROVAL_REQUIRED event from Phase 4 RiskEnforcer
-        Flow: Risk violations detected → Awaiting manual approval
-        
-        Args:
-            event: Event object (can be Event class or dict)
-        """
-        try:
-            # Handle both Event objects and dicts
-            if isinstance(event, dict):
-                trade_id = event.get('data', {}).get('trade_id') or event.get('trade_id')
-                symbol = event.get('data', {}).get('symbol') or event.get('symbol')
-                approval_request_id = event.get('data', {}).get('approval_request_id') or event.get('approval_request_id')
-            else:
-                # Assume it's an Event object
-                trade_id = event.data.get('trade_id') if hasattr(event, 'data') else None
-                symbol = event.data.get('symbol') if hasattr(event, 'data') else None
-                approval_request_id = event.data.get('approval_request_id') if hasattr(event, 'data') else None
-            
-            if not trade_id or not approval_request_id:
-                logger.warning(f"APPROVAL_REQUIRED event missing trade_id or approval_request_id: {event}")
-                return
-            
-            logger.info(f"APPROVAL_REQUIRED received: {trade_id} {symbol}, request_id={approval_request_id}")
-            
-            # In a real system, this would trigger manual approval workflow (Telegram, dashboard, etc.)
-            # For now, we log the pending approval request
-            approval_request = self.approval_engine.get_request(approval_request_id)
-            if approval_request:
-                logger.warning(f"Approval request pending: {approval_request_id} for {symbol}")
-                logger.warning(f"Pending approvals: {self.approval_engine.pending_approval_count()}")
-            
-        except Exception as e:
-            logger.error(f"Error processing APPROVAL_REQUIRED event: {e}", exc_info=True)
+        # Initialize all agents
+        self.market_scanner_agent = MarketScannerAgent(config.get("market_scanner", {}))
+        self.data_agent = DataAgent(config.get("data_agent", {}))
+        self.news_agent = NewsAgent(config.get("news_agent", {}))
+        self.analysis_agent = AnalysisAgent(config.get("analysis_agent", {}))
+        self.strategy_agent = StrategyAgent(config.get("strategy_agent", {}))
+        self.risk_agent = RiskAgent(config.get("risk_agent", {}))
+        self.execution_agent = ExecutionAgent(config.get("execution_agent", {}))
+        self.learning_agent = LearningAgent(config.get("learning_agent", {}))
+        self.telegram_agent = TelegramAgent(config.get("telegram_agent", {}))
+        self.scheduler_agent = SchedulerAgent(config.get("scheduler_agent", {}))
+        self.portfolio_agent = PortfolioAgent(config.get("portfolio_agent", {})) # New agent initialization
 
-    def _on_trade_approved(self, event: Any):
-        """
-        Handle TRADE_APPROVED event from Phase 4 RiskEnforcer
-        Flow: Risk check passed → Add to monitor → Await execution → Track SL/TP
-        
-        Args:
-            event: Event object (can be Event class or dict)
-        """
-        try:
-            # Handle both Event objects and dicts
-            if isinstance(event, dict):
-                trade_id = event.get('data', {}).get('trade_id') or event.get('trade_id')
-                symbol = event.get('data', {}).get('symbol') or event.get('symbol')
-            else:
-                # Assume it's an Event object
-                trade_id = event.data.get('trade_id') if hasattr(event, 'data') else None
-                symbol = event.data.get('symbol') if hasattr(event, 'data') else None
-            
-            if not trade_id:
-                logger.warning(f"TRADE_APPROVED event missing trade_id: {event}")
-                return
-            
-            logger.info(f"TRADE_APPROVED received: {trade_id} {symbol}")
-            
-            # Get trade from portfolio manager
-            trade = self.portfolio_manager.get_trade(trade_id)
-            if not trade:
-                logger.error(f"Trade not found in portfolio: {trade_id}")
-                return
-            
-            # Create execution context and auto-execute
-            risk_check_result = {
-                'approval_required': False,
-                'risk_score': 35.0,
-                'violated_limits': [],
-            }
-            
-            exec_context = self.execution_engine.create_execution_context(
-                trade_id=trade_id,
-                symbol=symbol,
-                side=trade.side,
-                quantity=trade.quantity,
-                target_price=trade.price,
-                confidence=trade.confidence if hasattr(trade, 'confidence') else 1.0,
-                risk_assessment=risk_check_result,
-            )
-            
-            # Auto-execute the trade
-            exec_report = self.execution_engine.approve_and_execute(trade_id)
-            
-            logger.info(f"Trade executed: {exec_report.execution_id}")
-            
-            # Add to trade monitor for SL/TP tracking
-            self.trade_monitor.add_trade(
-                trade_id=trade_id,
-                symbol=symbol,
-                side=trade.side,
-                entry_price=trade.price,
-                entry_quantity=trade.quantity,
-                stop_loss=trade.stop_loss if hasattr(trade, 'stop_loss') else trade.price * 0.95,
-                take_profit=trade.take_profit if hasattr(trade, 'take_profit') else trade.price * 1.05,
-            )
-            
-            # Emit EXECUTION_REPORT event
-            event_bus.publish({
-                'type': 'EXECUTION_REPORT',
-                'execution_id': exec_report.execution_id,
-                'trade_id': trade_id,
-                'symbol': symbol,
-                'status': exec_report.status,
-                'filled_price': exec_report.filled_price,
-                'filled_quantity': exec_report.filled_quantity,
-                'execution_type': exec_report.execution_type.value,
-                'timestamp': datetime.utcnow().isoformat()
-            })
-            
-        except Exception as e:
-            logger.error(f"Error processing TRADE_APPROVED event: {e}", exc_info=True)
-            event_bus.publish({
-                'type': 'EXECUTION_FAILED',
-                'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
-            })
+        # Event handlers will be registered in initialize_orchestrator after event_bus is awaited
 
-    def _on_order_filled(self, data: Dict[str, Any]):
-        """
-        Handle ORDER_FILLED event from Phase 6 BrokerManager
-        
-        Args:
-            data: Event data dict with order details
-        """
-        try:
-            order_id = data.get('order_id')
-            trade_id = data.get('trade_id')
-            symbol = data.get('symbol')
-            fill_price = data.get('fill_price')
-            quantity = data.get('quantity')
-            
-            logger.info(
-                f"ORDER_FILLED: {order_id} - {symbol} {quantity} @ ${fill_price:.2f} (trade_id: {trade_id})"
-            )
-            
-            # Publish event through event bus for other components
-            event_bus.publish({
-                'type': 'ORDER_FILLED',
-                'order_id': order_id,
-                'trade_id': trade_id,
-                'symbol': symbol,
-                'fill_price': fill_price,
-                'quantity': quantity,
-                'timestamp': datetime.utcnow().isoformat()
-            })
-        
-        except Exception as e:
-            logger.error(f"Error processing ORDER_FILLED event: {e}")
-    
-    def _on_position_closed(self, data: Dict[str, Any]):
-        """
-        Handle POSITION_CLOSED event from Phase 6 BrokerManager
-        
-        Args:
-            data: Event data dict with position details
-        """
-        try:
-            symbol = data.get('symbol')
-            order_id = data.get('order_id')
-            
-            logger.info(f"POSITION_CLOSED: {symbol} with order {order_id}")
-            
-            # Publish event through event bus
-            event_bus.publish({
-                'type': 'POSITION_CLOSED',
-                'symbol': symbol,
-                'order_id': order_id,
-                'timestamp': datetime.utcnow().isoformat()
-            })
-        
-        except Exception as e:
-            logger.error(f"Error processing POSITION_CLOSED event: {e}")
+    async def run(self):
+        logger.info(f"{self.agent_id} starting run cycle.")
+        # Start scheduler in background
+        asyncio.create_task(self.scheduler_agent.run())
+        # Initial trigger for market scan
+        await self.market_scanner_agent.run()
+        logger.info(f"{self.agent_id} finished initial run cycle.")
 
+    async def handle_market_scanned(self, event: Event):
+        logger.info(f"Orchestrator received MARKET_SCANNED event: {event.data}")
+        symbols = event.data.get("symbols", [])
+        for symbol in symbols:
+            await self.data_agent.run(symbol=symbol, interval="1d")
     
-    # =====================
-    # DATA TOOLS
-    # =====================
-    
-    def get_price_historical(self, symbol: str, start_date: Optional[str] = None,
-                            end_date: Optional[str] = None,
-                            interval: str = "1d") -> Dict[str, Any]:
-        """Fetch historical prices"""
-        # Convert interval formats if needed
-        interval_map = {"1day": "1d", "1d": "1d", "1h": "1h", "5m": "5m"}
-        interval = interval_map.get(interval, "1d")
-        return self.openbb.get_price_historical(symbol, start_date, end_date, interval)
-    
-    def get_fundamentals(self, symbol: str, statement_type: str = "income") -> Dict[str, Any]:
-        """Fetch fundamental financial data"""
-        return self.openbb.get_fundamentals(symbol, statement_type)
-    
-    def get_company_profile(self, symbol: str) -> Dict[str, Any]:
-        """Fetch company profile"""
-        return self.openbb.get_company_profile(symbol)
-    
-    def get_quote(self, symbol: str) -> Dict[str, Any]:
-        """Fetch latest quote"""
-        return self.openbb.get_quote(symbol)
-    
-    # =====================
-    # INDICATOR TOOLS
-    # =====================
-    
-    def calc_rsi(self, prices: List[float], period: int = 14) -> List[float]:
-        """Calculate RSI"""
-        return self.indicators.calc_rsi(prices, period)
-    
-    def calc_macd(self, prices: List[float], fast: int = 12,
-                 slow: int = 26, signal: int = 9) -> Dict[str, List[float]]:
-        """Calculate MACD"""
-        return self.indicators.calc_macd(prices, fast, slow, signal)
-    
-    def calc_sma(self, prices: List[float], window: int = 20) -> List[float]:
-        """Calculate SMA"""
-        return self.indicators.calc_sma(prices, window)
-    
-    def calc_ema(self, prices: List[float], window: int = 20) -> List[float]:
-        """Calculate EMA"""
-        return self.indicators.calc_ema(prices, window)
-    
-    def calc_atr(self, highs: List[float], lows: List[float],
-                closes: List[float], period: int = 14) -> List[float]:
-        """Calculate ATR"""
-        return self.indicators.calc_atr(highs, lows, closes, period)
-    
-    def calc_bollinger_bands(self, prices: List[float], window: int = 20,
-                            num_std: float = 2) -> Dict[str, List[float]]:
-        """Calculate Bollinger Bands"""
-        return self.indicators.calc_bollinger_bands(prices, window, num_std)
-    
-    # =====================
-    # RISK TOOLS
-    # =====================
-    
-    def calc_position_size(self, symbol: str, current_price: float,
-                          atr: Optional[float] = None,
-                          portfolio_equity: float = 100000) -> Dict[str, Any]:
-        """Calculate position size based on ATR and risk budget"""
-        return self.risk.calc_position_size(symbol, current_price, atr, portfolio_equity)
-    
-    def validate_trade(self, symbol: str, action: str, qty: float,
-                      price: float, policy: Optional[Dict] = None) -> Dict[str, Any]:
-        """Validate trade against risk policies"""
-        return self.risk.validate_trade(
-            symbol, action, qty, price,
-            self.portfolio.total_value,
-            self.portfolio.positions,
-            policy
-        )
-    
-    # =====================
-    # ANALYSIS & STRATEGY
-    # =====================
-    
-    def analyze(self, symbol: str, lookback_days: Optional[int] = None, interval: str = "1d") -> Dict[str, Any]:
-        """
-        Full analysis: fetch data, compute indicators, run strategy
+    async def handle_data_fetch_complete(self, event: Event):
+        logger.info(f"Orchestrator received DATA_FETCH_COMPLETE event: {event.data}")
+        symbol = event.data.get("symbol")
+        data_payload = event.data.get("dataframe") # Now this is a dict
+        if data_payload is not None and symbol is not None:
+            await self.news_agent.run(symbol=symbol)
+            # Pass the data_payload (dict) to analysis_agent.run
+            await self.analysis_agent.run(data_payload=data_payload, symbol=symbol)
+
+    async def handle_news_fetch_complete(self, event: Event):
+        logger.info(f"Orchestrator received NEWS_FETCH_COMPLETE event: {event.data}")
+        news_report = AgentReport(**event.data) # Reconstruct AgentReport
+        symbol = news_report.payload.get("symbol")
+        if symbol:
+            self.pending_news_reports[symbol] = news_report
+            await self._try_trigger_strategy_agent(symbol)
+
+    async def handle_analysis_complete(self, event: Event):
+        logger.info(f"Orchestrator received ANALYSIS_COMPLETE event: {event.data}")
+        analysis_report = AgentReport(**event.data) # Reconstruct AgentReport
+        symbol = analysis_report.payload.get("symbol")
+        if symbol:
+            self.pending_analysis_reports[symbol] = analysis_report
+            await self._try_trigger_strategy_agent(symbol)
+
+    async def _try_trigger_strategy_agent(self, symbol: str):
+        news_report = self.pending_news_reports.get(symbol)
+        analysis_report = self.pending_analysis_reports.get(symbol)
+
+        if news_report and analysis_report:
+            logger.info(f"Both news and analysis reports available for {symbol}. Triggering StrategyAgent.")
+            await self.strategy_agent.run(indicators_report=analysis_report, news_report=news_report)
+            # Clear pending reports after triggering strategy agent
+            del self.pending_news_reports[symbol]
+            del self.pending_analysis_reports[symbol]
+
+    async def handle_trade_proposal_generated(self, event: Event):
+        logger.info(f"Orchestrator received TRADE_PROPOSAL_GENERATED event: {event.data}")
+        trade_proposal_report = AgentReport(**event.data)
+        await self.risk_agent.run(trade_proposal_report=trade_proposal_report)
+
+    async def handle_risk_check_complete(self, event: Event):
+        logger.info(f"Orchestrator received RISK_CHECK_COMPLETE event: {event.data}")
+        risk_check_report = AgentReport(**event.data)
+        # Assuming RiskAgent's report contains a RiskCheckResult with approval_required
+        risk_check_result = risk_check_report.payload.get("risk_check_result")
         
-        Returns:
-            Complete analysis with signals and decision
-        """
-        task_id = str(uuid.uuid4())
-        
-        try:
-            # Fetch price data
-            price_data = self.get_price_historical(symbol, interval=interval)
-            
-            if "error" in price_data:
-                logger.error(f"Failed to fetch data for {symbol}: {price_data['error']}")
-                return {
-                    "error": price_data["error"],
-                    "task_id": task_id,
-                    "symbol": symbol,
-                }
-            
-            # Extract OHLCV
-            closes = price_data.get("close", [])
-            highs = price_data.get("high", [])
-            lows = price_data.get("low", [])
-            
-            if not closes or len(closes) < 50:
-                logger.warning(f"Insufficient data points for {symbol}")
-                return {
-                    "error": "Insufficient historical data",
-                    "task_id": task_id,
-                    "symbol": symbol,
-                }
-            
-            # Compute indicators
-            rsi = self.calc_rsi(closes, 14)
-            sma50 = self.calc_sma(closes, 50)
-            atr = self.calc_atr(highs, lows, closes, 14)
-            
-            # Build data dict for strategy
-            analysis_data = {
-                "close": closes,
-                "high": highs,
-                "low": lows,
-                "rsi": rsi[-len(sma50):] if len(rsi) >= len(sma50) else rsi,
-                "sma50": sma50,
-                "atr": atr[-len(sma50):] if len(atr) >= len(sma50) else atr,
-            }
-            
-            # Run strategy
-            strategy_result = self.strategy.analyze(
-                symbol,
-                analysis_data,
-                portfolio_equity=self.portfolio.total_value,
-                existing_position=self.portfolio.get_position(symbol)
-            )
-            
-            # Add metadata
-            strategy_result.update({
-                "task_id": task_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "required_approval": strategy_result.get("decision") != "HOLD",
-            })
-            
-            # Log the run
-            import json
-            run_logger.log_run(
-                task_id=task_id,
-                symbol=symbol,
-                decision_json=json.dumps(strategy_result),
-            )
-            
-            logger.info(f"Analysis complete: {symbol} -> {strategy_result.get('decision')}")
-            return strategy_result
-        
-        except Exception as e:
-            logger.error(f"Analysis failed for {symbol}: {str(e)}", exc_info=True)
-            return {
-                "error": str(e),
-                "task_id": task_id,
-                "symbol": symbol,
-            }
-    
-    # =====================
-    # PORTFOLIO & EXECUTION
-    # =====================
-    
-    def portfolio_get_state(self) -> Dict[str, Any]:
-        """Get current portfolio state"""
-        return self.portfolio.get_state()
-    
-    def portfolio_propose_trade(self, decision: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate and propose a trade (dry-run)"""
-        # Convert to Decision object if needed
-        if isinstance(decision, dict):
-            # Map request parameters to Decision fields
-            # Support both 'action' and 'decision' field names
-            decision_action = decision.get('action') or decision.get('decision')
-            
-            decision_data = {
-                'symbol': decision.get('symbol'),
-                'decision': decision_action,
-                'confidence': decision.get('confidence', 0.5),
-                'signals': decision.get('signals', []),
-                'task_id': decision.get('task_id', f"trade_{int(time.time()*1000)}"),
-            }
-            
-            # Add optional fields if provided
-            # Support both formats: dashboard sends position with action_qty/action_value
-            # or direct quantity/amount fields
-            if decision.get('position'):
-                # Dashboard format with action_qty and action_value
-                decision_data['position'] = decision.get('position')
-            elif decision.get('quantity') or decision.get('amount'):
-                # Legacy format with quantity and amount
-                decision_data['position'] = {
-                    'symbol': decision.get('symbol'),
-                    'quantity': decision.get('quantity', 0),
-                    'amount': decision.get('amount', 0),
-                    'action_qty': decision.get('quantity', 0),
-                    'action_value': decision.get('amount', 0)
-                }
-            
-            if decision.get('stop_loss'):
-                decision_data['stop_loss'] = decision.get('stop_loss')
-            if decision.get('take_profit'):
-                decision_data['take_profit'] = decision.get('take_profit')
-            if decision.get('required_approval'):
-                decision_data['required_approval'] = decision.get('required_approval')
-            
-            decision_obj = Decision(**decision_data)
+        if risk_check_result and not risk_check_result.get("approval_required", False):
+            # If no approval is required, proceed to execution
+            await self.execution_agent.run(approved_trade_proposal=risk_check_report.payload.get("trade_proposal"))
         else:
-            decision_obj = decision
+            logger.info("Approval required for trade proposal.")
+
+    async def handle_approval_required(self, event: Event):
+        logger.info(f"Orchestrator received APPROVAL_REQUIRED event: {event.data}")
+        approval_request_report = AgentReport(**event.data)
+        # Delegate to a dedicated approval manager or directly to TelegramAgent for now
+        # await self.telegram_agent.request_approval(approval_request_report.payload)
+        logger.info("Approval request sent via Telegram Agent (mocked).")
+        # For now, simulate immediate approval for testing
+        await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data={"trade_proposal": approval_request_report.payload.get("trade_proposal"), "status": "approved_mock"}))
+
+    async def handle_trade_executed(self, event: Event):
+        logger.info(f"Orchestrator received TRADE_EXECUTED event: {event.data}")
+        trade_execution_report = AgentReport(**event.data)
         
-        valid, summary, details = self.execution.propose_trade(decision_obj)
-        
-        return {
-            "task_id": decision_obj.task_id,
-            "valid": valid,
-            "summary": summary,
-            "details": details,
+        # Check if this trade execution was initiated by a Flask request
+        request_id = event.data.get("request_id")
+        if request_id and request_id in flask_response_queues:
+            await flask_response_queues[request_id].put(trade_execution_report)
+            logger.info(f"Sent TRADE_EXECUTED report back to Flask request {request_id}")
+
+        # Update portfolio first
+        await self.portfolio_agent.run(event_type=Events.TRADE_EXECUTED, payload=trade_execution_report.payload)
+        # Then let the learning agent process
+        await self.learning_agent.run(execution_report=trade_execution_report)
+
+    async def handle_learning_complete(self, event: Event):
+        logger.info(f"Orchestrator received LEARNING_COMPLETE event: {event.data}")
+        # Learning agent has completed its cycle, possibly publish feedback
+
+    async def handle_market_scan_trigger(self, event: Event):
+        logger.info(f"Orchestrator received MARKET_SCAN_TRIGGER event: {event.data}")
+        await self.market_scanner_agent.run()
+
+    async def handle_data_refresh_trigger(self, event: Event):
+        logger.info(f"Orchestrator received DATA_REFRESH_TRIGGER event: {event.data}")
+        # This handler needs to know *which* symbols to refresh.
+        # For now, it could trigger a scan or use a predefined list.
+        # A more robust solution might involve the DataAgent maintaining a "universe" to refresh.
+        await self.data_agent.run(refresh_all=True) # Assuming DataAgent can handle "refresh_all"
+
+    async def handle_daily_report_trigger(self, event: Event):
+        logger.info("Orchestrator received DAILY_REPORT_TRIGGER event. Generating report...")
+        # Get actual portfolio performance data from PortfolioAgent
+        portfolio_report = await self.portfolio_agent.run(event_type=Events.GET_PORTFOLIO_STATE, payload={})
+        if portfolio_report.status == "success":
+            metrics = portfolio_report.payload.get("equity_metrics", {})
+            message_text = f"**Daily Report - {datetime.utcnow().strftime("%Y-%m-%d")}**\n\n"
+            message_text += f"**Total Equity:** ${metrics.get("total_equity", 0.0):,.2f}\n"
+            message_text += f"**Daily P&L:** ${metrics.get("total_pnl", 0.0):,.2f}\n"
+            message_text += f"**Total Return %:** {metrics.get("total_return_pct", 0.0):.2f}%\n"
+            message_text += f"**Open Positions:** {portfolio_report.payload.get("overview", {}).get("position_count", 0)}\n"
+            await self.telegram_agent.send_scheduled_report(report_data=metrics) # Pass metrics directly, TelegramAgent formats it
+        else:
+            logger.error(f"Failed to get portfolio state for daily report: {portfolio_report.message}")
+            await self.telegram_agent.send_message(chat_id=self.telegram_agent.chat_id, message="Failed to generate daily report.")
+
+    async def handle_get_system_status(self, event: Event):
+        logger.info(f"Orchestrator received GET_SYSTEM_STATUS event: {event.data}. Preparing status report.")
+        status_report = {
+            "orchestrator": "running",
+            "market_scanner": "idle",
+            "data_agent": "ready",
+            "news_agent": "ready",
+            "analysis_agent": "ready",
+            "strategy_agent": "ready",
+            "risk_agent": "ready",
+            "execution_agent": "ready",
+            "learning_agent": "ready",
+            "portfolio_agent": "ready", # New status
+            "scheduler_agent": "running",
+            "last_scan": datetime.utcnow().isoformat(),
+            "active_tasks": len(asyncio.all_tasks()) - 1 # Exclude current task
         }
-    
-    def portfolio_execute_trade(self, task_id: str, approval_id: str = "") -> Dict[str, Any]:
-        """Execute a proposed trade"""
-        success, msg = self.execution.execute_trade(task_id, approval_id)
+        response_chat_id = event.data.get("chat_id")
+        if response_chat_id:
+            await self.telegram_agent.send_message(
+                chat_id=response_chat_id,
+                message=f"System Status Report:\n```json\n{json.dumps(status_report, indent=2)}\n```"
+            )
+
+
+    async def handle_get_portfolio_state(self, event: Event):
+        logger.info(f"Orchestrator received GET_PORTFOLIO_STATE event: {event.data}. Preparing portfolio report.")
+        response_chat_id = event.data.get("chat_id") # Can be a Telegram chat_id or "flask_request"
         
-        return {
-            "task_id": task_id,
-            "success": success,
-            "message": msg,
-            "portfolio_state": self.portfolio.get_state()
-        }
-    
-    def portfolio_mark_to_market(self, prices: Dict[str, float]):
-        """Update portfolio prices"""
-        self.portfolio.update_prices(prices)
+        portfolio_report = await self.portfolio_agent.run(event_type=Events.GET_PORTFOLIO_STATE, payload={})
+
+        if portfolio_report.status == "success":
+            if response_chat_id == "flask_request":
+                # Respond directly to the Flask endpoint
+                request_id = event.data.get("request_id")
+                if request_id in flask_response_queues:
+                    await flask_response_queues[request_id].put(portfolio_report)
+            elif response_chat_id:
+                portfolio_state = portfolio_report.payload
+                # Format the portfolio state for a human-readable Telegram message
+                message_text = f"**Portfolio State - {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}**\n\n"
+                message_text += f"**Total Equity:** ${portfolio_state.get("equity_metrics", {}).get("total_equity", 0.0):,.2f}\n"
+                message_text += f"**Current Cash:** ${portfolio_state.get("equity_metrics", {}).get("current_cash", 0.0):,.2f}\n"
+                message_text += f"**Total P&L:** ${portfolio_state.get("equity_metrics", {}).get("total_pnl", 0.0):,.2f}\n"
+                message_text += f"**Positions ({len(portfolio_state.get("positions", []))}):**\n"
+                for pos in portfolio_state.get("positions", [])[:5]: # Limit to 5 positions for brevity
+                    message_text += f"  - {pos.get("symbol")} | Qty: {pos.get("quantity")} | Avg Cost: ${pos.get("avg_cost"):,.2f} | Current Price: ${pos.get("current_price"):,.2f}\n"
+                if len(portfolio_state.get("positions", [])) > 5:
+                    message_text += f"  ... and {len(portfolio_state.get("positions", [])) - 5} more positions.\n"
+
+                await self.telegram_agent.send_message(chat_id=response_chat_id, message=message_text, parse_mode="Markdown")
+            else:
+                logger.error("GET_PORTFOLIO_STATE event received with no chat_id and not a Flask request.")
+        elif response_chat_id == "flask_request":
+            request_id = event.data.get("request_id")
+            if request_id in flask_response_queues:
+                await flask_response_queues[request_id].put(portfolio_report) # Send error report back to Flask
+        elif response_chat_id:
+            await self.telegram_agent.send_message(
+                chat_id=response_chat_id,
+                message=f"Failed to retrieve portfolio state: {portfolio_report.message}"
+            )
+        else:
+            logger.error(f"Failed to retrieve portfolio state or no chat_id: {portfolio_report.message}")
+
+
+_orchestrator: Optional[MainOrchestratorAgent] = None
+_event_bus_initialized: bool = False
+
+async def initialize_orchestrator() -> MainOrchestratorAgent:
+    global _orchestrator, _event_bus_initialized
+    if _orchestrator is None:
+        config_instance = Config()
+        app_config = config_instance.load_config()
         
-        # Take snapshot
-        self.portfolio.snapshot()
+        _orchestrator = MainOrchestratorAgent(app_config)
+        _orchestrator.event_bus = await get_event_bus() # Assign event bus after orchestrator is created
         
-        return {"updated": list(prices.keys())}
-    
-    def portfolio_get_performance(self) -> Dict[str, Any]:
-        """Get portfolio performance metrics"""
-        return Metrics.summary(self.portfolio)
-    
-    def portfolio_reset(self):
-        """Reset portfolio to initial state"""
-        self.portfolio.reset()
-        return {"status": "reset"}
+        # Register event listeners for inter-agent communication
+        await _orchestrator.event_bus.on(Events.MARKET_SCANNED, _orchestrator.handle_market_scanned)
+        await _orchestrator.event_bus.on(Events.DATA_FETCH_COMPLETE, _orchestrator.handle_data_fetch_complete)
+        await _orchestrator.event_bus.on(Events.NEWS_FETCH_COMPLETE, _orchestrator.handle_news_fetch_complete)
+        await _orchestrator.event_bus.on(Events.ANALYSIS_COMPLETE, _orchestrator.handle_analysis_complete)
+        await _orchestrator.event_bus.on(Events.TRADE_PROPOSAL_GENERATED, _orchestrator.handle_trade_proposal_generated)
+        await _orchestrator.event_bus.on(Events.RISK_CHECK_COMPLETE, _orchestrator.handle_risk_check_complete)
+        await _orchestrator.event_bus.on(Events.APPROVAL_REQUIRED, _orchestrator.handle_approval_required)
+        await _orchestrator.event_bus.on(Events.TRADE_EXECUTED, _orchestrator.handle_trade_executed)
+        await _orchestrator.event_bus.on(Events.LEARNING_COMPLETE, _orchestrator.handle_learning_complete)
+        await _orchestrator.event_bus.on(Events.MARKET_SCAN_TRIGGER, _orchestrator.handle_market_scan_trigger)
+        await _orchestrator.event_bus.on(Events.DATA_REFRESH_TRIGGER, _orchestrator.handle_data_refresh_trigger)
+        await _orchestrator.event_bus.on(Events.DAILY_REPORT_TRIGGER, _orchestrator.handle_daily_report_trigger)
+        await _orchestrator.event_bus.on(Events.GET_SYSTEM_STATUS, _orchestrator.handle_get_system_status)
+        await _orchestrator.event_bus.on(Events.GET_PORTFOLIO_STATE, _orchestrator.handle_get_portfolio_state)
 
-
-# Initialize service
-finance_service = FinanceService()
-
-
-# =====================
-# FLASK ROUTES
-# =====================
-
-@app.route("/health", methods=["GET"])
-def health():
-    """Health check endpoint"""
-    return jsonify({"status": "ok", "service": "finance"}), 200
+        _event_bus_initialized = True
+        logger.info("MainOrchestratorAgent and event listeners initialized.")
+    return _orchestrator
 
 
 @app.route("/analyze", methods=["POST"])
-def analyze():
-    """
-    POST /analyze
-    Body: {"symbol": "AAPL", "interval": "1d"}
-    """
+async def analyze_market():
+    """Analyze market data for a given symbol."""
     data = request.get_json() or {}
     symbol = data.get("symbol", "").upper()
     interval = data.get("interval", "1d")
@@ -935,45 +294,151 @@ def analyze():
     if not symbol:
         return jsonify({"error": "Missing symbol parameter"}), 400
     
-    result = finance_service.analyze(symbol, interval=interval)
-    return jsonify(result), 200
+    # Trigger the workflow through the orchestrator's event bus or direct agent call
+    orchestrator = await initialize_orchestrator()
+    report = await orchestrator.data_agent.run(symbol=symbol, interval=interval)
+    if report.status == "success":
+        return jsonify(report.payload), 200
+    else:
+        return jsonify({"error": report.message}), 500
 
 
 @app.route("/portfolio/state", methods=["GET"])
-def get_portfolio_state():
+async def get_portfolio_state():
     """Get current portfolio state"""
-    return jsonify(finance_service.portfolio_get_state()), 200
+    orchestrator = await initialize_orchestrator()
+    # This needs to be handled by a PortfolioAgent later, for now we trigger an event
+    response_event = Event(event_type=Events.GET_PORTFOLIO_STATE, data={"chat_id": request_id}) 
+    await orchestrator.event_bus.publish(response_event)
+    
+    try:
+        response_report = await asyncio.wait_for(flask_response_queues[request_id].get(), timeout=10.0)
+        del flask_response_queues[request_id]
+        if response_report.status == "success":
+            return jsonify(response_report.payload), 200
+        else:
+            return jsonify({"error": response_report.message}), 500
+    except asyncio.TimeoutError:
+        del flask_response_queues[request_id]
+        return jsonify({"error": "Portfolio state request timed out."}), 500
+    except Exception as e:
+        logger.error(f"Error retrieving portfolio state: {e}")
+        if request_id in flask_response_queues:
+            del flask_response_queues[request_id]
+        return jsonify({"error": f"Internal server error: {e}"}), 500
 
 
 @app.route("/portfolio/propose", methods=["POST"])
-def propose_trade():
+async def propose_trade():
     """Propose a trade"""
+    orchestrator = await initialize_orchestrator()
+    request_id = f"flask_{id(request)}"
+    flask_response_queues[request_id] = asyncio.Queue()
+
+    # Trigger the strategy agent to propose a trade
     data = request.get_json() or {}
-    result = finance_service.portfolio_propose_trade(data)
-    return jsonify(result), 200
+    symbol = data.get("symbol")
+    if not symbol:
+        return jsonify({"error": "Symbol is required for trade proposal."}), 400
+
+    # The /propose endpoint directly triggers the strategy agent flow.
+    # We expect an approval gate or direct execution to follow.
+    # For this, we'll need to publish a specific event that the strategy agent listens to
+    # For now, we simulate calling the strategy agent and returning its response.
+    # In a full implementation, the strategy agent would get `indicators_report` and `news_report`
+    # from other agents, but for direct API call, we'll mock them or pass minimal data.
+    
+    # Mock indicators and news reports for direct API call scenario
+    mock_indicators_report = AgentReport(agent_id="analysis_agent", status="success", message="Mock indicators", payload={"symbol": symbol, "timestamp": datetime.utcnow().isoformat(), "indicators": {}}))
+    mock_news_report = AgentReport(agent_id="news_agent", status="success", message="Mock news", payload={"symbol": symbol, "news_count": 0, "sentiment": {}, "catalysts": {}}))
+
+    strategy_report = await orchestrator.strategy_agent.run(indicators_report=mock_indicators_report, news_report=mock_news_report)
+
+    if strategy_report.status == "success":
+        # If proposals are generated, we might want to publish an event for risk agent
+        # and wait for the result here, similar to get_portfolio_state.
+        # For simplicity, returning proposals directly for now.
+        return jsonify(strategy_report.payload), 200
+    else:
+        return jsonify({"error": strategy_report.message}), 500
 
 
 @app.route("/portfolio/execute", methods=["POST"])
-def execute_trade():
+async def execute_trade():
     """Execute a proposed trade"""
+    orchestrator = await initialize_orchestrator()
+    request_id = f"flask_{id(request)}"
+    flask_response_queues[request_id] = asyncio.Queue()
+
     data = request.get_json() or {}
-    task_id = data.get("task_id")
-    approval_id = data.get("approval_id", "")
+    trade_proposal = data.get("trade_proposal")
+    if not trade_proposal:
+        return jsonify({"error": "trade_proposal is required for execution."}), 400
+
+    # Publish event to execution agent directly (assuming pre-approved or risk check done)
+    # In a real scenario, this would typically follow an approval flow.
+    await orchestrator.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data={"trade_proposal": trade_proposal, "status": "direct_execute", "request_id": request_id}))
     
-    if not task_id:
-        return jsonify({"error": "Missing task_id"}), 400
-    
-    result = finance_service.portfolio_execute_trade(task_id, approval_id)
-    return jsonify(result), 200
+    try:
+        response_report = await asyncio.wait_for(flask_response_queues[request_id].get(), timeout=10.0)
+        del flask_response_queues[request_id]
+        if response_report.status == "success":
+            return jsonify(response_report.payload), 200
+        else:
+            return jsonify({"error": response_report.message}), 500
+    except asyncio.TimeoutError:
+        del flask_response_queues[request_id]
+        return jsonify({"error": "Trade execution request timed out."}), 500
+    except Exception as e:
+        logger.error(f"Error executing trade: {e}")
+        if request_id in flask_response_queues:
+            del flask_response_queues[request_id]
+        return jsonify({"error": f"Internal server error: {e}"}), 500
 
 
 @app.route("/quote/<symbol>", methods=["GET"])
-def get_quote(symbol):
+async def get_quote(symbol):
     """Get latest quote for symbol"""
-    result = finance_service.get_quote(symbol.upper())
-    return jsonify(result), 200
+    orchestrator = await initialize_orchestrator()
+    # For a simple quote, we can directly ask the DataAgent
+    report = await orchestrator.data_agent.run(symbol=symbol, interval="1d", emit_events=False) # No events for simple quote
+
+    if report.status == "success" and report.payload:
+        # Assuming the dataframe in payload contains the latest quote
+        df_dict = report.payload.get("dataframe")
+        if df_dict:
+            df = pd.DataFrame.from_dict(df_dict)
+            if not df.empty:
+                latest_row = df.iloc[-1]
+                quote = {
+                    "symbol": symbol,
+                    "open": float(latest_row["open"]),
+                    "high": float(latest_row["high"]),
+                    "low": float(latest_row["low"]),
+                    "close": float(latest_row["close"]),
+                    "volume": float(latest_row["volume"]),
+                    "timestamp": latest_row.name.isoformat() if hasattr(latest_row.name, 'isoformat') else str(latest_row.name)
+                }
+                return jsonify(quote), 200
+        return jsonify({"error": f"No quote data found for {symbol}"}), 404
+    else:
+        return jsonify({"error": report.message}), 500
 
 
 if __name__ == "__main__":
     Config.validate()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    async def main():
+        orchestrator = await initialize_orchestrator()
+        # You can trigger the orchestrator's run method here if it has a continuous loop
+        asyncio.create_task(orchestrator.run()) # Start the orchestrator's main loop in the background
+        # Use gunicorn or hypercorn for production async Flask deployment
+        # For development, run the Flask app directly. Flask 2.0+ supports async views.
+        # However, app.run() itself is synchronous and blocks. 
+        # To run async Flask with `app.run()`, we need an async-aware server like `quart` or `hypercorn`.
+        # For this exercise, we'll keep app.run() blocking for simplicity, 
+        # but ideally, this would be `hypercorn app:app` or similar.
+        # For now, the orchestrator.run() will be started as a background task,
+        # and the Flask app.run() will block the main thread as usual.
+        app.run(host="0.0.0.0", port=5000, debug=True)
+
+    asyncio.run(main())

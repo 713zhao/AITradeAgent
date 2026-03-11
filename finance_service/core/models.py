@@ -114,6 +114,18 @@ def signal_to_dict(signal: Signal) -> Dict[str, Any]:
     """Convert Signal to dictionary"""
     return asdict(signal)
 
-def decision_to_dict(decision: Decision) -> Dict[str, Any]:
+    def decision_to_dict(decision: Decision) -> Dict[str, Any]:
     """Convert Decision to dictionary"""
     return asdict(decision)
+
+@dataclass
+class TradeProposal:
+    """Represents a proposed trade for execution"""
+    symbol: str
+    action: str  # BUY, SELL, HOLD
+    confidence: float
+    target_price: Optional[float] = None
+    stop_loss_price: Optional[float] = None
+    timestamp: datetime = datetime.utcnow()
+    rationale: Optional[List[str]] = None
+
