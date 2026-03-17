@@ -1,10 +1,12 @@
 import logging
+import asyncio
 from typing import Dict, Any, Optional, List, Tuple, Union, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 
 from finance_service.agents.agent_interface import Agent, AgentReport
+from dataclasses import asdict
 from finance_service.core.events import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal, Position # Import Position for risk checks
 
@@ -323,20 +325,42 @@ class RiskAgent(Agent):
     def goal(self) -> str:
         return "Enforce risk management policies and facilitate trade approval workflows."
 
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
+    def __init__(self, config):
         self.event_bus = get_event_bus()
-        # Initialize risk policy (from config or default)
-        policy_config = config.get("policy", {})
+        # Extract risk policy configuration
+        if hasattr(config, 'get'):
+            # YAMLConfigEngine - load from "risk" section
+            max_pos_pct = config.get("risk", "max_position_size_pct", default=0.10)
+            # Convert fraction to percentage if needed (0.10 → 10.0)
+            if max_pos_pct <= 1.0:
+                max_pos_pct = max_pos_pct * 100
+            policy_config = {
+                'policy_id': config.get("risk", "policy_id", default="STANDARD"),
+                'policy_name': config.get("risk", "policy_name", default="Standard Risk Policy"),
+                'max_positions': config.get("risk", "max_concurrent_positions", default=10),
+                'max_position_size_pct': max_pos_pct,
+                'max_sector_exposure_pct': config.get("risk", "max_sector_exposure_pct", default=25.0),
+                'max_portfolio_leverage': config.get("risk", "max_portfolio_leverage", default=1.0),
+                'max_daily_loss_pct': config.get("risk", "max_daily_loss_pct", default=3.0),
+                'max_drawdown_pct': config.get("risk", "max_drawdown_pct", default=10.0),
+                'approval_required_pct': config.get("strategy", "approval/approval_required_pct", default=0.75),
+            }
+        elif isinstance(config, dict):
+            policy_config = config.get("policy", {})
+            if "max_position_size_pct" in policy_config and policy_config["max_position_size_pct"] <= 1:
+                policy_config["max_position_size_pct"] *= 100
+        else:
+            policy_config = {}
+        
         self.policy = RiskPolicy(
             policy_id=policy_config.get("policy_id", "STANDARD"),
             policy_name=policy_config.get("policy_name", "Standard Risk Policy"),
-            max_positions=policy_config.get("max_positions", 20),
-            max_position_size_pct=policy_config.get("max_position_size_pct", 10.0),
+            max_positions=policy_config.get("max_positions", 10),
+            max_position_size_pct=policy_config.get("max_position_size_pct", 0.10),
             max_sector_exposure_pct=policy_config.get("max_sector_exposure_pct", 25.0),
-            max_portfolio_leverage=policy_config.get("max_portfolio_leverage", 2.0),
-            max_daily_loss_pct=policy_config.get("max_daily_loss_pct", 5.0),
-            max_drawdown_pct=policy_config.get("max_drawdown_pct", 20.0),
+            max_portfolio_leverage=policy_config.get("max_portfolio_leverage", 1.0),
+            max_daily_loss_pct=policy_config.get("max_daily_loss_pct", 3.0),
+            max_drawdown_pct=policy_config.get("max_drawdown_pct", 10.0),
             approval_required_pct=policy_config.get("approval_required_pct", 0.75),
         )
         logger.info(f"RiskAgent initialized with policy: {self.policy.policy_name}")
@@ -365,19 +389,19 @@ class RiskAgent(Agent):
             )
             
             message = f"Risk assessment complete for {proposal.symbol}. Approval Required: {risk_check_result.approval_required}"
-            payload = {"risk_assessment": risk_check_result.to_dict(), "trade_proposal": proposal.model_dump()}
+            payload = {"risk_assessment": risk_check_result.to_dict(), "trade_proposal": proposal.to_dict()}
 
-            # Publish event based on approval required status
+            # Publish event asynchronously (fire-and-forget)
             if risk_check_result.approval_required:
-                self.event_bus.publish(Event(
+                asyncio.create_task(self.event_bus.publish(Event(
                     event_type=Events.APPROVAL_REQUIRED,
                     data=payload
-                ))
+                )))
             else:
-                self.event_bus.publish(Event(
+                asyncio.create_task(self.event_bus.publish(Event(
                     event_type=Events.RISK_CHECK_COMPLETE,
                     data=payload
-                ))
+                )))
 
             return AgentReport(
                 agent_id=self.agent_id,

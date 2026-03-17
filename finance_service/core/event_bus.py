@@ -53,6 +53,7 @@ class EventBus:
         """
         Publish an event. Dispatches to all subscribers asynchronously.
         """
+        logger.info(f"EventBus.publish CALLED with event_or_dict={event_or_dict}")
         if isinstance(event_or_dict, dict):
             event_type = event_or_dict.get('type', 'UNKNOWN')
             data = {k: v for k, v in event_or_dict.items() if k != 'type'}
@@ -73,15 +74,17 @@ class EventBus:
         """
         Dispatch event to all subscribers, handling async callbacks.
         """
+        logger.info(f">>> _dispatch_event START: {event.event_type}")
         async with self._lock:
             callbacks = self._subscribers.get(event.event_type, []).copy()
         
-        logger.debug(f"Dispatching {event.event_type} to {len(callbacks)} subscribers")
+        logger.info(f"EVENT BUS DISPATCH: {event.event_type} to {len(callbacks)} subscribers")
         
         # Run callbacks concurrently if they are async
         tasks = []
-        for callback in callbacks:
+        for i, callback in enumerate(callbacks):
             try:
+                logger.info(f"Preparing task {i} for {event.event_type}, callback={callback.__qualname__ if hasattr(callback, '__qualname__') else str(callback)}")
                 if asyncio.iscoroutinefunction(callback):
                     tasks.append(callback(event))
                 else:
@@ -89,10 +92,15 @@ class EventBus:
                     # This requires an executor to be set on the event loop, or using run_in_executor
                     await asyncio.get_event_loop().run_in_executor(None, callback, event)
             except Exception as e:
-                logger.error(f"Error in event handler for {event.event_type}: {e}", exc_info=True)
+                logger.error(f"Error preparing task {i} for {event.event_type}: {e}", exc_info=True)
+                raise
         
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info(f"Dispatching {len(tasks)} tasks for {event.event_type}")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info(f"Tasks completed for {event.event_type}: {len(results)} results")
+        else:
+            logger.warning(f"No tasks to dispatch for {event.event_type} (callbacks={len(callbacks)})")
 
     async def get_subscribers_count(self, event_type: str) -> int:
         """Get count of subscribers for event type"""
@@ -154,8 +162,64 @@ async def get_event_bus() -> EventBus:
     return _global_event_bus
 
 
-class Events:\n    """Predefined event type constants"""\n    \n    # Data events\n    MARKET_SCANNED = "market_scanned" # New event for market scanner\n    DATA_FETCH_STARTED = "data_fetch_started"\n    DATA_FETCH_COMPLETE = "data_fetch_complete"\n    DATA_READY = "data_ready"                 # Symbol data ready for analysis (can be removed if DATA_FETCH_COMPLETE is sufficient)
-    NEWS_FETCH_COMPLETE = "news_fetch_complete" # New event for news agent\n    \n    # Analysis events\n    ANALYSIS_STARTED = "analysis_started"\n    ANALYSIS_COMPLETE = "analysis_complete"\n    ANALYSIS_FAILED = "analysis_failed" # Add failure event\n    \n    # Decision events (now Trade Proposals)\n    TRADE_PROPOSAL_GENERATED = "trade_proposal_generated" # Renamed from DECISION_MADE\n    # DECISION_MADE = "decision_made"           # Strategy produced decision\n    # DECISION_AWAITING_APPROVAL = "decision_awaiting_approval" # Replaced by APPROVAL_REQUIRED\n    \n    # Execution events\n    EXECUTION_STARTED = "execution_started"\n    TRADE_EXECUTED = "trade_executed" # Renamed from EXECUTION_COMPLETE\n    EXECUTION_FAILED = "execution_failed"\n    \n    # Portfolio events\n    PORTFOLIO_UPDATED = \"portfolio_updated\"\n    TRADE_OPENED = \"trade_opened\"\n    TRADE_CLOSED = \"trade_closed\"\n    TRADE_STOPPED = \"trade_stopped\"\n    \n    # Risk events\n    RISK_ALERT = \"risk_alert\"                # Position limit, drawdown, etc.\n    RISK_CHECK_COMPLETE = "risk_check_complete" # New event for risk agent completion\n    RISK_CHECK_FAILED = \"risk_check_failed\"\n    \n    # System events\n    SYSTEM_ERROR = \"system_error\"\n    CONFIG_RELOADED = \"config_reloaded\"\n    BACKTEST_STARTED = \"backtest_started\"\n    BACKTEST_COMPLETE = \"backtest_complete\"\n    \n    # Approval events\n    APPROVAL_REQUIRED = \"approval_required\" # Renamed from APPROVAL_REQUESTED\n    TRADE_APPROVED = \"trade_approved\" # Renamed from APPROVAL_APPROVED\n    APPROVAL_REJECTED = \"approval_rejected\"\n    APPROVAL_TIMEOUT = \"approval_timeout\"\n\n    # Learning events\n    LEARNING_COMPLETE = "learning_complete" # New event for learning agent\n    LEARNING_FEEDBACK = "learning_feedback" # Optional feedback event\n
+class Events:
+    """Predefined event type constants"""
+    
+    # Data events
+    MARKET_SCANNED = "market_scanned"
+    DATA_FETCH_STARTED = "data_fetch_started"
+    DATA_FETCH_COMPLETE = "data_fetch_complete"
+    DATA_READY = "data_ready"
+    NEWS_FETCH_COMPLETE = "news_fetch_complete"
+    
+    # Analysis events
+    ANALYSIS_STARTED = "analysis_started"
+    ANALYSIS_COMPLETE = "analysis_complete"
+    ANALYSIS_FAILED = "analysis_failed"
+    
+    # Decision events
+    TRADE_PROPOSAL_GENERATED = "trade_proposal_generated"
+    
+    # Execution events
+    EXECUTION_STARTED = "execution_started"
+    TRADE_EXECUTED = "trade_executed"
+    EXECUTION_FAILED = "execution_failed"
+    
+    # Portfolio events
+    PORTFOLIO_UPDATED = "portfolio_updated"
+    TRADE_OPENED = "trade_opened"
+    TRADE_CLOSED = "trade_closed"
+    TRADE_STOPPED = "trade_stopped"
+    
+    # Risk events
+    RISK_ALERT = "risk_alert"
+    RISK_CHECK_COMPLETE = "risk_check_complete"
+    RISK_CHECK_FAILED = "risk_check_failed"
+    
+    # System events
+    SYSTEM_ERROR = "system_error"
+    CONFIG_RELOADED = "config_reloaded"
+    BACKTEST_STARTED = "backtest_started"
+    BACKTEST_COMPLETE = "backtest_complete"
+    
+    # Approval events
+    APPROVAL_REQUIRED = "approval_required"
+    TRADE_APPROVED = "trade_approved"
+    
+    # Scheduler/Trigger events
+    MARKET_SCAN_TRIGGER = "market_scan_trigger"
+    DATA_REFRESH_TRIGGER = "data_refresh_trigger"
+    DAILY_REPORT_TRIGGER = "daily_report_trigger"
+    HEALTH_CHECK_TRIGGER = "health_check_trigger"
+    GET_SYSTEM_STATUS = "get_system_status"
+    GET_PORTFOLIO_STATE = "get_portfolio_state"
+    GET_HEALTH_STATUS = "get_health_status"
+    APPROVAL_REJECTED = "approval_rejected"
+    APPROVAL_TIMEOUT = "approval_timeout"
+    
+    # Learning events
+    LEARNING_COMPLETE = "learning_complete"
+    LEARNING_FEEDBACK = "learning_feedback"
 # Global event bus instance (lazy-loaded singleton)
 # event_bus = get_event_bus() # This will now be awaited in main if needed
 

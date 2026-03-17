@@ -1,7 +1,7 @@
 """Configuration management for Finance Service"""
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Any, Optional
 
 class Config:
     """Central configuration for Finance Agent"""
@@ -53,3 +53,12 @@ class Config:
         if not (0 < cls.MAX_POSITION_SIZE < 1):
             raise ValueError("MAX_POSITION_SIZE must be between 0 and 1")
         return True
+
+    @classmethod
+    def load_config(cls) -> Dict[str, Any]:
+        """Load configuration as a dictionary of all uppercase class attributes"""
+        config_dict = {}
+        for key, value in cls.__dict__.items():
+            if key.isupper() and not key.startswith('_'):
+                config_dict[key] = value
+        return config_dict

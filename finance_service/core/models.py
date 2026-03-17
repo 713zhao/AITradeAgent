@@ -114,9 +114,11 @@ def signal_to_dict(signal: Signal) -> Dict[str, Any]:
     """Convert Signal to dictionary"""
     return asdict(signal)
 
-    def decision_to_dict(decision: Decision) -> Dict[str, Any]:
+
+def decision_to_dict(decision: Decision) -> Dict[str, Any]:
     """Convert Decision to dictionary"""
     return asdict(decision)
+
 
 @dataclass
 class TradeProposal:
@@ -128,4 +130,21 @@ class TradeProposal:
     stop_loss_price: Optional[float] = None
     timestamp: datetime = datetime.utcnow()
     rationale: Optional[List[str]] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        result = {
+            'symbol': self.symbol,
+            'action': self.action,
+            'confidence': self.confidence,
+        }
+        if self.target_price is not None:
+            result['target_price'] = self.target_price
+        if self.stop_loss_price is not None:
+            result['stop_loss_price'] = self.stop_loss_price
+        if self.timestamp is not None:
+            result['timestamp'] = self.timestamp.isoformat() if hasattr(self.timestamp, 'isoformat') else str(self.timestamp)
+        if self.rationale is not None:
+            result['rationale'] = self.rationale
+        return result
 

@@ -1,8 +1,11 @@
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, Optional
+import asyncio
+from dataclasses import asdict
+from typing import Dict, Tuple, Optional, Any
 from finance_service.agents.agent_interface import Agent, AgentReport
+from dataclasses import asdict
 from finance_service.core.events import Event, Events, get_event_bus
 from finance_service.indicators.models import IndicatorResult, IndicatorsSnapshot, SignalType
 
@@ -47,7 +50,7 @@ class AnalysisAgent(Agent):
         Calculates all configured indicators for a given symbol using a DataFrame reconstructed from data_payload.
         """
         logger.info(f"AnalysisAgent run: Calculating indicators for {symbol}")
-        
+
         try:
             # Reconstruct DataFrame from the data_payload
             df = pd.DataFrame.from_dict(data_payload)
@@ -55,26 +58,32 @@ class AnalysisAgent(Agent):
             if 'Date' in df.columns:
                 df.set_index('Date', inplace=True)
             df.index = pd.to_datetime(df.index)
-            
-            snapshot = self._calculate_all(df, symbol)
+
+            # Extract fundamentals if provided
+            fundamentals = data_payload.get('fundamentals', {})
+
+            snapshot = self._calculate_all(df, symbol, fundamentals)
             message = f"Indicators calculated for {symbol} at {snapshot.timestamp.isoformat()}"
-            payload = snapshot.model_dump() # Convert Pydantic model to dict
-            
-            self.event_bus.publish(Event(
-                event_type=Events.ANALYSIS_COMPLETE,
-                data=payload
-            ))
-            
-            return AgentReport(
+            payload = snapshot.to_dict()  # Use custom to_dict that includes signals
+
+            # Wrap in AgentReport for consistent event structure
+            report = AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
                 payload=payload
             )
+            # Publish event asynchronously (don't await in the middle of processing)
+            asyncio.create_task(self.event_bus.publish(Event(
+                event_type=Events.ANALYSIS_COMPLETE,
+                data=asdict(report)
+            )))
+
+            return report
         except ValueError as e:
             logger.warning(f"AnalysisAgent failed for {symbol}: {e}")
             # Publish ANALYSIS_FAILED event
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.ANALYSIS_FAILED,
                 data={"symbol": symbol, "reason": str(e)}
             ))
@@ -86,7 +95,7 @@ class AnalysisAgent(Agent):
         except Exception as e:
             logger.error(f"Unexpected error in AnalysisAgent for {symbol}: {e}")
             # Publish ANALYSIS_FAILED event
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.ANALYSIS_FAILED,
                 data={"symbol": symbol, "reason": str(e)}
             ))
@@ -96,60 +105,123 @@ class AnalysisAgent(Agent):
                 message=f"Unexpected error during analysis for {symbol}: {e}"
             )
 
-    def _calculate_all(self, df: pd.DataFrame, symbol: str) -> IndicatorsSnapshot:
+    def _calculate_all(self, df: pd.DataFrame, symbol: str, fundamentals: Optional[Dict[str, Any]] = None) -> IndicatorsSnapshot:
         """
         Calculate all indicators for a symbol
-        
+
         Args:
             df: OHLCV DataFrame with datetime index
             symbol: Symbol name
-        
+            fundamentals: Optional dict with fundamental metrics (pe_ratio, revenue_growth_yoy, etc.)
+
         Returns:
             IndicatorsSnapshot with all indicators calculated
-        
+
         Raises:
             ValueError: If insufficient data
         """
         # Validate input
         self._validate_ohlcv(df)
-        
+
         if len(df) < 50:
             raise ValueError(f"Insufficient data: {len(df)} rows, need 50+")
-        
+
         indicators = {}
         latest_ts = df.index[-1]
-        
+
         try:
             # Calculate each indicator
             indicators['rsi'] = self.rsi(df)
             indicators['macd'] = self.macd(df)
             indicators['sma_20'] = self.sma(df, 20)
             indicators['sma_50'] = self.sma(df, 50)
+            indicators['sma_10'] = self.sma(df, 10)   # Added for SMA crossover
+            indicators['sma_30'] = self.sma(df, 30)   # Added for SMA crossover
             indicators['ema_12'] = self.ema(df, 12)
             indicators['ema_26'] = self.ema(df, 26)
             indicators['atr'] = self.atr(df)
             indicators['bb'] = self.bollinger_bands(df)
             indicators['stoch'] = self.stochastic(df)
             
-            logger.debug(f"Calculated {len(indicators)} indicators for {symbol} at {latest_ts}")
+            # Add fundamental indicators if available
+            if fundamentals:
+                pe = fundamentals.get('pe_ratio')
+                if pe is not None and not pd.isna(pe):
+                    # Signal: BUY if PE < 15 (value), HOLD if 15-30, SELL if > 30 (overvalued)
+                    if pe < 15:
+                        pe_signal = SignalType.BUY
+                    elif pe > 30:
+                        pe_signal = SignalType.SELL
+                    else:
+                        pe_signal = SignalType.HOLD
+                    indicators['pe_ratio'] = IndicatorResult(
+                        name='pe_ratio',
+                        value=float(pe),
+                        signal=pe_signal,
+                        timestamp=latest_ts
+                    )
+                
+                rev_growth = fundamentals.get('revenue_growth_yoy')
+                if rev_growth is not None and not pd.isna(rev_growth):
+                    # Signal: BUY if >20% growth, SELL if negative, HOLD otherwise
+                    if rev_growth > 0.20:
+                        rg_signal = SignalType.BUY
+                    elif rev_growth < 0:
+                        rg_signal = SignalType.SELL
+                    else:
+                        rg_signal = SignalType.HOLD
+                    indicators['revenue_growth_yoy'] = IndicatorResult(
+                        name='revenue_growth_yoy',
+                        value=float(rev_growth),
+                        signal=rg_signal,
+                        timestamp=latest_ts
+                    )
+
+                # Add news sentiment if available (simulated or live)
+                news_sent = fundamentals.get('news_sentiment')
+                if news_sent is not None and not pd.isna(news_sent):
+                    logger.debug(f"Adding news_sentiment for {symbol}: {news_sent}")
+                    # Signal: BUY if sentiment > 0.3, SELL if < -0.3, HOLD within [-0.3, 0.3]
+                    if news_sent > 0.3:
+                        ns_signal = SignalType.BUY
+                    elif news_sent < -0.3:
+                        ns_signal = SignalType.SELL
+                    else:
+                        ns_signal = SignalType.HOLD
+                    indicators['news_sentiment'] = IndicatorResult(
+                        name='news_sentiment',
+                        value=float(news_sent),
+                        signal=ns_signal,
+                        timestamp=latest_ts
+                    )
+                else:
+                    logger.debug(f"news_sentiment not provided or NaN for {symbol}")
             
+            logger.debug(f"Calculated {len(indicators)} indicators for {symbol} at {latest_ts}")
+
+            # Get latest close price from DataFrame
+            current_price = None
+            if 'close' in df.columns:
+                current_price = float(df['close'].iloc[-1])
+
             return IndicatorsSnapshot(
                 symbol=symbol,
                 timestamp=latest_ts,
-                indicators=indicators
+                indicators=indicators,
+                current_price=current_price
             )
         except Exception as e:
             logger.error(f"Error calculating indicators for {symbol}: {e}")
             raise
-    
+
     def rsi(self, df: pd.DataFrame, period: int = 14) -> IndicatorResult:
         """
         Relative Strength Index (RSI)
-        
+
         Formula:
             RSI = 100 - (100 / (1 + RS))
             RS = avg_gain / avg_loss
-        
+
         Signal:
             RSI < 30: BUY (oversold)
             RSI > 70: SELL (overbought)
@@ -157,27 +229,27 @@ class AnalysisAgent(Agent):
         """
         if len(df) < period + 1:
             raise ValueError(f"Need {period + 1}+ rows for RSI, got {len(df)}")
-        
+
         # Calculate price changes
         delta = df['close'].diff()
-        
+
         # Separate gains and losses
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
+
         # Calculate average gain and loss
         avg_gain = gain.rolling(window=period, min_periods=period).mean()
         avg_loss = loss.rolling(window=period, min_periods=period).mean()
-        
+
         # Handle zero loss case
         with np.errstate(divide='ignore', invalid='ignore'):
             rs = avg_gain / avg_loss
             rsi_values = 100 - (100 / (1 + rs))
-        
+
         # Fill NaN with 50 (neutral)
         rsi_values = rsi_values.fillna(50)
         rsi = float(rsi_values.iloc[-1])
-        
+
         # Generate signal
         if rsi < 30:
             signal = SignalType.BUY
@@ -185,7 +257,7 @@ class AnalysisAgent(Agent):
             signal = SignalType.SELL
         else:
             signal = SignalType.HOLD
-        
+
         return IndicatorResult(
             name='rsi',
             value=float(rsi),
@@ -193,16 +265,16 @@ class AnalysisAgent(Agent):
             timestamp=df.index[-1],
             metadata={'period': period, 'value': float(rsi)}
         )
-    
+
     def macd(self, df: pd.DataFrame) -> IndicatorResult:
         """
         MACD (Moving Average Convergence Divergence)
-        
+
         Formula:
             MACD = EMA12 - EMA26
             Signal = EMA9(MACD)
             Histogram = MACD - Signal
-        
+
         Signal:
             Histogram > 0 and crossing above: BUY
             Histogram < 0 and crossing below: SELL
@@ -210,22 +282,22 @@ class AnalysisAgent(Agent):
         """
         if len(df) < 30:
             raise ValueError(f"Need 30+ rows for MACD, got {len(df)}")
-        
+
         # Calculate EMAs
         ema12 = df['close'].ewm(span=12, adjust=False).mean()
         ema26 = df['close'].ewm(span=26, adjust=False).mean()
-        
+
         # Calculate MACD line and signal line
         macd_line = ema12 - ema26
         signal_line = macd_line.ewm(span=9, adjust=False).mean()
         histogram = macd_line - signal_line
-        
+
         # Get current and previous values
         current_macd = float(macd_line.iloc[-1])
         current_signal = float(signal_line.iloc[-1])
         current_hist = float(histogram.iloc[-1])
         prev_hist = float(histogram.iloc[-2]) if len(histogram) > 1 else 0
-        
+
         # Generate signal based on histogram
         if current_hist > 0 and prev_hist <= 0:
             signal = SignalType.BUY  # Bullish crossover
@@ -233,7 +305,7 @@ class AnalysisAgent(Agent):
             signal = SignalType.SELL  # Bearish crossover
         else:
             signal = SignalType.HOLD
-        
+
         return IndicatorResult(
             name='macd',
             value=current_macd,
@@ -245,14 +317,14 @@ class AnalysisAgent(Agent):
                 'histogram': current_hist
             }
         )
-    
+
     def sma(self, df: pd.DataFrame, period: int = 20) -> IndicatorResult:
         """
         Simple Moving Average (SMA)
-        
+
         Formula:
             SMA = sum(close, period) / period
-        
+
         Signal:
             Price > SMA * 1.01: BUY
             Price < SMA * 0.99: SELL
@@ -260,12 +332,12 @@ class AnalysisAgent(Agent):
         """
         if len(df) < period:
             raise ValueError(f"Need {period}+ rows for SMA({period}), got {len(df)}")
-        
+
         # Calculate SMA
         sma_values = df['close'].rolling(window=period, min_periods=period).mean()
         sma = float(sma_values.iloc[-1])
         current_price = float(df['close'].iloc[-1])
-        
+
         # Generate signal based on price vs SMA
         if pd.isna(sma):
             signal = SignalType.HOLD
@@ -275,7 +347,7 @@ class AnalysisAgent(Agent):
             signal = SignalType.SELL
         else:
             signal = SignalType.HOLD
-        
+
         return IndicatorResult(
             name=f'sma_{period}',
             value=sma,
@@ -283,15 +355,15 @@ class AnalysisAgent(Agent):
             timestamp=df.index[-1],
             metadata={'period': period, 'price': current_price, 'sma': sma}
         )
-    
+
     def ema(self, df: pd.DataFrame, period: int = 12) -> IndicatorResult:
         """
         Exponential Moving Average (EMA)
-        
+
         Formula:
             EMA = close * multiplier + EMA_prev * (1 - multiplier)
             multiplier = 2 / (period + 1)
-        
+
         Signal:
             Price > EMA * 1.01: BUY
             Price < EMA * 0.99: SELL
@@ -299,12 +371,12 @@ class AnalysisAgent(Agent):
         """
         if len(df) < period:
             raise ValueError(f"Need {period}+ rows for EMA({period}), got {len(df)}")
-        
+
         # Calculate EMA
         ema_values = df['close'].ewm(span=period, adjust=False).mean()
         ema = float(ema_values.iloc[-1])
         current_price = float(df['close'].iloc[-1])
-        
+
         # Generate signal based on price vs EMA
         if pd.isna(ema):
             signal = SignalType.HOLD
@@ -314,7 +386,7 @@ class AnalysisAgent(Agent):
             signal = SignalType.SELL
         else:
             signal = SignalType.HOLD
-        
+
         return IndicatorResult(
             name=f'ema_{period}',
             value=ema,
@@ -322,39 +394,39 @@ class AnalysisAgent(Agent):
             timestamp=df.index[-1],
             metadata={'period': period, 'price': current_price, 'ema': ema}
         )
-    
+
     def atr(self, df: pd.DataFrame, period: int = 14) -> IndicatorResult:
         """
         Average True Range (ATR)
-        
+
         Formula:
             TR = max(H-L, abs(H-PC), abs(L-PC))
             ATR = EMA(TR, period)
-        
+
         Used for: Stop loss and take profit sizing
         Signal: HOLD (ATR is not a directional indicator)
         """
         if len(df) < period + 1:
             raise ValueError(f"Need {period + 1}+ rows for ATR, got {len(df)}")
-        
+
         high = df['high']
         low = df['low']
         close = df['close']
-        
+
         # Calculate True Range
         tr1 = high - low
         tr2 = (high - close.shift()).abs()
         tr3 = (low - close.shift()).abs()
-        
+
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        
+
         # Calculate ATR (EMA of TR)
         atr_values = tr.ewm(span=period, adjust=False).mean()
         atr = float(atr_values.iloc[-1])
-        
+
         if pd.isna(atr):
             atr = float(tr.iloc[-period:].mean())
-        
+
         return IndicatorResult(
             name='atr',
             value=atr,
@@ -362,17 +434,17 @@ class AnalysisAgent(Agent):
             timestamp=df.index[-1],
             metadata={'period': period, 'atr': atr}
         )
-    
+
     def bollinger_bands(self, df: pd.DataFrame, period: int = 20, std: float = 2.0) -> IndicatorResult:
         """
         Bollinger Bands
-        
+
         Formula:
             Middle = SMA(close, period)
             Std = StdDev(close, period)
             Upper = Middle + (std * Std)
             Lower = Middle - (std * Std)
-        
+
         Signal:
             Price > Upper: SELL (overbought)
             Price < Lower: BUY (oversold)
@@ -380,21 +452,21 @@ class AnalysisAgent(Agent):
         """
         if len(df) < period:
             raise ValueError(f"Need {period}+ rows for Bollinger Bands, got {len(df)}")
-        
+
         # Calculate SMA and standard deviation
         sma = df['close'].rolling(window=period, min_periods=period).mean()
         std_dev = df['close'].rolling(window=period, min_periods=period).std()
-        
+
         # Calculate bands
         upper_band = sma + (std * std_dev)
         lower_band = sma - (std * std_dev)
-        
+
         # Get current values
         current_price = float(df['close'].iloc[-1])
         current_upper = float(upper_band.iloc[-1])
         current_lower = float(lower_band.iloc[-1])
         current_sma = float(sma.iloc[-1])
-        
+
         # Generate signal
         if pd.isna(current_upper) or pd.isna(current_lower):
             signal = SignalType.HOLD
@@ -404,7 +476,7 @@ class AnalysisAgent(Agent):
             signal = SignalType.BUY
         else:
             signal = SignalType.HOLD
-        
+
         return IndicatorResult(
             name='bb',
             value=current_sma,
@@ -419,15 +491,15 @@ class AnalysisAgent(Agent):
                 'price': current_price
             }
         )
-    
+
     def stochastic(self, df: pd.DataFrame, k_period: int = 14, d_period: int = 3) -> IndicatorResult:
         """
         Stochastic Oscillator
-        
+
         Formula:
             %K = 100 * (Close - LowestLow) / (HighestHigh - LowestLow)
             %D = SMA(%K, d_period)
-        
+
         Signal:
             %K < 20: BUY (oversold)
             %K > 80: SELL (overbought)
@@ -437,29 +509,29 @@ class AnalysisAgent(Agent):
         """
         if len(df) < k_period:
             raise ValueError(f"Need {k_period}+ rows for Stochastic, got {len(df)}")
-        
+
         # Calculate highest high and lowest low
         high_high = df['high'].rolling(window=k_period, min_periods=k_period).max()
         low_low = df['low'].rolling(window=k_period, min_periods=k_period).min()
-        
+
         # Calculate %K
         denominator = high_high - low_low
         # Avoid division by zero
         with np.errstate(divide='ignore', invalid='ignore'):
             k_percent = 100 * ((df['close'] - low_low) / denominator)
-        
+
         k_percent = k_percent.fillna(50)  # Fill NaN with 50 (neutral)
-        
+
         # Calculate %D (SMA of %K)
         d_percent = k_percent.rolling(window=d_period, min_periods=d_period).mean()
         d_percent = d_percent.fillna(50)
-        
+
         # Get current and previous values
         current_k = float(k_percent.iloc[-1])
         current_d = float(d_percent.iloc[-1])
         prev_k = float(k_percent.iloc[-2]) if len(k_percent) > 1 else current_k
         prev_d = float(d_percent.iloc[-2]) if len(d_percent) > 1 else current_d
-        
+
         # Generate signal
         if current_k < 20:
             signal = SignalType.BUY  # Oversold
@@ -471,7 +543,7 @@ class AnalysisAgent(Agent):
             signal = SignalType.SELL  # K crosses below D
         else:
             signal = SignalType.HOLD
-        
+
         return IndicatorResult(
             name='stoch',
             value=current_k,
@@ -484,31 +556,31 @@ class AnalysisAgent(Agent):
                 'd_percent': current_d
             }
         )
-    
+
     @staticmethod
     def _validate_ohlcv(df: pd.DataFrame) -> None:
         """
         Validate OHLCV DataFrame
-        
+
         Checks:
             - Required columns present
             - No NaN values
             - At least 50 rows
-        
+
         Raises:
             ValueError: If validation fails
         """
         required_cols = {'open', 'high', 'low', 'close', 'volume'}
         df_cols = set(df.columns)
-        
+
         if not required_cols.issubset(df_cols):
             missing = required_cols - df_cols
             raise ValueError(f"Missing columns: {missing}. Need {required_cols}, got {df_cols}")
-        
+
         # Check for NaN values
         if df[list(required_cols)].isnull().any().any():
             raise ValueError("Data contains NaN values in OHLCV columns")
-        
+
         # Check minimum length
         if len(df) < 5:
             raise ValueError(f"Need at least 5 rows, got {len(df)}")

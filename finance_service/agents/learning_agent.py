@@ -53,7 +53,7 @@ class LearningAgent(Agent):
             message = f"Learning Agent processed trade for {execution_details['symbol']}. Status: {learning_output['trade_status']}"
             payload = {"learning_output": learning_output}
 
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.LEARNING_COMPLETE,
                 data=payload
             ))

@@ -1,9 +1,11 @@
 """Universe Scanner - Select symbols based on themes from config"""
 import logging
+import asyncio
+from dataclasses import asdict
 from typing import List, Dict, Optional, Set
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.events import EventType
+from finance_service.core.events import Event, Events, get_event_bus
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,7 @@ class MarketScannerAgent(Agent):
         self.config = config_engine
         self._whitelist_enabled = self.config.get("finance", "universe/whitelist/enabled", default=False)
         self._whitelist_symbols = set(self.config.get("finance", "universe/whitelist/symbols", default=[]))
-        
+        self.event_bus = get_event_bus()  # Will be overwritten by orchestrator with actual event bus
         logger.info(f"UniverseScanner initialized (whitelist_enabled={self._whitelist_enabled})")
     
     def get_all_symbols(self) -> List[str]:
@@ -80,12 +82,24 @@ class MarketScannerAgent(Agent):
         payload = {"symbols": final_selection, "count": len(final_selection)}
         logger.info(message)
         
-        return AgentReport(
+        report = AgentReport(
             agent_id=self.agent_id,
             status="opportunity",
             message=message,
             payload=payload
         )
+        # Publish MARKET_SCANNED event to trigger downstream processing (synchronous for now)
+        logger.info(f"Publishing MARKET_SCANNED event with {len(payload['symbols'])} symbols")
+        try:
+            await self.event_bus.publish(Event(
+                event_type=Events.MARKET_SCANNED,
+                data=asdict(report)
+            ))
+            logger.info("MARKET_SCANNED event publish completed")
+        except Exception as e:
+            logger.error(f"Error publishing MARKET_SCANNED event: {e}", exc_info=True)
+            raise
+        return report
         """
         Scan and return trading universe
         

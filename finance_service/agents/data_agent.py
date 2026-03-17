@@ -1,11 +1,11 @@
 """Data Manager - Orchestrates data fetching, caching, and universe management"""
 import logging
-from typing import Dict, List, Optional, Any
+import asyncio
+from typing import Dict, List, Optional, Any, Tuple
 import pandas as pd
 from datetime import datetime, timedelta
 
-from .yfinance_provider import YfinanceProvider, RateLimitConfig
-from .data_cache import DataCache
+from finance_service.data import YfinanceProvider, RateLimitConfig, DataCache
 from finance_service.agents.market_scanner_agent import MarketScannerAgent
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.core.event_bus import get_event_bus, Event, Events
@@ -68,6 +68,16 @@ class DataAgent(Agent):
         """
         logger.info(f"DataAgent run: Fetching data for symbol {symbol} (interval: {interval}, refresh_all: {refresh_all}).")
         
+        # Apply default lookback if start_date not provided
+        if start_date is None:
+            lookback_days = self.config.get("finance", "data/default_lookback_days", default=252)
+            end_dt = datetime.now().date() if end_date is None else datetime.strptime(end_date, "%Y-%m-%d").date()
+            start_dt = end_dt - timedelta(days=lookback_days)
+            start_date = start_dt.strftime("%Y-%m-%d")
+            if end_date is None:
+                end_date = end_dt.strftime("%Y-%m-%d")
+            logger.info(f"Using default lookback: {lookback_days} days -> {start_date} to {end_date}")
+        
         if refresh_all:
             # This path is for DATA_REFRESH_TRIGGER, will fetch for all known symbols
             # For now, we will re-scan the universe and fetch for all of them.
@@ -85,12 +95,16 @@ class DataAgent(Agent):
                 if df is not None and not df.empty:
                     all_fetched_data[sym] = df
                     if emit_events:
+                        # Normalize columns and convert index for JSON serialization in event
+                        df_event = df.copy()
+                        df_event.columns = [c.lower() for c in df_event.columns]
+                        df_event.index = df_event.index.astype(str)
                         await self.event_bus.publish(Event(
                             event_type=Events.DATA_FETCH_COMPLETE,
                             data={
                                 "symbol": sym,
                                 "interval": interval,
-                                "dataframe": df.to_dict() # Serialize DataFrame for event payload
+                                "dataframe": df_event.to_dict()
                             }
                         ))
             message = f"Refreshed data for {len(all_fetched_data)} symbols."
@@ -98,7 +112,7 @@ class DataAgent(Agent):
             return AgentReport(agent_id=self.agent_id, status="success", message=message, payload=payload)
 
         # Path for single symbol fetch
-        df = await self._fetch_data_for_symbol(
+        df, fundamentals = await self._fetch_data_for_symbol(
             symbol=symbol,
             start_date=start_date,
             end_date=end_date,
@@ -108,11 +122,21 @@ class DataAgent(Agent):
 
         if df is not None and not df.empty:
             message = f"Successfully fetched data for {symbol}."
-            payload = {"symbol": symbol, "interval": interval, "dataframe": df.to_dict()}
+            # Normalize column names to lowercase for downstream consumers
+            df_normalized = df.copy()
+            df_normalized.columns = [c.lower() for c in df_normalized.columns]
+            # Convert index to strings for JSON serialization
+            df_normalized.index = df_normalized.index.astype(str)
+            payload = {
+                "symbol": symbol,
+                "interval": interval,
+                "dataframe": df_normalized.to_dict(),
+                "fundamentals": fundamentals
+            }
             if emit_events:
                 await self.event_bus.publish(Event(
                     event_type=Events.DATA_FETCH_COMPLETE,
-                    data=payload # Send dataframe in event payload
+                    data=payload
                 ))
             return AgentReport(agent_id=self.agent_id, status="success", message=message, payload=payload)
         else:
@@ -125,30 +149,46 @@ class DataAgent(Agent):
         end_date: Optional[str] = None,
         interval: str = "1d",
         use_cache: bool = True
-    ) -> Optional[pd.DataFrame]:
-        """Fetches and caches data for a single symbol."""
-        cache_key = f"{symbol}_{interval}_{start_date or ''}_{end_date or ''}"
-        cached_df = None
-
+    ) -> Tuple[Optional[pd.DataFrame], Dict[str, Any]]:
+        """Fetches and caches data for a single symbol, along with fundamental data."""
         if use_cache:
-            cached_df = self.cache.retrieve(cache_key)
+            cached_df = self.cache.get(symbol, interval)
             if cached_df is not None and not cached_df.empty:
                 logger.debug(f"[Cache Hit] {symbol} data from cache.")
-                return cached_df
+                # Still fetch fundamentals (since they change slowly, we skip caching for now)
+                fundamentals = await asyncio.to_thread(self.provider.fetch_fundamentals, [symbol])
+                fundamentals = fundamentals.get(symbol, {})
+                return cached_df, fundamentals
+            else:
+                logger.debug(f"[Cache Miss] Fetching {symbol} data from provider.")
 
-        logger.debug(f"[Cache Miss] Fetching {symbol} data from provider.")
-        df = await self.provider.fetch_ohlcv(
-            symbol, start_date=start_date, end_date=end_date, interval=interval
+        # Run blocking yfinance call in thread pool for OHLCV
+        df = await asyncio.to_thread(
+            self.provider.fetch_ohlcv,
+            symbols=[symbol],
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
         )
+        # fetch_ohlcv returns dict {symbol: DataFrame}, extract our symbol's DataFrame
+        if df and symbol in df:
+            df = df[symbol]
+        else:
+            df = None
 
+        # Fetch fundamentals (always, no cache)
+        fundamentals = {}
         if df is not None and not df.empty:
+            fundamentals = await asyncio.to_thread(self.provider.fetch_fundamentals, [symbol])
+            fundamentals = fundamentals.get(symbol, {})
             if use_cache:
-                self.cache.store(cache_key, df)
+                self.cache.set(symbol, df, interval)
                 logger.debug(f"[Cache Store] {symbol} data cached.")
-            return df
         else:
             logger.warning(f"No data fetched for {symbol} or DataFrame is empty.")
-            return None
+            return None, {}
+
+        return df, fundamentals
 
     async def fetch_universe(
         self,
@@ -184,7 +224,7 @@ class DataAgent(Agent):
         
         all_fetched_data = {}
         for sym in symbols:
-            df = await self._fetch_data_for_symbol(
+            df, fundamentals = await self._fetch_data_for_symbol(
                 symbol=sym,
                 start_date=str(start_date),
                 end_date=str(end_date),
@@ -199,7 +239,8 @@ class DataAgent(Agent):
                         data={
                             "symbol": sym,
                             "interval": interval,
-                            "dataframe": df.to_dict() # Serialize DataFrame for event payload
+                            "dataframe": df.to_dict(), # Serialize DataFrame for event payload
+                            "fundamentals": fundamentals
                         }
                     ))
         return all_fetched_data

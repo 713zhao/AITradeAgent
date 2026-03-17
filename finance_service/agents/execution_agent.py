@@ -1,4 +1,6 @@
 import logging
+import asyncio
+from datetime import datetime
 from typing import Dict, Any, Optional
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.events import Event, Events, get_event_bus
@@ -29,49 +31,51 @@ class ExecutionAgent(Agent):
         logger.info("ExecutionAgent run: Executing approved trade proposal.")
 
         try:
-            # Placeholder for actual trade execution logic
-            # This will involve:
-            # 1. Extracting TradeProposal and possibly RiskCheckResult from approval_report.payload
-            # 2. Selecting an execution algorithm (e.g., TWAP, VWAP, market order)
-            # 3. Interacting with a BrokerManager to place the order
-            # 4. Monitoring the order status
-            # 5. Returning an ExecutionReport or similar payload in the AgentReport
-
             trade_proposal = TradeProposal(**approval_report.payload["trade_proposal"])
-            # Assuming approval_report.payload also contains risk_assessment
-            risk_assessment = approval_report.payload["risk_assessment"]
-
-            # Mock execution result
+            risk_assessment = approval_report.payload.get("risk_assessment", {})
+            
+            # Mock execution - fill at target price
             execution_result = {
-                "trade_id": trade_proposal.symbol + "_exec_" + str(datetime.utcnow().timestamp()),
+                "trade_id": f"exec_{int(datetime.utcnow().timestamp()*1000)}",
                 "symbol": trade_proposal.symbol,
                 "action": trade_proposal.action,
-                "quantity": 1.0, # Placeholder quantity
-                "filled_price": trade_proposal.target_price, # Assuming filled at target for mock
+                "quantity": 1.0,  # Fixed quantity for now
+                "price": trade_proposal.target_price,
                 "status": "FILLED",
                 "timestamp": datetime.utcnow().isoformat()
             }
 
-            message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
+            message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed"
             payload = {"execution_result": execution_result}
-
-            self.event_bus.publish(Event(
-                event_type=Events.TRADE_EXECUTED,
-                data=payload
-            ))
-
-            return AgentReport(
+            
+            # Publish as a proper AgentReport for the orchestrator
+            execution_report = AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
                 payload=payload
             )
+            
+            # Publish event with full AgentReport structure
+            await self.event_bus.publish(Event(
+                event_type=Events.TRADE_EXECUTED,
+                data=execution_report.to_dict() if hasattr(execution_report, 'to_dict') else {
+                    "agent_id": execution_report.agent_id,
+                    "status": execution_report.status,
+                    "message": execution_report.message,
+                    "payload": execution_report.payload
+                }
+            ))
+
+            return execution_report
+            
         except Exception as e:
             logger.error(f"Error in ExecutionAgent run: {e}")
             return AgentReport(
                 agent_id=self.agent_id,
                 status="error",
-                message=f"Error executing trade: {e}"
+                message=f"Error executing trade: {e}",
+                payload={}
             )
 
     def __repr__(self) -> str:
