@@ -13,7 +13,10 @@ logger = logging.getLogger(__name__)
 class Database:
     """SQLite database management with schema"""
     
-    def __init__(self, db_path: str = "storage/portfolio.sqlite"):
+    def __init__(self, db_path: Optional[str] = None):
+        if db_path is None:
+            # Default to portfolio.sqlite in the same directory as this file (finance_service/storage/)
+            db_path = Path(__file__).parent / "portfolio.sqlite"
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -208,6 +211,17 @@ class Database:
         cursor.execute('CREATE INDEX idx_trades_timestamp ON trades(timestamp)')
         cursor.execute('CREATE INDEX idx_analysis_symbol ON analysis_cache(symbol)')
         cursor.execute('CREATE INDEX idx_portfolio_snapshots_date ON portfolio_snapshots(snapshot_date)')
+        
+        # Trade store for TradeRepository persistence (JSON blobs)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_store (
+                trade_id TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_store_updated ON trade_store(updated_at)')
     
     def insert_position(self, position: Dict[str, Any]) -> int:
         """Insert a new position"""
@@ -319,6 +333,54 @@ class Database:
         
         return [dict(row) for row in cursor.fetchall()]
     
+    # Trade persistence for TradeRepository (JSON blob store)
+    def upsert_trade_object(self, trade_data: Dict[str, Any]) -> None:
+        """
+        Insert or update a trade object in trade_store.
+        
+        Args:
+            trade_data: Dict representing a Trade, must contain 'trade_id'.
+        """
+        if 'trade_id' not in trade_data:
+            raise ValueError("trade_data must contain 'trade_id'")
+        
+        trade_id = trade_data['trade_id']
+        data_json = json.dumps(trade_data, default=str)
+        now = datetime.utcnow()
+        
+        cursor = self.connection.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO trade_store (trade_id, data, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+        ''', (trade_id, data_json, now, now))
+        self.connection.commit()
+    
+    def load_all_trade_objects(self) -> List[Dict[str, Any]]:
+        """
+        Load all trade objects from trade_store.
+        
+        Returns:
+            List of trade dicts.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute('SELECT data FROM trade_store ORDER BY updated_at')
+        rows = cursor.fetchall()
+        trades = []
+        for (data,) in rows:
+            try:
+                trade_dict = json.loads(data)
+                trades.append(trade_dict)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to decode trade data: {e}")
+        return trades
+    
+    def delete_trade_object(self, trade_id: str) -> bool:
+        """Delete a trade object by trade_id."""
+        cursor = self.connection.cursor()
+        cursor.execute('DELETE FROM trade_store WHERE trade_id = ?', (trade_id,))
+        self.connection.commit()
+        return cursor.rowcount > 0
+    
     def close(self):
         """Close database connection"""
         if hasattr(self._local, 'connection'):
@@ -339,7 +401,7 @@ def get_portfolio_db() -> Database:
     """Get portfolio database (singleton)"""
     global _portfolio_db
     if _portfolio_db is None:
-        _portfolio_db = Database("storage/portfolio.sqlite")
+        _portfolio_db = Database(Path(__file__).parent / "portfolio.sqlite")
         _portfolio_db.initialize_schema()
     return _portfolio_db
 
@@ -348,7 +410,7 @@ def get_cache_db() -> Database:
     """Get cache database (singleton)"""
     global _cache_db
     if _cache_db is None:
-        _cache_db = Database("storage/cache.sqlite")
+        _cache_db = Database(Path(__file__).parent / "cache.sqlite")
         _cache_db.initialize_schema()
     return _cache_db
 
@@ -357,6 +419,6 @@ def get_backtest_db() -> Database:
     """Get backtest database (singleton)"""
     global _backtest_db
     if _backtest_db is None:
-        _backtest_db = Database("storage/backtest.sqlite")
+        _backtest_db = Database(Path(__file__).parent / "backtest.sqlite")
         _backtest_db.initialize_schema()
     return _backtest_db

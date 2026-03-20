@@ -40,6 +40,7 @@ class IndicatorsSnapshot:
     symbol: str
     timestamp: pd.Timestamp
     indicators: Dict[str, IndicatorResult]  # {'rsi': IndicatorResult(...), ...}
+    current_price: Optional[float] = None  # Add current price for convenience
     
     def get_all_signals(self) -> Dict[str, SignalType]:
         """Get all indicator signals"""
@@ -51,5 +52,6 @@ class IndicatorsSnapshot:
             'symbol': self.symbol,
             'timestamp': self.timestamp.isoformat(),
             'indicators': {k: v.to_dict() for k, v in self.indicators.items()},
-            'signals': {k: v.value for k, v in self.get_all_signals().items()}
+            'signals': {k: v.value for k, v in self.get_all_signals().items()},
+            'current_price': self.current_price
         }

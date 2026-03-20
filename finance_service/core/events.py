@@ -12,7 +12,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 import logging
 
-from finance_service.core.event_bus import Event, EventBus, get_event_bus
+from finance_service.core.event_bus import Event, EventBus, Events, get_event_bus
 
 logger = logging.getLogger(__name__)
 

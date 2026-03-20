@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 import asyncio
 from datetime import datetime
 from flask import Flask, request, jsonify
+import pandas as pd  # Added for DataFrame operations in quote endpoint
 
 # Temporary storage for Flask-initiated async responses
 flask_response_queues: Dict[str, asyncio.Queue] = {}
@@ -11,6 +12,7 @@ flask_response_queues: Dict[str, asyncio.Queue] = {}
 from .core.config import Config
 from .core.logging import setup_logger, RunLogger
 from .core.event_bus import get_event_bus, Event, Events
+from .core.yaml_config import YAMLConfigEngine
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.agents.data_agent import DataAgent
@@ -23,12 +25,18 @@ from finance_service.agents.execution_agent import ExecutionAgent
 from finance_service.agents.learning_agent import LearningAgent
 from finance_service.agents.telegram_agent import TelegramAgent
 from finance_service.agents.scheduler_agent import SchedulerAgent
-from finance_service.agents.portfolio_agent import PortfolioAgent # New import
+from finance_service.agents.portfolio_agent import PortfolioAgent
+from finance_service.agents.health_agent import HealthAgent  # New import
 
 logger = setup_logger(__name__)
 run_logger = RunLogger()
 
 app = Flask(__name__)
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"service": "finance", "status": "ok"}), 200
 
 class MainOrchestratorAgent(Agent):
     """Main Orchestrator Agent - Coordinates all specialized agents in the trading system."""
@@ -41,25 +49,26 @@ class MainOrchestratorAgent(Agent):
     def goal(self) -> str:
         return "Orchestrate the end-to-end trading workflow, from market scanning to trade execution and learning."
     
-    def __init__(self, config: Dict[str, Any]): # __init__ should not be async
-        self.config = config
+    def __init__(self, config_engine: YAMLConfigEngine):
+        self.config_engine = config_engine
         self.event_bus = None # Initialized in async initialize_orchestrator
         self.pending_news_reports: Dict[str, AgentReport] = {}
         self.pending_analysis_reports: Dict[str, AgentReport] = {}
         logger.info("MainOrchestratorAgent initializing...")
 
-        # Initialize all agents
-        self.market_scanner_agent = MarketScannerAgent(config.get("market_scanner", {}))
-        self.data_agent = DataAgent(config.get("data_agent", {}))
-        self.news_agent = NewsAgent(config.get("news_agent", {}))
-        self.analysis_agent = AnalysisAgent(config.get("analysis_agent", {}))
-        self.strategy_agent = StrategyAgent(config.get("strategy_agent", {}))
-        self.risk_agent = RiskAgent(config.get("risk_agent", {}))
-        self.execution_agent = ExecutionAgent(config.get("execution_agent", {}))
-        self.learning_agent = LearningAgent(config.get("learning_agent", {}))
-        self.telegram_agent = TelegramAgent(config.get("telegram_agent", {}))
-        self.scheduler_agent = SchedulerAgent(config.get("scheduler_agent", {}))
-        self.portfolio_agent = PortfolioAgent(config.get("portfolio_agent", {})) # New agent initialization
+        # Initialize agents that require YAMLConfigEngine
+        self.market_scanner_agent = MarketScannerAgent(config_engine)
+        self.data_agent = DataAgent(config_engine)
+        self.news_agent = NewsAgent(config_engine)
+        self.analysis_agent = AnalysisAgent({})  # AnalysisAgent uses periods_config dict, not YAML config yet
+        self.strategy_agent = StrategyAgent(config_engine)  # Needs rules from YAML
+        self.risk_agent = RiskAgent(config_engine)
+        self.execution_agent = ExecutionAgent(config_engine)
+        self.learning_agent = LearningAgent({})
+        self.telegram_agent = TelegramAgent({})
+        self.scheduler_agent = SchedulerAgent({})
+        self.portfolio_agent = PortfolioAgent({}, data_agent=self.data_agent)
+        self.health_agent = HealthAgent(config_engine)  # Health monitoring agent
 
         # Event handlers will be registered in initialize_orchestrator after event_bus is awaited
 
@@ -73,7 +82,9 @@ class MainOrchestratorAgent(Agent):
 
     async def handle_market_scanned(self, event: Event):
         logger.info(f"Orchestrator received MARKET_SCANNED event: {event.data}")
-        symbols = event.data.get("symbols", [])
+        # event.data is an AgentReport dict; symbols are in payload["symbols"]
+        payload = event.data.get("payload", {})
+        symbols = payload.get("symbols", [])
         for symbol in symbols:
             await self.data_agent.run(symbol=symbol, interval="1d")
     
@@ -90,6 +101,7 @@ class MainOrchestratorAgent(Agent):
         logger.info(f"Orchestrator received NEWS_FETCH_COMPLETE event: {event.data}")
         news_report = AgentReport(**event.data) # Reconstruct AgentReport
         symbol = news_report.payload.get("symbol")
+        logger.info(f"News fetch complete for symbol={symbol}, about to call _try_trigger")
         if symbol:
             self.pending_news_reports[symbol] = news_report
             await self._try_trigger_strategy_agent(symbol)
@@ -98,35 +110,59 @@ class MainOrchestratorAgent(Agent):
         logger.info(f"Orchestrator received ANALYSIS_COMPLETE event: {event.data}")
         analysis_report = AgentReport(**event.data) # Reconstruct AgentReport
         symbol = analysis_report.payload.get("symbol")
+        logger.info(f"Analysis complete for symbol={symbol}, about to call _try_trigger")
         if symbol:
             self.pending_analysis_reports[symbol] = analysis_report
             await self._try_trigger_strategy_agent(symbol)
 
     async def _try_trigger_strategy_agent(self, symbol: str):
+        logger.info(f">>> _try_trigger_strategy_agent called for symbol={symbol}")
+        logger.info(f"Pending news keys: {list(self.pending_news_reports.keys())}")
+        logger.info(f"Pending analysis keys: {list(self.pending_analysis_reports.keys())}")
         news_report = self.pending_news_reports.get(symbol)
         analysis_report = self.pending_analysis_reports.get(symbol)
-
+        logger.info(f"_try_trigger: news_present={news_report is not None}, analysis_present={analysis_report is not None}")
         if news_report and analysis_report:
             logger.info(f"Both news and analysis reports available for {symbol}. Triggering StrategyAgent.")
-            await self.strategy_agent.run(indicators_report=analysis_report, news_report=news_report)
+            try:
+                result = await self.strategy_agent.run(indicators_report=analysis_report, news_report=news_report)
+                logger.info(f"StrategyAgent.run returned: {result}")
+            except Exception as e:
+                logger.error(f"Error in strategy_agent.run: {e}", exc_info=True)
             # Clear pending reports after triggering strategy agent
             del self.pending_news_reports[symbol]
             del self.pending_analysis_reports[symbol]
+        else:
+            logger.warning(f"_try_trigger: missing one or both reports for {symbol}")
+            # Log which one is missing
+            if not news_report:
+                logger.warning(f"  Missing news report for {symbol}")
+            if not analysis_report:
+                logger.warning(f"  Missing analysis report for {symbol}")
+        logger.info(f"<<< _try_trigger_strategy_agent done for {symbol}")
 
     async def handle_trade_proposal_generated(self, event: Event):
+        logger.info(f">>> HANDLER: handle_trade_proposal_generated ENTERED")
         logger.info(f"Orchestrator received TRADE_PROPOSAL_GENERATED event: {event.data}")
-        trade_proposal_report = AgentReport(**event.data)
-        await self.risk_agent.run(trade_proposal_report=trade_proposal_report)
+        try:
+            trade_proposal_report = AgentReport(**event.data)
+            logger.info(f"Calling risk_agent.run()...")
+            result = await self.risk_agent.run(trade_proposal_report=trade_proposal_report)
+            logger.info(f"<<< risk_agent.run() returned: {result}")
+        except Exception as e:
+            logger.error(f"<<< ERROR in handle_trade_proposal_generated: {e}", exc_info=True)
+            raise
 
     async def handle_risk_check_complete(self, event: Event):
         logger.info(f"Orchestrator received RISK_CHECK_COMPLETE event: {event.data}")
         risk_check_report = AgentReport(**event.data)
         # Assuming RiskAgent's report contains a RiskCheckResult with approval_required
         risk_check_result = risk_check_report.payload.get("risk_check_result")
-        
+
         if risk_check_result and not risk_check_result.get("approval_required", False):
             # If no approval is required, proceed to execution
-            await self.execution_agent.run(approved_trade_proposal=risk_check_report.payload.get("trade_proposal"))
+            # Pass the full risk_check_report as the approval_report (it contains both trade_proposal and risk_assessment)
+            await self.execution_agent.run(approval_report=risk_check_report)
         else:
             logger.info("Approval required for trade proposal.")
 
@@ -141,26 +177,50 @@ class MainOrchestratorAgent(Agent):
 
     async def handle_trade_executed(self, event: Event):
         logger.info(f"Orchestrator received TRADE_EXECUTED event: {event.data}")
-        trade_execution_report = AgentReport(**event.data)
+        execution_report = AgentReport(**event.data)
         
-        # Check if this trade execution was initiated by a Flask request
-        request_id = event.data.get("request_id")
-        if request_id and request_id in flask_response_queues:
-            await flask_response_queues[request_id].put(trade_execution_report)
-            logger.info(f"Sent TRADE_EXECUTED report back to Flask request {request_id}")
-
-        # Update portfolio first
-        await self.portfolio_agent.run(event_type=Events.TRADE_EXECUTED, payload=trade_execution_report.payload)
-        # Then let the learning agent process
-        await self.learning_agent.run(execution_report=trade_execution_report)
+        # Extract execution_result from payload
+        execution_result = execution_report.payload.get("execution_result", {})
+        logger.info(f"Extracted execution_result: {execution_result}")
+        
+        if not execution_result:
+            logger.warning("No execution_result found in payload")
+            return
+        
+        logger.info(f"Calling portfolio_agent.run with execution_result: symbol={execution_result.get('symbol')} action={execution_result.get('action')}")
+        try:
+            # Update portfolio with trade details
+            port_report = await self.portfolio_agent.run(
+                event_type=Events.TRADE_EXECUTED,
+                payload=execution_result
+            )
+            logger.info(f"PortfolioAgent.run returned: status={port_report.status}, message={port_report.message}")
+        except Exception as e:
+            logger.error(f"Error calling portfolio_agent.run: {e}", exc_info=True)
+        
+        logger.info("Portfolio update attempt completed")
+        
+        # Then let the learning agent process the full execution report
+        await self.learning_agent.run(execution_report=execution_report)
+        
+        # Then let the learning agent process the full execution report
+        await self.learning_agent.run(execution_report=execution_report)
 
     async def handle_learning_complete(self, event: Event):
         logger.info(f"Orchestrator received LEARNING_COMPLETE event: {event.data}")
         # Learning agent has completed its cycle, possibly publish feedback
 
     async def handle_market_scan_trigger(self, event: Event):
+        logger.info("!!! HANDLER ENTERED !!!")
+        logger.info(f">>> HANDLER START: handle_market_scan_trigger with event {event}")
         logger.info(f"Orchestrator received MARKET_SCAN_TRIGGER event: {event.data}")
-        await self.market_scanner_agent.run()
+        try:
+            logger.info("Calling market_scanner_agent.run()...")
+            result = await self.market_scanner_agent.run()
+            logger.info(f"<<< HANDLER DONE: market_scanner_agent.run() returned: {result}")
+        except Exception as e:
+            logger.error(f"<<< HANDLER ERROR: Error in handle_market_scan_trigger: {e}", exc_info=True)
+            raise
 
     async def handle_data_refresh_trigger(self, event: Event):
         logger.info(f"Orchestrator received DATA_REFRESH_TRIGGER event: {event.data}")
@@ -249,6 +309,33 @@ class MainOrchestratorAgent(Agent):
             )
         else:
             logger.error(f"Failed to retrieve portfolio state or no chat_id: {portfolio_report.message}")
+    
+    async def handle_health_check_trigger(self, event: Event):
+        """Handle periodic health check trigger from scheduler."""
+        logger.info("Orchestrator received HEALTH_CHECK_TRIGGER. Running health check.")
+        report = await self.health_agent.run(event_type=Events.SCHEDULE)
+        logger.info(f"Health check completed: {report.message}")
+        # Optionally send Telegram alert if issues
+        if report.status == "success" and report.payload.get("status") in ("warning", "critical"):
+            chat_id = self.config_engine.get("telegram", "chat_id", default=None)
+            if chat_id:
+                alerts = report.payload.get("alerts", [])
+                message = "🦞 Health Check Alert:\n" + "\n".join(f"• {a}" for a in alerts)
+                await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+    
+    async def handle_get_health_status(self, event: Event):
+        """Respond to health status query (GET_HEALTH_STATUS)."""
+        logger.info("Orchestrator received GET_HEALTH_STATUS request.")
+        report = await self.health_agent.run(event_type=Events.GET_SYSTEM_STATUS)
+        response_chat_id = event.data.get("chat_id")
+        if response_chat_id:
+            payload = report.payload if report.status == "success" else {"error": report.message}
+            message = f"**Health Status**\n```json\n{json.dumps(payload, indent=2)}\n```"
+            await self.telegram_agent.send_message(chat_id=response_chat_id, message=message, parse_mode="Markdown")
+        elif event.data.get("request_id"):
+            request_id = event.data.get("request_id")
+            if request_id in flask_response_queues:
+                await flask_response_queues[request_id].put(report)
 
 
 _orchestrator: Optional[MainOrchestratorAgent] = None
@@ -257,26 +344,73 @@ _event_bus_initialized: bool = False
 async def initialize_orchestrator() -> MainOrchestratorAgent:
     global _orchestrator, _event_bus_initialized
     if _orchestrator is None:
-        config_instance = Config()
-        app_config = config_instance.load_config()
+        # Initialize YAML Config Engine
+        config_engine = YAMLConfigEngine(config_dir="config")
         
-        _orchestrator = MainOrchestratorAgent(app_config)
+        _orchestrator = MainOrchestratorAgent(config_engine)
         _orchestrator.event_bus = await get_event_bus() # Assign event bus after orchestrator is created
         
+        # Inject event bus into all agents
+        agents = [
+            _orchestrator.market_scanner_agent,
+            _orchestrator.data_agent,
+            _orchestrator.news_agent,
+            _orchestrator.analysis_agent,
+            _orchestrator.strategy_agent,
+            _orchestrator.risk_agent,
+            _orchestrator.execution_agent,
+            _orchestrator.learning_agent,
+            _orchestrator.telegram_agent,
+            _orchestrator.scheduler_agent,
+            _orchestrator.portfolio_agent,
+            _orchestrator.health_agent,  # Add health agent
+        ]
+        for agent in agents:
+            if hasattr(agent, 'event_bus'):
+                agent.event_bus = _orchestrator.event_bus
+        
+        # Special injection: give strategy_agent a reference to portfolio_agent for position checks
+        _orchestrator.strategy_agent.portfolio_agent = _orchestrator.portfolio_agent
+        
+        # Inject dependencies for health_agent
+        _orchestrator.health_agent.portfolio_agent = _orchestrator.portfolio_agent
+        _orchestrator.health_agent.telegram_agent = _orchestrator.telegram_agent
+        
+        # Start the scheduler to trigger periodic scans
+        asyncio.create_task(_orchestrator.scheduler_agent.run())
+        
         # Register event listeners for inter-agent communication
-        await _orchestrator.event_bus.on(Events.MARKET_SCANNED, _orchestrator.handle_market_scanned)
-        await _orchestrator.event_bus.on(Events.DATA_FETCH_COMPLETE, _orchestrator.handle_data_fetch_complete)
-        await _orchestrator.event_bus.on(Events.NEWS_FETCH_COMPLETE, _orchestrator.handle_news_fetch_complete)
-        await _orchestrator.event_bus.on(Events.ANALYSIS_COMPLETE, _orchestrator.handle_analysis_complete)
-        await _orchestrator.event_bus.on(Events.TRADE_PROPOSAL_GENERATED, _orchestrator.handle_trade_proposal_generated)
-        await _orchestrator.event_bus.on(Events.RISK_CHECK_COMPLETE, _orchestrator.handle_risk_check_complete)
-        await _orchestrator.event_bus.on(Events.APPROVAL_REQUIRED, _orchestrator.handle_approval_required)
-        await _orchestrator.event_bus.on(Events.TRADE_EXECUTED, _orchestrator.handle_trade_executed)
-        await _orchestrator.event_bus.on(Events.LEARNING_COMPLETE, _orchestrator.handle_learning_complete)
-        await _orchestrator.event_bus.on(Events.MARKET_SCAN_TRIGGER, _orchestrator.handle_market_scan_trigger)
-        await _orchestrator.event_bus.on(Events.DATA_REFRESH_TRIGGER, _orchestrator.handle_data_refresh_trigger)
-        await _orchestrator.event_bus.on(Events.DAILY_REPORT_TRIGGER, _orchestrator.handle_daily_report_trigger)
-        await _orchestrator.event_bus.on(Events.GET_SYSTEM_STATUS, _orchestrator.handle_get_system_status)
+        logger.info("Registering event handlers...")
+        handlers = [
+            (Events.MARKET_SCANNED, _orchestrator.handle_market_scanned, "MARKET_SCANNED"),
+            (Events.DATA_FETCH_COMPLETE, _orchestrator.handle_data_fetch_complete, "DATA_FETCH_COMPLETE"),
+            (Events.NEWS_FETCH_COMPLETE, _orchestrator.handle_news_fetch_complete, "NEWS_FETCH_COMPLETE"),
+            (Events.ANALYSIS_COMPLETE, _orchestrator.handle_analysis_complete, "ANALYSIS_COMPLETE"),
+            (Events.TRADE_PROPOSAL_GENERATED, _orchestrator.handle_trade_proposal_generated, "TRADE_PROPOSAL_GENERATED"),
+            (Events.RISK_CHECK_COMPLETE, _orchestrator.handle_risk_check_complete, "RISK_CHECK_COMPLETE"),
+            (Events.APPROVAL_REQUIRED, _orchestrator.handle_approval_required, "APPROVAL_REQUIRED"),
+            (Events.TRADE_EXECUTED, _orchestrator.handle_trade_executed, "TRADE_EXECUTED"),
+            (Events.LEARNING_COMPLETE, _orchestrator.handle_learning_complete, "LEARNING_COMPLETE"),
+            (Events.MARKET_SCAN_TRIGGER, _orchestrator.handle_market_scan_trigger, "MARKET_SCAN_TRIGGER"),
+            (Events.DATA_REFRESH_TRIGGER, _orchestrator.handle_data_refresh_trigger, "DATA_REFRESH_TRIGGER"),
+            (Events.DAILY_REPORT_TRIGGER, _orchestrator.handle_daily_report_trigger, "DAILY_REPORT_TRIGGER"),
+            (Events.HEALTH_CHECK_TRIGGER, _orchestrator.handle_health_check_trigger, "HEALTH_CHECK_TRIGGER"),
+            (Events.GET_SYSTEM_STATUS, _orchestrator.handle_get_system_status, "GET_SYSTEM_STATUS"),
+            (Events.GET_HEALTH_STATUS, _orchestrator.handle_get_health_status, "GET_HEALTH_STATUS"),
+        ]
+        for event_type, handler, name in handlers:
+            try:
+                logger.info(f"Attempting to register: {name}")
+                await _orchestrator.event_bus.on(event_type, handler)
+                logger.info(f"Registered successfully: {name}")
+            except Exception as e:
+                logger.error(f"Failed to register {name}: {e}", exc_info=True)
+                raise
+        
+        # Log subscriber counts for key events
+        for event_name in ["market_scan_trigger", "market_scanned"]:
+            count = await _orchestrator.event_bus.get_subscribers_count(event_name)
+            logger.info(f"Subscribers for {event_name}: {count}")
         await _orchestrator.event_bus.on(Events.GET_PORTFOLIO_STATE, _orchestrator.handle_get_portfolio_state)
 
         _event_bus_initialized = True
@@ -286,33 +420,133 @@ async def initialize_orchestrator() -> MainOrchestratorAgent:
 
 @app.route("/analyze", methods=["POST"])
 async def analyze_market():
-    """Analyze market data for a given symbol."""
+    """Full analysis workflow: data → news → analysis → strategy → return trade proposals."""
     data = request.get_json() or {}
     symbol = data.get("symbol", "").upper()
+    lookback_days = int(data.get("lookback_days", 30))
     interval = data.get("interval", "1d")
     
     if not symbol:
         return jsonify({"error": "Missing symbol parameter"}), 400
     
-    # Trigger the workflow through the orchestrator's event bus or direct agent call
+    # Calculate start date based on lookback
+    from datetime import datetime, timedelta
+    end_date = datetime.now().date()
+    start_date = (datetime.now() - timedelta(days=lookback_days)).date().isoformat()
+    
     orchestrator = await initialize_orchestrator()
-    report = await orchestrator.data_agent.run(symbol=symbol, interval=interval)
-    if report.status == "success":
-        return jsonify(report.payload), 200
-    else:
-        return jsonify({"error": report.message}), 500
+    
+    try:
+        # 1. Fetch data with sufficient lookback
+        logger.info(f"[Analyze] Step 1: Fetching {lookback_days} days of data for {symbol}")
+        data_report = await orchestrator.data_agent.run(
+            symbol=symbol,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date.isoformat(),
+            emit_events=False,
+            use_cache=False  # Bypass cache to ensure correct date range
+        )
+        if data_report.status != "success" or "dataframe" not in data_report.payload:
+            return jsonify({"error": f"Data fetch failed: {data_report.message}"}), 500
+        
+        # Check if we got enough data
+        df_len = len(data_report.payload["dataframe"].get("close", {}))
+        if df_len < 50:
+            return jsonify({"error": f"Insufficient historical data: only {df_len} rows, need 50+ for indicators. Try a longer lookback_days."}), 400
+        
+        # 2. Get news
+        logger.info(f"[Analyze] Step 2: Fetching news for {symbol}")
+        news_report = await orchestrator.news_agent.run(symbol=symbol)
+        if news_report.status != "success":
+            logger.warning(f"News fetch failed: {news_report.message}, using placeholder")
+            news_report = AgentReport(
+                agent_id="news_agent",
+                status="success",
+                message="Placeholder news (fetch failed)",
+                payload={"symbol": symbol, "news_count": 0, "sentiment": {}, "catalysts": {}}
+            )
+        
+        # 3. Calculate indicators
+        logger.info(f"[Analyze] Step 3: Analyzing indicators for {symbol}")
+        analysis_report = await orchestrator.analysis_agent.run(
+            data_payload=data_report.payload["dataframe"],
+            symbol=symbol
+        )
+        if analysis_report.status != "success":
+            return jsonify({"error": f"Analysis failed: {analysis_report.message}"}), 500
+        
+        # 4. Generate trade proposals
+        logger.info(f"[Analyze] Step 4: Generating trade proposals")
+        strategy_report = await orchestrator.strategy_agent.run(
+            indicators_report=analysis_report,
+            news_report=news_report
+        )
+        if strategy_report.status != "success":
+            return jsonify({"error": f"Strategy failed: {strategy_report.message}"}), 500
+        
+        # 5. Risk validation (if proposals generated)
+        logger.info(f"[Analyze] Step 5: Running risk validation")
+        proposals = strategy_report.payload.get("proposals", [])
+        if proposals:
+            # For now, validate first proposal only (future: batch validate all)
+            first_proposal = proposals[0]
+            from finance_service.core.models import TradeProposal
+            proposal_obj = TradeProposal(**first_proposal)
+            
+            # Get current portfolio state for risk check
+            portfolio_state = orchestrator.portfolio_agent.repository.calculate_portfolio(
+                initial_cash=100000.0  # TODO: make configurable
+            )
+            
+            # Build an AgentReport wrapper for RiskAgent (expects payload with "proposal")
+            proposal_report = AgentReport(
+                agent_id="strategy_agent",
+                status="success",
+                message="Trade proposal for risk check",
+                payload={"proposal": first_proposal, "portfolio_state": portfolio_state.to_dict()}
+            )
+            
+            # Run risk check
+            risk_report = await orchestrator.risk_agent.run(trade_proposal_report=proposal_report)
+            
+            if risk_report.status == "success":
+                risk_check = risk_report.payload.get("risk_assessment", {})
+                # Risk check uses "passed" and "approval_required" fields
+                if not risk_check.get("passed", False):
+                    # Proposal rejected by risk
+                    return jsonify({
+                        "proposals": proposals,
+                        "risk_rejection": {
+                            "approved": False,
+                            "reason": f"Failed: {', '.join(risk_check.get('violated_limits', []))}"
+                        }
+                    }), 200
+                else:
+                    logger.info(f"Risk check passed: score={risk_check.get('risk_score')}, approvals_required={risk_check.get('approval_required')}")
+            else:
+                logger.warning(f"Risk agent error: {risk_report.message}")
+                # Continue anyway (risk not blocking if agent fails)
+        
+        return jsonify(strategy_report.payload), 200
+        
+    except Exception as e:
+        logger.error(f"Error in analyze_market: {e}", exc_info=True)
+        return jsonify({"error": f"Internal server error: {e}"}), 500
 
 
 @app.route("/portfolio/state", methods=["GET"])
 async def get_portfolio_state():
     """Get current portfolio state"""
     orchestrator = await initialize_orchestrator()
+    request_id = f"flask_{id(request)}"
+    flask_response_queues[request_id] = asyncio.Queue()
     # This needs to be handled by a PortfolioAgent later, for now we trigger an event
-    response_event = Event(event_type=Events.GET_PORTFOLIO_STATE, data={"chat_id": request_id}) 
+    response_event = Event(event_type=Events.GET_PORTFOLIO_STATE, data={"chat_id": "flask_request", "request_id": request_id})
     await orchestrator.event_bus.publish(response_event)
     
     try:
-        response_report = await asyncio.wait_for(flask_response_queues[request_id].get(), timeout=10.0)
+        response_report = await asyncio.wait_for(flask_response_queues[request_id].get(), timeout=30.0)
         del flask_response_queues[request_id]
         if response_report.status == "success":
             return jsonify(response_report.payload), 200
@@ -375,24 +609,31 @@ async def execute_trade():
     if not trade_proposal:
         return jsonify({"error": "trade_proposal is required for execution."}), 400
 
-    # Publish event to execution agent directly (assuming pre-approved or risk check done)
-    # In a real scenario, this would typically follow an approval flow.
-    await orchestrator.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data={"trade_proposal": trade_proposal, "status": "direct_execute", "request_id": request_id}))
-    
+    # Call ExecutionAgent directly to execute the trade
     try:
-        response_report = await asyncio.wait_for(flask_response_queues[request_id].get(), timeout=10.0)
-        del flask_response_queues[request_id]
-        if response_report.status == "success":
-            return jsonify(response_report.payload), 200
+        # Build a mock approval_report structure that ExecutionAgent expects
+        approval_report = AgentReport(
+            agent_id="mock_risk_agent",
+            status="approved",
+            message="Trade approved for direct execution",
+            payload={
+                "trade_proposal": trade_proposal,
+                "risk_assessment": {"approved": True}  # placeholder
+            }
+        )
+        
+        execution_report = await orchestrator.execution_agent.run(approval_report)
+        
+        if execution_report.status == "success":
+            # The execution agent already published TRADE_EXECUTED event which updates portfolio
+            # Wait a brief moment for portfolio update to complete
+            await asyncio.sleep(0.5)
+            return jsonify(execution_report.payload), 200
         else:
-            return jsonify({"error": response_report.message}), 500
-    except asyncio.TimeoutError:
-        del flask_response_queues[request_id]
-        return jsonify({"error": "Trade execution request timed out."}), 500
+            return jsonify({"error": execution_report.message}), 500
+            
     except Exception as e:
         logger.error(f"Error executing trade: {e}")
-        if request_id in flask_response_queues:
-            del flask_response_queues[request_id]
         return jsonify({"error": f"Internal server error: {e}"}), 500
 
 
@@ -423,6 +664,41 @@ async def get_quote(symbol):
         return jsonify({"error": f"No quote data found for {symbol}"}), 404
     else:
         return jsonify({"error": report.message}), 500
+
+
+@app.route("/trigger/<trigger_type>", methods=["POST"])
+async def trigger_event(trigger_type: str):
+    """Manual trigger endpoint for testing scheduled tasks."""
+    logger.info(f"TRIGGER ENDPOINT CALLED with trigger_type={trigger_type}")
+    orchestrator = await initialize_orchestrator()
+    
+    event_type_map = {
+        "market-scan": Events.MARKET_SCAN_TRIGGER,
+        "data-refresh": Events.DATA_REFRESH_TRIGGER,
+        "daily-report": Events.DAILY_REPORT_TRIGGER,
+        "system-status": Events.GET_SYSTEM_STATUS
+    }
+    
+    if trigger_type not in event_type_map:
+        return jsonify({"error": f"Unknown trigger: {trigger_type}. Valid: {list(event_type_map.keys())}"}), 400
+    
+    event_type = event_type_map[trigger_type]
+    event = Event(event_type=event_type, data={})
+    logger.info(f"Calling handler directly for: {event_type}")
+    # Directly call the appropriate handler instead of publishing via event bus (temporary bypass)
+    if event_type == Events.MARKET_SCAN_TRIGGER:
+        try:
+            result = await orchestrator.handle_market_scan_trigger(event)
+            logger.info(f"Direct handler returned: {result}")
+        except Exception as e:
+            logger.error(f"Error in direct handler: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    else:
+        logger.info(f"Publishing event: {event_type}")
+        await orchestrator.event_bus.publish(event)
+        logger.info(f"Event published successfully")
+    
+    return jsonify({"status": "ok", "event": event_type, "message": f"Triggered {trigger_type}"}), 200
 
 
 if __name__ == "__main__":

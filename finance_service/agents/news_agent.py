@@ -4,6 +4,7 @@ from datetime import datetime
 
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.agent_interface import Agent, AgentReport
+from dataclasses import asdict
 from finance_service.core.event_bus import Event, Events, get_event_bus # Added event_bus import
 
 logger = logging.getLogger(__name__)
@@ -56,17 +57,19 @@ class NewsAgent(Agent):
         }
         logger.info(message)
 
-        await self.event_bus.publish(Event(
-            event_type=Events.NEWS_FETCH_COMPLETE,
-            data=payload
-        ))
-
-        return AgentReport(
+        # Wrap in AgentReport for consistent event structure
+        report = AgentReport(
             agent_id=self.agent_id,
-            status="info",
+            status="success",
             message=message,
             payload=payload
         )
+        await self.event_bus.publish(Event(
+            event_type=Events.NEWS_FETCH_COMPLETE,
+            data=asdict(report)
+        ))
+
+        return report
 
     async def _fetch_news(self, symbols: List[str]) -> List[Dict[str, Any]]:
         logger.debug(f"_fetch_news: Fetching news for {symbols} (placeholder).")

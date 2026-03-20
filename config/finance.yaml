@@ -106,7 +106,7 @@ strategy:
   # Auto-execution settings
   auto_execute:
     enabled: true
-    confidence_threshold: 0.75       # Auto-execute at 75%+ confidence
+    confidence_threshold: 0.50       # Auto-execute at 50%+ confidence (allow single-rule signals)
     require_approval: true           # Always notify, but auto-execute on high confidence
   
   # Approval workflow
@@ -122,7 +122,7 @@ strategy:
       enabled: true
       period: 14
       overbought: 70
-      oversold: 30
+      oversold: 35                   # Increased from 30 to get more signals
     
     macd:
       enabled: true
@@ -132,7 +132,7 @@ strategy:
     
     sma:
       enabled: true
-      periods: [20, 50, 200]
+      periods: [10, 20, 30, 50, 200]   # Added fast periods for crossover
     
     ema:
       enabled: true
@@ -155,9 +155,9 @@ strategy:
   # Strategy rules
   rules:
     # Entry signals
-    rsi_entry_oversold: true         # Buy when RSI < 30
+    rsi_entry_oversold: true         # Buy when RSI < oversold threshold (35)
     macd_crossover: true             # Entries on MACD crossovers
-    price_above_sma20: true          # Only trade above SMA20
+    price_above_sma20: false         # Removed: allow all entries (higher frequency)
     
     # Exit signals
     rsi_exit_overbought: true        # Sell when RSI > 70
@@ -169,59 +169,109 @@ strategy:
 # PHASE 2: INDICATOR-BASED STRATEGIES
 # ========================
 strategies:
-  # Entry rules (must match indicator names from IndicatorCalculator)
-  entry_rules:
-    - name: "rsi_oversold"
-      type: "entry"
-      indicator: "rsi"
-      condition: "less_than"
-      value: 30
-      enabled: true
+  # Strategy 1: RSI+MACD (mean reversion) - DISABLED
+  rsi_macd:
+    allocation: 0.00                   # disabled
+    risk_budget_pct: 1.0
+    confidence_threshold: 0.50
     
-    - name: "price_above_sma20"
-      type: "entry"
-      indicator: "sma_20"
-      condition: "greater_than"
-      value: 0  # This is a price-based check vs indicator line - will need review
-      enabled: true
+    entry_rules:
+      - name: "rsi_oversold"
+        type: "entry"
+        indicator: "rsi"
+        condition: "less_than"
+        value: 35
+        enabled: true
+      - name: "macd_bullish"
+        type: "entry"
+        indicator: "macd"
+        condition: "greater_than"
+        value: 0
+        enabled: true
     
-    - name: "macd_bullish"
-      type: "entry"
-      indicator: "macd"
-      condition: "greater_than"
-      value: 0
-      enabled: false
-    
-    - name: "bb_oversold"
-      type: "entry"
-      indicator: "bb"
-      condition: "less_than"
-      value: 0
-      enabled: true
+    exit_rules:
+      - name: "rsi_overbought"
+        type: "exit"
+        indicator: "rsi"
+        condition: "greater_than"
+        value: 70
+        enabled: true
+      - name: "rsi_high"
+        type: "exit"
+        indicator: "rsi"
+        condition: "greater_than"
+        value: 60
+        enabled: true
   
-  # Exit rules (must match indicator names from IndicatorCalculator)
-  exit_rules:
-    - name: "rsi_overbought"
-      type: "exit"
-      indicator: "rsi"
-      condition: "greater_than"
-      value: 70
-      enabled: true
+  # Strategy 2: SMA Crossover (trend following) - DISABLED
+  sma_crossover:
+    allocation: 0.00                   # disabled
+    risk_budget_pct: 0.5
+    confidence_threshold: 1.0
     
-    - name: "macd_bearish"
-      type: "exit"
-      indicator: "macd"
-      condition: "less_than"
-      value: 0
-      enabled: false
+    entry_rules:
+      - name: "sma_fast_above_slow"
+        type: "entry"
+        indicator: "sma_10"
+        condition: "greater_than"
+        indicator2: "sma_30"          # Compare SMA10 > SMA30
+        value: 0.0                    # ignored when indicator2 present
+        enabled: true
     
-    - name: "bb_overbought"
-      type: "exit"
-      indicator: "bb"
-      condition: "greater_than"
-      value: 100
-      enabled: true
+    exit_rules:
+      - name: "sma_fast_below_slow"
+        type: "exit"
+        indicator: "sma_10"
+        condition: "less_than"
+        indicator2: "sma_30"
+        value: 0.0
+        enabled: true
 
+  # Strategy 3: Value + Quality + News (fundamental + catalyst)
+  value_quality_news:
+    allocation: 0.50                   # 50% of capital (can be adjusted)
+    risk_budget_pct: 1.0              # 1% per trade
+    confidence_threshold: 0.60        # Require at least 2 of 3 factors (60% since 2/3 = 66%, but allow some flexibility)
+    
+    entry_rules:
+      - name: "pe_undervalued"
+        type: "entry"
+        indicator: "pe_ratio"
+        condition: "less_than"
+        value: 25                      # P/E below 25 (value)
+        enabled: true
+      - name: "revenue_growth_strong"
+        type: "entry"
+        indicator: "revenue_growth_yoy"
+        condition: "greater_than"
+        value: 0.10                    # Revenue growth >10% YoY (quality)
+        enabled: true
+      - name: "news_positive"
+        type: "entry"
+        indicator: "news_sentiment"
+        condition: "greater_than"
+        value: 0.3                     # News sentiment >0.3 (positive catalyst)
+        enabled: true
+    
+    exit_rules:
+      - name: "pe_overvalued"
+        type: "exit"
+        indicator: "pe_ratio"
+        condition: "greater_than"
+        value: 40                      # Exit if P/E > 40 (overvalued)
+        enabled: true
+      - name: "revenue_growth_weak"
+        type: "exit"
+        indicator: "revenue_growth_yoy"
+        condition: "less_than"
+        value: 0.0                     # Exit if revenue growth turns negative
+        enabled: true
+      - name: "news_negative"
+        type: "exit"
+        indicator: "news_sentiment"
+        condition: "less_than"
+        value: -0.3                    # Exit if news sentiment very negative
+        enabled: true
 
 # ========================
 # BACKTESTING CONFIGURATION

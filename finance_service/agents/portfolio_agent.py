@@ -25,12 +25,13 @@ class PortfolioAgent(Agent):
     def goal(self) -> str:
         return "Maintain an accurate record of portfolio holdings, execute trades, and provide real-time portfolio metrics."
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], data_agent=None):
         self.config = config
         self.event_bus = get_event_bus()
         self.initial_cash = config.get("initial_cash", 100000.0)
         self.repository = TradeRepository() # This will need to be async-adapted later
         self.equity_calculator = EquityCalculator()
+        self.data_agent = data_agent  # Optional DataAgent for fetching live quotes
         self.updated_at = datetime.utcnow()
         logger.info("PortfolioAgent initialized.")
 
@@ -40,7 +41,8 @@ class PortfolioAgent(Agent):
         payload = kwargs.get("payload", {})
 
         if event_type == Events.TRADE_EXECUTED:
-            trade_info = payload.get("trade_info")
+            # Accept either direct execution_result or wrapped in trade_info
+            trade_info = payload.get("trade_info") or payload
             if trade_info:
                 return await self.handle_trade_executed(trade_info)
             else:
@@ -54,31 +56,44 @@ class PortfolioAgent(Agent):
 
     async def handle_trade_executed(self, trade_info: Dict[str, Any]) -> AgentReport:
         """Handles TRADE_EXECUTED event to update portfolio positions and trades."""
-        logger.info(f"PortfolioAgent handling TRADE_EXECUTED event: {trade_info}")
-        trade_id = trade_info.get("trade_id")
+        logger.info(f"[PORTFOLIO DEBUG] handle_trade_executed called with trade_info: {trade_info}")
+        # Accept both 'action' and 'side' for compatibility
         symbol = trade_info.get("symbol")
-        side = trade_info.get("side")
+        side = trade_info.get("side") or trade_info.get("action")
         quantity = trade_info.get("quantity")
         price = trade_info.get("price")
-        # Assuming simplified trade_info from ExecutionAgent, needs to be aligned with Trade model
-
+        trade_id = trade_info.get("trade_id") or f"exec_{int(datetime.utcnow().timestamp()*1000)}"
+        
+        logger.info(f"[PORTFOLIO DEBUG] Parsed: symbol={symbol}, side={side}, quantity={quantity}, price={price}, trade_id={trade_id}")
+        
+        if not all([symbol, side, quantity, price]):
+            msg = f"Missing required trade fields: {trade_info}"
+            logger.error(msg)
+            return AgentReport(agent_id=self.agent_id, status="error", message=msg)
+        
         try:
+            side = side.upper()
             if side == "BUY":
+                logger.info(f"[PORTFOLIO DEBUG] Creating BUY trade for {symbol}")
                 trade = self.repository.create_trade(
-                    task_id=trade_id, # Re-using trade_id as task_id for simplicity
+                    task_id=trade_id,
                     symbol=symbol, side="BUY", quantity=quantity, price=price,
                     decision={}, confidence=1.0, reason="Executed Trade"
                 )
+                logger.info(f"[PORTFOLIO DEBUG] Trade created with trade_id={trade.trade_id}")
                 position = self.repository.get_position(symbol)
+                logger.info(f"[PORTFOLIO DEBUG] Existing position before update: {position}")
                 if position:
                     new_qty = position.quantity + quantity
                     new_cost = (position.cost_basis() + quantity * price) / new_qty
                     self.repository.update_position(symbol, quantity=new_qty, avg_cost=new_cost, add_trade=trade.trade_id)
                 else:
                     self.repository.create_position(symbol, quantity=quantity, avg_cost=price, trades=[trade.trade_id])
+                logger.info(f"[PORTFOLIO DEBUG] Position after update: {self.repository.get_position(symbol)}")
             elif side == "SELL":
+                logger.info(f"[PORTFOLIO DEBUG] Creating SELL trade for {symbol}")
                 trade = self.repository.create_trade(
-                    task_id=trade_id, # Re-using trade_id as task_id for simplicity
+                    task_id=trade_id,
                     symbol=symbol, side="SELL", quantity=quantity, price=price,
                     decision={}, confidence=1.0, reason="Executed Trade"
                 )
@@ -92,28 +107,52 @@ class PortfolioAgent(Agent):
                 else:
                     self.repository.create_position(symbol, quantity=-quantity, avg_cost=price, trades=[trade.trade_id])
             else:
-                return AgentReport(agent_id=self.agent_id, status="error", message=f"Unknown trade side: {side}")
+                msg = f"Unknown trade side: {side}"
+                logger.error(msg)
+                return AgentReport(agent_id=self.agent_id, status="error", message=msg)
+            
+            # Mark trade as filled (since execution is immediate in paper trading)
+            self.repository.update_trade_status(trade.trade_id, TradeStatus.FILLED, filled_quantity=quantity, executed_by="system")
             
             self.updated_at = datetime.utcnow()
             logger.info(f"Portfolio updated after {side} trade: {trade_id}")
-            return AgentReport(agent_id=self.agent_id, status="success", message=f"Trade {trade_id} processed", payload=trade.model_dump())
+            return AgentReport(agent_id=self.agent_id, status="success", message=f"Trade {trade_id} processed", payload=trade.to_dict())
         except Exception as e:
-            logger.error(f"Error processing trade {trade_id}: {e}")
+            logger.error(f"Error processing trade {trade_id}: {e}", exc_info=True)
             return AgentReport(agent_id=self.agent_id, status="error", message=f"Error processing trade: {e}")
 
 
     async def get_detailed_portfolio_state(self, chat_id: Optional[str] = None) -> AgentReport:
         """Retrieves detailed portfolio state and can publish it or return in a report."""
         logger.info("PortfolioAgent generating detailed portfolio state.")
+        
+        # Fetch live prices for all positions if data_agent is available
+        if self.data_agent:
+            import pandas as pd
+            for symbol in list(self.repository.positions.keys()):
+                try:
+                    # Fetch latest daily data
+                    quote_report = await self.data_agent.run(symbol=symbol, interval="1d", emit_events=False, use_cache=False)
+                    if quote_report.status == "success" and "dataframe" in quote_report.payload:
+                        df_dict = quote_report.payload["dataframe"]
+                        df = pd.DataFrame.from_dict(df_dict)
+                        if not df.empty:
+                            latest_price = df.iloc[-1]['close']
+                            self.repository.update_position(symbol, current_price=latest_price)
+                            logger.debug(f"Updated {symbol} current price to {latest_price}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch price for {symbol}: {e}")
+                    continue
+        
         portfolio = self.repository.calculate_portfolio(self.initial_cash)
-        positions_data = [pos.model_dump() for pos in self.repository.get_positions()]
-        trades_data = [trade.model_dump() for trade in self.repository.trades]
+        positions_data = [pos.to_dict() for pos in self.repository.get_positions()]
+        trades_data = [trade.to_dict() for trade in self.repository.trades]
         
         equity_metrics = self.get_equity_metrics() # Use the existing helper
 
         # This is the data that will be sent back to the orchestrator/TelegramAgent
         portfolio_state = {
-            "overview": portfolio.model_dump(),
+            "overview": portfolio.to_dict(),
             "positions": positions_data,
             "trades": trades_data,
             "equity_metrics": equity_metrics,

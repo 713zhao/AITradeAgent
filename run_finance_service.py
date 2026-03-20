@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 PicotradeAgent Finance Service Launcher
-Forces yfinance provider and starts the Flask service
+Forces yfinance provider and starts the Flask service with Hypercorn (ASGI)
 """
 import os
 import sys
+import asyncio
 import subprocess
 import time
 import signal
@@ -32,13 +33,22 @@ def main():
     logger.info("📊 Market data source: yfinance (free)")
     logger.info("💰 Trading mode: PAPER (simulated)")
     logger.info("🔌 Port: 8801")
+    logger.info("🌐 Server: Hypercorn (ASGI)")
     
     try:
-        # Import and run the Flask app
+        # Import the Flask app and run with Hypercorn (ASGI server for async Flask)
         from finance_service.app import app
+        from hypercorn.asyncio import serve
+        from hypercorn.config import Config
         
-        # Run on port 8801
-        app.run(host='0.0.0.0', port=8801, debug=False, use_reloader=False)
+        # Configure Hypercorn
+        hypercorn_config = Config()
+        hypercorn_config.bind = ["0.0.0.0:8801"]
+        hypercorn_config.loglevel = "info"
+        hypercorn_config.accesslog = "-"
+        
+        # Run the async server
+        asyncio.run(serve(app, hypercorn_config))
         
     except KeyboardInterrupt:
         logger.info("🛑 Service stopped by user")

@@ -4,9 +4,13 @@ Trade Repository
 CRUD operations for managing trades and positions in the portfolio.
 """
 
+import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from .models import Trade, Position, Portfolio, TradeStatus
+from finance_service.storage import get_portfolio_db
+
+logger = logging.getLogger(__name__)
 
 
 class TradeRepository:
@@ -17,11 +21,177 @@ class TradeRepository:
     Can be extended with SQLite persistence (Phase 3+).
     """
     
-    def __init__(self):
-        """Initialize empty repository."""
+    def __init__(self, use_db: bool = True):
+        """
+        Initialize repository.
+        
+        Args:
+            use_db: If True, enable persistence using portfolio database.
+        """
         self.trades: List[Trade] = []
         self.positions: Dict[str, Position] = {}
         self._trade_counter = 0
+        self.db = None
+        if use_db:
+            try:
+                self.db = get_portfolio_db()
+                self._load_from_db()
+            except Exception as e:
+                logger.error(f"Failed to initialize database for TradeRepository: {e}")
+                self.db = None
+    
+    def _load_from_db(self) -> None:
+        """Load trades from database and rebuild positions."""
+        if not self.db:
+            return
+        
+        try:
+            trade_dicts = self.db.load_all_trade_objects()
+            trades = []
+            for td in trade_dicts:
+                try:
+                    # Convert status string to Enum
+                    status_val = td.get('status', 'PENDING')
+                    if isinstance(status_val, str):
+                        status = TradeStatus(status_val)
+                    else:
+                        status = status_val
+                    # Parse datetimes
+                    ordered_at = td.get('ordered_at')
+                    if ordered_at:
+                        if isinstance(ordered_at, str):
+                            ordered_at = datetime.fromisoformat(ordered_at.replace('Z', '+00:00'))
+                        else:
+                            ordered_at = datetime.utcnow()
+                    else:
+                        ordered_at = datetime.utcnow()
+                    filled_at = td.get('filled_at')
+                    if filled_at:
+                        if isinstance(filled_at, str):
+                            filled_at = datetime.fromisoformat(filled_at.replace('Z', '+00:00'))
+                        else:
+                            filled_at = None
+                    else:
+                        filled_at = None
+                    
+                    trade = Trade(
+                        trade_id=td['trade_id'],
+                        task_id=td.get('task_id', ''),
+                        symbol=td['symbol'],
+                        side=td['side'],
+                        quantity=td['quantity'],
+                        price=td['price'],
+                        status=status,
+                        filled_quantity=td.get('filled_quantity', 0.0),
+                        decision=td.get('decision', {}),
+                        confidence=td.get('confidence', 0.0),
+                        stop_loss=td.get('stop_loss'),
+                        take_profit=td.get('take_profit'),
+                        ordered_at=ordered_at,
+                        filled_at=filled_at,
+                        reason=td.get('reason', ''),
+                        approval_required=td.get('approval_required', False),
+                        approval_received=td.get('approval_received'),
+                        executed_by=td.get('executed_by'),
+                        error_reason=td.get('error_reason'),
+                        metadata=td.get('metadata', {})
+                    )
+                    trades.append(trade)
+                except Exception as e:
+                    logger.warning(f"Failed to reconstruct trade {td.get('trade_id')}: {e}")
+                    continue
+            
+            # Sort trades by ordered_at (and by trade_id numeric for stable order)
+            trades.sort(key=lambda t: (t.ordered_at, int(t.trade_id.split('_')[1]) if '_' in t.trade_id else 0))
+            self.trades = trades
+            
+            # Rebuild positions from FILLED trades
+            self.positions = {}
+            for trade in self.trades:
+                if trade.status == TradeStatus.FILLED:
+                    self._apply_trade_to_position(trade)
+            
+            # Update trade counter to highest existing
+            max_num = 0
+            for t in self.trades:
+                try:
+                    num = int(t.trade_id.split('_')[1])
+                    if num > max_num:
+                        max_num = num
+                except:
+                    pass
+            self._trade_counter = max_num
+            
+            logger.info(f"TradeRepository loaded {len(self.trades)} trades and {len(self.positions)} positions from DB")
+        except Exception as e:
+            logger.error(f"Error loading trades from DB: {e}")
+    
+    def _apply_trade_to_position(self, trade: Trade) -> None:
+        """Apply a filled trade to the in-memory position."""
+        symbol = trade.symbol
+        qty = trade.quantity
+        price = trade.price
+        side = trade.side.upper()
+        
+        position = self.positions.get(symbol)
+        if side == "BUY":
+            if position:
+                # Existing long: update avg cost and quantity
+                old_qty = position.quantity
+                old_cost = position.avg_cost
+                new_qty = old_qty + qty
+                new_cost = (old_cost * old_qty + price * qty) / new_qty
+                position.quantity = new_qty
+                position.avg_cost = new_cost
+            else:
+                # New long position
+                position = Position(
+                    symbol=symbol,
+                    quantity=qty,
+                    avg_cost=price,
+                    current_price=price
+                )
+                self.positions[symbol] = position
+            position.trades.append(trade.trade_id)
+        elif side == "SELL":
+            if position:
+                # Reduce or close position
+                new_qty = position.quantity - qty
+                if new_qty <= 0:
+                    # Position closed or flipped (we remove for simplicity)
+                    if new_qty < 0:
+                        # This would be a short, not fully supported yet; create negative position?
+                        # For now, just set quantity negative (short)
+                        position.quantity = new_qty
+                        position.avg_cost = price  # avg cost for short?
+                    else:
+                        # Exact zero close
+                        del self.positions[symbol]
+                        return
+                else:
+                    position.quantity = new_qty
+                position.trades.append(trade.trade_id)
+            else:
+                # Short selling (not enabled typically)
+                position = Position(
+                    symbol=symbol,
+                    quantity=-qty,
+                    avg_cost=price,
+                    current_price=price
+                )
+                self.positions[symbol] = position
+                position.trades.append(trade.trade_id)
+        else:
+            logger.warning(f"Unknown side {side} for trade {trade.trade_id}")
+    
+    def _persist_trade(self, trade: Trade) -> None:
+        """Persist a trade object to the database."""
+        if self.db:
+            try:
+                trade_dict = trade.to_dict()
+                self.db.upsert_trade_object(trade_dict)
+            except Exception as e:
+                logger.error(f"Failed to persist trade {trade.trade_id}: {e}")
     
     def create_trade(
         self,
@@ -76,6 +246,7 @@ class TradeRepository:
         )
         
         self.trades.append(trade)
+        self._persist_trade(trade)
         return trade
     
     def get_trade(self, trade_id: str) -> Optional[Trade]:
@@ -143,6 +314,7 @@ class TradeRepository:
             trade.filled_at = datetime.utcnow()
         
         trade.updated_at = datetime.utcnow()
+        self._persist_trade(trade)
         return trade
     
     def approve_trade(self, trade_id: str, approved_by: str) -> Optional[Trade]:
@@ -153,6 +325,7 @@ class TradeRepository:
         trade.approval_received = True
         trade.executed_by = approved_by
         trade.updated_at = datetime.utcnow()
+        self._persist_trade(trade)
         return trade
     
     def reject_trade(self, trade_id: str, reason: str, rejected_by: str) -> Optional[Trade]:
@@ -164,6 +337,7 @@ class TradeRepository:
         trade.error_reason = reason
         trade.executed_by = rejected_by
         trade.updated_at = datetime.utcnow()
+        self._persist_trade(trade)
         return trade
     
     def create_position(
