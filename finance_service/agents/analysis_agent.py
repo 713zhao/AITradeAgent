@@ -96,13 +96,14 @@ class AnalysisAgent(Agent):
                 message=f"Unexpected error during analysis for {symbol}: {e}"
             )
 
-    def _calculate_all(self, df: pd.DataFrame, symbol: str) -> IndicatorsSnapshot:
+    def _calculate_all(self, df: pd.DataFrame, symbol: str, fundamentals: Optional[Dict[str, Any]] = None) -> IndicatorsSnapshot:
         """
         Calculate all indicators for a symbol
         
         Args:
             df: OHLCV DataFrame with datetime index
             symbol: Symbol name
+            fundamentals: Optional dict containing fundamental data (pe_ratio, revenue_growth_yoy, news_sentiment)
         
         Returns:
             IndicatorsSnapshot with all indicators calculated
@@ -130,6 +131,60 @@ class AnalysisAgent(Agent):
             indicators['atr'] = self.atr(df)
             indicators['bb'] = self.bollinger_bands(df)
             indicators['stoch'] = self.stochastic(df)
+            
+            # Integrate fundamental indicators if provided (for backtest news simulation, etc.)
+            if fundamentals:
+                # News sentiment (proxy from backtest or real)
+                if 'news_sentiment' in fundamentals:
+                    ns = fundamentals['news_sentiment']
+                    if ns is not None and not pd.isna(ns):
+                        if ns > 0.3:
+                            signal = SignalType.BUY
+                        elif ns < -0.3:
+                            signal = SignalType.SELL
+                        else:
+                            signal = SignalType.HOLD
+                        indicators['news_sentiment'] = IndicatorResult(
+                            name='news_sentiment',
+                            value=float(ns),
+                            signal=signal,
+                            timestamp=latest_ts,
+                            metadata={'source': 'proxy', 'fundamental': True}
+                        )
+                # P/E Ratio
+                if 'pe_ratio' in fundamentals:
+                    pe = fundamentals['pe_ratio']
+                    if pe is not None and not pd.isna(pe):
+                        if pe < 15:
+                            signal = SignalType.BUY
+                        elif pe > 30:
+                            signal = SignalType.SELL
+                        else:
+                            signal = SignalType.HOLD
+                        indicators['pe_ratio'] = IndicatorResult(
+                            name='pe_ratio',
+                            value=float(pe),
+                            signal=signal,
+                            timestamp=latest_ts,
+                            metadata={'fundamental': True}
+                        )
+                # Revenue Growth YoY
+                if 'revenue_growth_yoy' in fundamentals:
+                    rg = fundamentals['revenue_growth_yoy']
+                    if rg is not None and not pd.isna(rg):
+                        if rg > 0.20:
+                            signal = SignalType.BUY
+                        elif rg < 0:
+                            signal = SignalType.SELL
+                        else:
+                            signal = SignalType.HOLD
+                        indicators['revenue_growth_yoy'] = IndicatorResult(
+                            name='revenue_growth_yoy',
+                            value=float(rg),
+                            signal=signal,
+                            timestamp=latest_ts,
+                            metadata={'fundamental': True}
+                        )
             
             logger.debug(f"Calculated {len(indicators)} indicators for {symbol} at {latest_ts}")
             

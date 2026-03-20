@@ -180,3 +180,35 @@ portfolio:
 scheduler:
   market_scan_interval_minutes: 15
   data_refresh_interval_minutes: 5
+
+# ========================
+# BACKTEST STRATEGIES
+# ========================
+# These strategies are used by the backtest runner. Live trading uses the 'strategy' section above.
+strategies:
+  simple_rsi_macd:
+    allocation: 1.0
+    risk_budget_pct: 1.5
+    confidence_threshold: 0.5
+    entry_rules:
+      - name: rsi_oversold_entry
+        type: entry
+        indicator: rsi
+        condition: less_than
+        value: 45.0
+      - name: macd_bullish_entry
+        type: entry
+        indicator: macd
+        condition: greater_than
+        value: 0.0
+    exit_rules:
+      - name: rsi_overbought_exit
+        type: exit
+        indicator: rsi
+        condition: greater_than
+        value: 65.0
+      - name: macd_bearish_exit
+        type: exit
+        indicator: macd
+        condition: less_than
+        value: 0.0
