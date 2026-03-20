@@ -1,55 +1,112 @@
-"""Configuration management for Finance Service"""
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
+import yaml
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, model_validator
 
-class Config:
+class _Config(BaseSettings):
     """Central configuration for Finance Agent"""
     
     # Paths
-    BASE_DIR = Path(__file__).parent.parent
-    STORAGE_DIR = BASE_DIR / "storage"
-    CACHE_FILE = STORAGE_DIR / "cache.sqlite"
-    RUNS_FILE = STORAGE_DIR / "runs.sqlite"
-    
-    # Ensure storage directory exists
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    BASE_DIR: Path = Path(__file__).parent.parent
+    STORAGE_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "storage")
+    CACHE_FILE: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "storage" / "cache.sqlite")
+    RUNS_FILE: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "storage" / "runs.sqlite")
     
     # Data configuration
-    DEFAULT_LOOKBACK_DAYS = 252  # 1 year
-    CACHE_TTL_SECONDS = 3600  # 1 hour
+    DEFAULT_LOOKBACK_DAYS: int = 252
+    CACHE_TTL_SECONDS: int = 3600
     
     # Risk configuration (defaults)
-    MAX_POSITION_SIZE = 0.20  # 20% of portfolio
-    MAX_EXPOSURE = 0.90  # 90% total exposure
-    MAX_DAILY_LOSS = 0.03  # 3% daily stop loss
-    MAX_DRAWDOWN = 0.10  # 10% drawdown stop loss
-    DEFAULT_RISK_BUDGET = 0.01  # 1% per trade
+    MAX_POSITION_SIZE: float = Field(0.20, gt=0, le=1.0)
+    MAX_EXPOSURE: float = Field(0.90, gt=0, le=1.0)
+    MAX_DAILY_LOSS: float = Field(0.03, gt=0, lt=1.0)
+    MAX_DRAWDOWN: float = Field(0.10, gt=0, lt=1.0)
+    DEFAULT_RISK_BUDGET: float = 0.01
     
     # Trading configuration
-    WHITELIST_SYMBOLS = None  # None = allow any; set to list for restrictions
-    DEFAULT_INITIAL_CASH = 100000  # $100k starting capital
-    TRADE_SLIPPAGE = 0.0005  # 0.05% slippage
+    WHITELIST_SYMBOLS: Optional[List[str]] = None
+    DEFAULT_INITIAL_CASH: float = 100000.0
+    TRADE_SLIPPAGE: float = 0.0005
     
     # OpenBB configuration
-    OPENBB_API_RETRIES = 3
-    OPENBB_TIMEOUT = 30  # seconds
+    OPENBB_API_RETRIES: int = Field(3, gt=0)
+    OPENBB_TIMEOUT: int = 30
     
     # Approval configuration
-    APPROVAL_TIMEOUT = 300  # 5 minutes
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-    SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
-    SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "")
+    APPROVAL_TIMEOUT: int = 300
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+    SLACK_BOT_TOKEN: str = ""
+    SLACK_CHANNEL: str = ""
     
     # Strategy configuration
-    STRATEGY_TYPE = os.getenv("STRATEGY_TYPE", "baseline_rule")
+    STRATEGY_TYPE: str = "baseline_rule"
     
-    @classmethod
-    def validate(cls) -> bool:
-        """Validate essential configuration"""
-        if not cls.OPENBB_API_RETRIES > 0:
-            raise ValueError("OPENBB_API_RETRIES must be > 0")
-        if not (0 < cls.MAX_POSITION_SIZE < 1):
-            raise ValueError("MAX_POSITION_SIZE must be between 0 and 1")
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8", 
+        extra="ignore"
+    )
+
+    @model_validator(mode='after')
+    def validate_setup(self) -> '_Config':
+        # Ensure storage directory exists
+        self.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        return self
+
+    def load_config(self) -> Dict[str, Any]:
+        """Load YAML configuration, apply updates, and return agent config dict."""
+        yaml_path = self.BASE_DIR.parent / "config" / "finance.yaml"
+        yaml_config = {}
+        
+        if yaml_path.exists():
+            with open(yaml_path, 'r') as f:
+                yaml_config = yaml.safe_load(f) or {}
+                
+            # Update risk parameters from yaml if present
+            if "risk" in yaml_config:
+                risk = yaml_config["risk"]
+                if "max_position_size_pct" in risk:
+                    self.MAX_POSITION_SIZE = risk["max_position_size_pct"] / 100.0
+                if "max_exposure_pct" in risk:
+                    self.MAX_EXPOSURE = risk["max_exposure_pct"] / 100.0
+                if "max_daily_loss_pct" in risk:
+                    self.MAX_DAILY_LOSS = risk["max_daily_loss_pct"] / 100.0
+                if "max_drawdown_pct" in risk:
+                    self.MAX_DRAWDOWN = risk["max_drawdown_pct"] / 100.0
+                if "default_risk_budget_pct" in risk:
+                    self.DEFAULT_RISK_BUDGET = risk["default_risk_budget_pct"] / 100.0
+            
+            # Update portfolio parameters
+            if "portfolio" in yaml_config:
+                if "initial_cash" in yaml_config["portfolio"]:
+                    self.DEFAULT_INITIAL_CASH = float(yaml_config["portfolio"]["initial_cash"])
+                    
+        # Construct agent configurations based on yaml or env
+        # This matches what MainOrchestratorAgent expects in app.py
+        agent_configs = {
+            "telegram_agent": {
+                "telegram_bot_token": self.TELEGRAM_BOT_TOKEN,
+                "telegram_chat_id": self.TELEGRAM_CHAT_ID
+            },
+            "scheduler_agent": {},
+            "market_scanner": yaml_config.get("universe", {}),
+            "data_agent": yaml_config.get("data", {}),
+            "news_agent": {},
+            "analysis_agent": {},
+            "strategy_agent": yaml_config.get("strategy", {}),
+            "risk_agent": yaml_config.get("risk", {}),
+            "execution_agent": {},
+            "learning_agent": {},
+            "portfolio_agent": yaml_config.get("portfolio", {"initial_cash": self.DEFAULT_INITIAL_CASH})
+        }
+        
+        return agent_configs
+
+    def validate(self, *args, **kwargs) -> bool:
+        """Mock validate method for backwards compatibility."""
         return True
+
+Config = _Config()

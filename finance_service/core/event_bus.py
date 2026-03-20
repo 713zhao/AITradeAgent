@@ -154,8 +154,58 @@ async def get_event_bus() -> EventBus:
     return _global_event_bus
 
 
-class Events:\n    """Predefined event type constants"""\n    \n    # Data events\n    MARKET_SCANNED = "market_scanned" # New event for market scanner\n    DATA_FETCH_STARTED = "data_fetch_started"\n    DATA_FETCH_COMPLETE = "data_fetch_complete"\n    DATA_READY = "data_ready"                 # Symbol data ready for analysis (can be removed if DATA_FETCH_COMPLETE is sufficient)
-    NEWS_FETCH_COMPLETE = "news_fetch_complete" # New event for news agent\n    \n    # Analysis events\n    ANALYSIS_STARTED = "analysis_started"\n    ANALYSIS_COMPLETE = "analysis_complete"\n    ANALYSIS_FAILED = "analysis_failed" # Add failure event\n    \n    # Decision events (now Trade Proposals)\n    TRADE_PROPOSAL_GENERATED = "trade_proposal_generated" # Renamed from DECISION_MADE\n    # DECISION_MADE = "decision_made"           # Strategy produced decision\n    # DECISION_AWAITING_APPROVAL = "decision_awaiting_approval" # Replaced by APPROVAL_REQUIRED\n    \n    # Execution events\n    EXECUTION_STARTED = "execution_started"\n    TRADE_EXECUTED = "trade_executed" # Renamed from EXECUTION_COMPLETE\n    EXECUTION_FAILED = "execution_failed"\n    \n    # Portfolio events\n    PORTFOLIO_UPDATED = \"portfolio_updated\"\n    TRADE_OPENED = \"trade_opened\"\n    TRADE_CLOSED = \"trade_closed\"\n    TRADE_STOPPED = \"trade_stopped\"\n    \n    # Risk events\n    RISK_ALERT = \"risk_alert\"                # Position limit, drawdown, etc.\n    RISK_CHECK_COMPLETE = "risk_check_complete" # New event for risk agent completion\n    RISK_CHECK_FAILED = \"risk_check_failed\"\n    \n    # System events\n    SYSTEM_ERROR = \"system_error\"\n    CONFIG_RELOADED = \"config_reloaded\"\n    BACKTEST_STARTED = \"backtest_started\"\n    BACKTEST_COMPLETE = \"backtest_complete\"\n    \n    # Approval events\n    APPROVAL_REQUIRED = \"approval_required\" # Renamed from APPROVAL_REQUESTED\n    TRADE_APPROVED = \"trade_approved\" # Renamed from APPROVAL_APPROVED\n    APPROVAL_REJECTED = \"approval_rejected\"\n    APPROVAL_TIMEOUT = \"approval_timeout\"\n\n    # Learning events\n    LEARNING_COMPLETE = "learning_complete" # New event for learning agent\n    LEARNING_FEEDBACK = "learning_feedback" # Optional feedback event\n
+class Events:
+    """Predefined event type constants"""
+    
+    # Data events
+    MARKET_SCANNED = "market_scanned" # New event for market scanner
+    DATA_FETCH_STARTED = "data_fetch_started"
+    DATA_FETCH_COMPLETE = "data_fetch_complete"
+    DATA_READY = "data_ready"                 # Symbol data ready for analysis (can be removed if DATA_FETCH_COMPLETE is sufficient)
+    NEWS_FETCH_COMPLETE = "news_fetch_complete" # New event for news agent
+    
+    # Analysis events
+    ANALYSIS_STARTED = "analysis_started"
+    ANALYSIS_COMPLETE = "analysis_complete"
+    ANALYSIS_FAILED = "analysis_failed" # Add failure event
+    
+    # Decision events (now Trade Proposals)
+    TRADE_PROPOSAL_GENERATED = "trade_proposal_generated" # Renamed from DECISION_MADE
+    # DECISION_MADE = "decision_made"           # Strategy produced decision
+    # DECISION_AWAITING_APPROVAL = "decision_awaiting_approval" # Replaced by APPROVAL_REQUIRED
+    
+    # Execution events
+    EXECUTION_STARTED = "execution_started"
+    TRADE_EXECUTED = "trade_executed" # Renamed from EXECUTION_COMPLETE
+    EXECUTION_FAILED = "execution_failed"
+    
+    # Portfolio events
+    PORTFOLIO_UPDATED = "portfolio_updated"
+    TRADE_OPENED = "trade_opened"
+    TRADE_CLOSED = "trade_closed"
+    TRADE_STOPPED = "trade_stopped"
+    
+    # Risk events
+    RISK_ALERT = "risk_alert"                # Position limit, drawdown, etc.
+    RISK_CHECK_COMPLETE = "risk_check_complete" # New event for risk agent completion
+    RISK_CHECK_FAILED = "risk_check_failed"
+    
+    # System events
+    SYSTEM_ERROR = "system_error"
+    CONFIG_RELOADED = "config_reloaded"
+    BACKTEST_STARTED = "backtest_started"
+    BACKTEST_COMPLETE = "backtest_complete"
+    
+    # Approval events
+    APPROVAL_REQUIRED = "approval_required" # Renamed from APPROVAL_REQUESTED
+    TRADE_APPROVED = "trade_approved" # Renamed from APPROVAL_APPROVED
+    APPROVAL_REJECTED = "approval_rejected"
+    APPROVAL_TIMEOUT = "approval_timeout"
+
+    # Learning events
+    LEARNING_COMPLETE = "learning_complete" # New event for learning agent
+    LEARNING_FEEDBACK = "learning_feedback" # Optional feedback event
+
 # Global event bus instance (lazy-loaded singleton)
 # event_bus = get_event_bus() # This will now be awaited in main if needed
 

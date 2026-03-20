@@ -4,8 +4,8 @@ from typing import Dict, List, Optional, Any
 import pandas as pd
 from datetime import datetime, timedelta
 
-from .yfinance_provider import YfinanceProvider, RateLimitConfig
-from .data_cache import DataCache
+from finance_service.data.yfinance_provider import YfinanceProvider, RateLimitConfig
+from finance_service.data.data_cache import DataCache
 from finance_service.agents.market_scanner_agent import MarketScannerAgent
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.core.event_bus import get_event_bus, Event, Events

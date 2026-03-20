@@ -1,9 +1,9 @@
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.events import Event, Events, get_event_bus
+from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.indicators.models import IndicatorResult, IndicatorsSnapshot, SignalType
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class AnalysisAgent(Agent):
             message = f"Indicators calculated for {symbol} at {snapshot.timestamp.isoformat()}"
             payload = snapshot.model_dump() # Convert Pydantic model to dict
             
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.ANALYSIS_COMPLETE,
                 data=payload
             ))
@@ -74,7 +74,7 @@ class AnalysisAgent(Agent):
         except ValueError as e:
             logger.warning(f"AnalysisAgent failed for {symbol}: {e}")
             # Publish ANALYSIS_FAILED event
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.ANALYSIS_FAILED,
                 data={"symbol": symbol, "reason": str(e)}
             ))
@@ -86,7 +86,7 @@ class AnalysisAgent(Agent):
         except Exception as e:
             logger.error(f"Unexpected error in AnalysisAgent for {symbol}: {e}")
             # Publish ANALYSIS_FAILED event
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.ANALYSIS_FAILED,
                 data={"symbol": symbol, "reason": str(e)}
             ))

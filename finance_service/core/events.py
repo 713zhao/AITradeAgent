@@ -1,3 +1,4 @@
+import asyncio
 """
 Event management and types for brokers and trading systems
 
@@ -79,7 +80,7 @@ class EventManager:
         Args:
             event_bus: Optional EventBus instance. If None, uses global EventBus.
         """
-        self.event_bus = event_bus or get_event_bus()
+        self.event_bus = event_bus or asyncio.run(get_event_bus())
         self.logger = logging.getLogger(f"{__name__}.EventManager")
         self._event_handlers: Dict[str, List[Callable]] = {}
         self.logger.info("EventManager initialized")
@@ -120,7 +121,7 @@ class EventManager:
                 except Exception as e:
                     self.logger.error(f"Error in handler for {event_key}: {e}", exc_info=True)
     
-    def publish(self, event_type: EventType, data: Optional[Dict[str, Any]] = None, source: str = "trading_system") -> None:
+    async def publish(self, event_type: EventType, data: Optional[Dict[str, Any]] = None, source: str = "trading_system") -> None:
         """
         Publish an event.
         
@@ -138,10 +139,10 @@ class EventManager:
             timestamp=datetime.now()
         )
         
-        self.event_bus.publish(event)
+        await self.event_bus.publish(event)
         self.logger.debug(f"Event published: {event_key} from {source}")
     
-    def publish_dict(self, event_dict: Dict[str, Any]) -> None:
+    async def publish_dict(self, event_dict: Dict[str, Any]) -> None:
         """
         Publish an event from a dictionary.
         
@@ -153,7 +154,7 @@ class EventManager:
         source = event_dict.get('source', 'unknown')
         
         if event_type:
-            self.publish(event_type, data, source)
+            await self.publish(event_type, data, source)
     
     def get_event_history(self, event_type: Optional[EventType] = None, limit: int = 100) -> List[Event]:
         """

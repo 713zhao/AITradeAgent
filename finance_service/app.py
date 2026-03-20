@@ -349,8 +349,8 @@ async def propose_trade():
     # from other agents, but for direct API call, we'll mock them or pass minimal data.
     
     # Mock indicators and news reports for direct API call scenario
-    mock_indicators_report = AgentReport(agent_id="analysis_agent", status="success", message="Mock indicators", payload={"symbol": symbol, "timestamp": datetime.utcnow().isoformat(), "indicators": {}}))
-    mock_news_report = AgentReport(agent_id="news_agent", status="success", message="Mock news", payload={"symbol": symbol, "news_count": 0, "sentiment": {}, "catalysts": {}}))
+    mock_indicators_report = AgentReport(agent_id="analysis_agent", status="success", message="Mock indicators", payload={"symbol": symbol, "timestamp": datetime.utcnow().isoformat(), "indicators": {}})
+    mock_news_report = AgentReport(agent_id="news_agent", status="success", message="Mock news", payload={"symbol": symbol, "news_count": 0, "sentiment": {}, "catalysts": {}})
 
     strategy_report = await orchestrator.strategy_agent.run(indicators_report=mock_indicators_report, news_report=mock_news_report)
 

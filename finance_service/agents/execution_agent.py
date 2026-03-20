@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, Optional
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.events import Event, Events, get_event_bus
+from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class ExecutionAgent(Agent):
             message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
             payload = {"execution_result": execution_result}
 
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.TRADE_EXECUTED,
                 data=payload
             ))

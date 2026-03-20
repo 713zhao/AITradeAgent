@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.events import Event, Events, get_event_bus
+from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal, Position # Import Position for risk checks
 
 logger = logging.getLogger(__name__)
@@ -369,12 +369,12 @@ class RiskAgent(Agent):
 
             # Publish event based on approval required status
             if risk_check_result.approval_required:
-                self.event_bus.publish(Event(
+                await self.event_bus.publish(Event(
                     event_type=Events.APPROVAL_REQUIRED,
                     data=payload
                 ))
             else:
-                self.event_bus.publish(Event(
+                await self.event_bus.publish(Event(
                     event_type=Events.RISK_CHECK_COMPLETE,
                     data=payload
                 ))

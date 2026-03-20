@@ -5,7 +5,7 @@ from enum import Enum
 from dataclasses import dataclass
 
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.events import Event, Events, get_event_bus
+from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
 from finance_service.indicators.models import IndicatorsSnapshot, SignalType
 
@@ -199,7 +199,7 @@ class StrategyAgent(Agent):
                 message = f"{len(trade_proposals)} trade proposals generated."
                 payload = {"proposals": [p.model_dump() for p in trade_proposals]}
                 
-                self.event_bus.publish(Event(
+                await self.event_bus.publish(Event(
                     event_type=Events.TRADE_PROPOSAL_GENERATED,
                     data=payload
                 ))

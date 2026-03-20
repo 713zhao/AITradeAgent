@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, Optional, List
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.events import Event, Events, get_event_bus
+from finance_service.core.event_bus import Event, Events, get_event_bus
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class LearningAgent(Agent):
             message = f"Learning Agent processed trade for {execution_details['symbol']}. Status: {learning_output['trade_status']}"
             payload = {"learning_output": learning_output}
 
-            self.event_bus.publish(Event(
+            await self.event_bus.publish(Event(
                 event_type=Events.LEARNING_COMPLETE,
                 data=payload
             ))

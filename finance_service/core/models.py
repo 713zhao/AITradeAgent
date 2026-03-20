@@ -114,7 +114,7 @@ def signal_to_dict(signal: Signal) -> Dict[str, Any]:
     """Convert Signal to dictionary"""
     return asdict(signal)
 
-    def decision_to_dict(decision: Decision) -> Dict[str, Any]:
+def decision_to_dict(decision: Decision) -> Dict[str, Any]:
     """Convert Decision to dictionary"""
     return asdict(decision)
 
