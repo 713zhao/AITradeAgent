@@ -54,35 +54,30 @@ class IndicatorTools:
         return rsi[period:].tolist()
     
     @staticmethod
-    def calc_macd(prices: List[float], fast: int = 12, slow: int = 26, 
+    def calc_macd(prices: List[float], fast: int = 12, slow: int = 26,
                   signal: int = 9) -> Dict[str, List[float]]:
         """
         Calculate MACD (Moving Average Convergence Divergence)
-        
+
         Args:
             prices: List of closing prices
             fast: Fast EMA period (default 12)
             slow: Slow EMA period (default 26)
             signal: Signal line period (default 9)
-        
+
         Returns:
             dict with 'macd', 'signal', 'histogram'
         """
-        prices = np.array(prices, dtype=float)
-        
-        # Calculate EMAs
-        ema_fast = IndicatorTools._calc_ema(prices, fast)
-        ema_slow = IndicatorTools._calc_ema(prices, slow)
-        
-        # MACD line
+        # Use pandas for clean EMA alignment
+        prices_series = pd.Series(prices, dtype=float)
+
+        ema_fast = prices_series.ewm(span=fast, adjust=False).mean()
+        ema_slow = prices_series.ewm(span=slow, adjust=False).mean()
+
         macd_line = ema_fast - ema_slow
-        
-        # Signal line
-        signal_line = IndicatorTools._calc_ema(macd_line, signal)
-        
-        # Histogram
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
         histogram = macd_line - signal_line
-        
+
         return {
             "macd": macd_line.tolist(),
             "signal": signal_line.tolist(),

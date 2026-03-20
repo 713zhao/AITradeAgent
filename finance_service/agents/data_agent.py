@@ -1,4 +1,5 @@
 """Data Manager - Orchestrates data fetching, caching, and universe management"""
+import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 import pandas as pd
@@ -107,6 +108,8 @@ class DataAgent(Agent):
         )
 
         if df is not None and not df.empty:
+            # Normalize column names to lowercase for consistency with AnalysisAgent
+            df.columns = [col.lower() for col in df.columns]
             message = f"Successfully fetched data for {symbol}."
             payload = {"symbol": symbol, "interval": interval, "dataframe": df.to_dict()}
             if emit_events:
@@ -137,9 +140,16 @@ class DataAgent(Agent):
                 return cached_df
 
         logger.debug(f"[Cache Miss] Fetching {symbol} data from provider.")
-        df = await self.provider.fetch_ohlcv(
-            symbol, start_date=start_date, end_date=end_date, interval=interval
+        # fetch_ohlcv is synchronous; run in thread to avoid blocking
+        # It expects a list of symbols and returns dict {symbol: DataFrame}
+        result_dict = await asyncio.to_thread(
+            self.provider.fetch_ohlcv,
+            [symbol],
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
         )
+        df = result_dict.get(symbol)
 
         if df is not None and not df.empty:
             if use_cache:

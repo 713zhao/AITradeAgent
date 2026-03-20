@@ -106,6 +106,36 @@ class DataCache:
                 logger.error(f"Error reading cache: {e}")
                 return None
     
+    # Backward compatibility aliases
+    def retrieve(self, key: str) -> Optional[pd.DataFrame]:
+        """
+        Retrieve cached data using composite key.
+        Key format: "SYMBOL_INTERVAL_START_END" (dates ignored for lookup).
+        """
+        # Parse key: format "SYMBOL_INTERVAL_*"
+        parts = key.split('_')
+        if len(parts) >= 2:
+            symbol = parts[0]
+            interval = parts[1]
+        else:
+            symbol = key
+            interval = "1d"
+        return self.get(symbol, interval)
+    
+    def store(self, key: str, df: pd.DataFrame) -> bool:
+        """
+        Store data using composite key.
+        Key format: "SYMBOL_INTERVAL_START_END" (dates ignored for storage).
+        """
+        parts = key.split('_')
+        if len(parts) >= 2:
+            symbol = parts[0]
+            interval = parts[1]
+        else:
+            symbol = key
+            interval = "1d"
+        return self.set(symbol, df, interval)
+    
     def set(self, symbol: str, df: pd.DataFrame, interval: str = "1d") -> bool:
         """
         Cache OHLCV data

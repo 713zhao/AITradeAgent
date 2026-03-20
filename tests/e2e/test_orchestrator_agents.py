@@ -73,22 +73,22 @@ async def mocked_orchestrator():
         MockDataCache.return_value.store.return_value = True
 
         # Mock news agent
-        mock_news_agent_run.return_value = AgentReport(agent_id="news_agent", status="success", message="News fetched", payload={"symbol": "AAPL", "news_count": 1, "sentiment": {"AAPL": {"overall_sentiment": 0.8}}, "catalysts": {}}))
+        mock_news_agent_run.return_value = AgentReport(agent_id="news_agent", status="success", message="News fetched", payload={"symbol": "AAPL", "news_count": 1, "sentiment": {"AAPL": {"overall_sentiment": 0.8}}, "catalysts": {}})
 
         # Mock analysis agent
         mock_analysis_agent_run.return_value = AgentReport(agent_id="analysis_agent", status="success", message="Analysis complete", payload={"symbol": "AAPL", "timestamp": datetime.now().isoformat(), "indicators": {"rsi": {"value": 70.0}}})
 
         # Mock strategy agent
-        mock_strategy_agent_run.return_value = AgentReport(agent_id="strategy_agent", status="success", message="Trade proposal", payload={"proposals": [{"symbol": "AAPL", "action": "BUY", "confidence": 0.9}]}))
+        mock_strategy_agent_run.return_value = AgentReport(agent_id="strategy_agent", status="success", message="Trade proposal", payload={"proposals": [{"symbol": "AAPL", "action": "BUY", "confidence": 0.9}]})
 
         # Mock risk agent
-        mock_risk_agent_run.return_value = AgentReport(agent_id="risk_agent", status="success", message="Risk check complete", payload={"trade_proposal": {"symbol": "AAPL", "action": "BUY"}, "risk_check_result": {"approval_required": False}}))
+        mock_risk_agent_run.return_value = AgentReport(agent_id="risk_agent", status="success", message="Risk check complete", payload={"trade_proposal": {"symbol": "AAPL", "action": "BUY"}, "risk_check_result": {"approval_required": False}})
 
         # Mock execution agent
-        mock_execution_agent_run.return_value = AgentReport(agent_id="execution_agent", status="success", message="Trade executed", payload={"trade_id": "TRADE_123", "symbol": "AAPL", "side": "BUY", "quantity": 10, "price": 100.0}))
+        mock_execution_agent_run.return_value = AgentReport(agent_id="execution_agent", status="success", message="Trade executed", payload={"trade_id": "TRADE_123", "symbol": "AAPL", "side": "BUY", "quantity": 10, "price": 100.0})
 
         # Mock learning agent
-        mock_learning_agent_run.return_value = AgentReport(agent_id="learning_agent", status="success", message="Learning complete", payload={}))
+        mock_learning_agent_run.return_value = AgentReport(agent_id="learning_agent", status="success", message="Learning complete", payload={})
 
         # Mock portfolio agent
         mock_get_portfolio = MagicMock()

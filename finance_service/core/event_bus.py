@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import threading
 from typing import Callable, Dict, List, Any, Optional, Union
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -139,18 +140,18 @@ class EventBus:
 
 
 _global_event_bus: Optional[EventBus] = None
-_bus_lock = asyncio.Lock() # Use asyncio lock for singleton initialization
+_bus_lock = threading.Lock()  # Use threading lock for synchronous singleton access
 
-async def get_event_bus() -> EventBus:
-    """Get global event bus instance (singleton)"""
+def get_event_bus() -> EventBus:
+    """Get global event bus instance (singleton) - synchronous version"""
     global _global_event_bus
-    
+
     if _global_event_bus is None:
-        async with _bus_lock:
+        with _bus_lock:
             if _global_event_bus is None:
                 _global_event_bus = EventBus()
                 logger.info("Global EventBus created")
-    
+
     return _global_event_bus
 
 
@@ -207,7 +208,8 @@ class Events:
     LEARNING_FEEDBACK = "learning_feedback" # Optional feedback event
 
 # Global event bus instance (lazy-loaded singleton)
-# event_bus = get_event_bus() # This will now be awaited in main if needed
+# For backward compatibility, provide a direct reference
+event_bus = get_event_bus()
 
 
 

@@ -29,11 +29,12 @@ class TestIndicators:
     def test_sma_calculation(self):
         """Test SMA calculation"""
         prices = list(range(100, 120))
-        
+
         sma = IndicatorTools.calc_sma(prices, 5)
-        
+
         assert len(sma) == len(prices) - 5 + 1
-        assert sma[-1] == pytest.approx(118, abs=0.1)
+        # Last 5 values: 115, 116, 117, 118, 119 -> SMA = (115+116+117+118+119)/5 = 117
+        assert sma[-1] == pytest.approx(117, abs=0.1)
     
     def test_atr_calculation(self):
         """Test ATR calculation"""

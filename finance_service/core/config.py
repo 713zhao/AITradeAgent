@@ -1,112 +1,81 @@
+"""Configuration management for Finance Agent
+
+This module provides the Config class with type-safe, validated settings
+backed by Pydantic. All configuration values are loaded from environment
+variables with sensible defaults and validation.
+"""
 import os
+from typing import Dict, Any, Optional
 from pathlib import Path
-from typing import Optional, List, Dict, Any
-import yaml
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, model_validator
 
-class _Config(BaseSettings):
-    """Central configuration for Finance Agent"""
-    
-    # Paths
-    BASE_DIR: Path = Path(__file__).parent.parent
-    STORAGE_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "storage")
-    CACHE_FILE: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "storage" / "cache.sqlite")
-    RUNS_FILE: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "storage" / "runs.sqlite")
-    
+# Import validated Pydantic settings
+from .pydantic_config import settings as _pydantic_settings
+
+
+class Config:
+    """Central configuration for Finance Agent
+
+    Class attributes are populated from validated Pydantic settings.
+    All values have sensible defaults and are validated at startup.
+    """
+
+    # Paths - from validated settings
+    BASE_DIR = _pydantic_settings.BASE_DIR
+    STORAGE_DIR = _pydantic_settings.STORAGE_DIR
+    CACHE_FILE = _pydantic_settings.CACHE_FILE
+    RUNS_FILE = _pydantic_settings.RUNS_FILE
+
     # Data configuration
-    DEFAULT_LOOKBACK_DAYS: int = 252
-    CACHE_TTL_SECONDS: int = 3600
-    
-    # Risk configuration (defaults)
-    MAX_POSITION_SIZE: float = Field(0.20, gt=0, le=1.0)
-    MAX_EXPOSURE: float = Field(0.90, gt=0, le=1.0)
-    MAX_DAILY_LOSS: float = Field(0.03, gt=0, lt=1.0)
-    MAX_DRAWDOWN: float = Field(0.10, gt=0, lt=1.0)
-    DEFAULT_RISK_BUDGET: float = 0.01
-    
+    DEFAULT_LOOKBACK_DAYS = _pydantic_settings.DEFAULT_LOOKBACK_DAYS
+    CACHE_TTL_SECONDS = _pydantic_settings.CACHE_TTL_SECONDS
+
+    # Risk configuration
+    MAX_POSITION_SIZE = _pydantic_settings.MAX_POSITION_SIZE
+    MAX_EXPOSURE = _pydantic_settings.MAX_EXPOSURE
+    MAX_DAILY_LOSS = _pydantic_settings.MAX_DAILY_LOSS
+    MAX_DRAWDOWN = _pydantic_settings.MAX_DRAWDOWN
+    DEFAULT_RISK_BUDGET = _pydantic_settings.DEFAULT_RISK_BUDGET
+
     # Trading configuration
-    WHITELIST_SYMBOLS: Optional[List[str]] = None
-    DEFAULT_INITIAL_CASH: float = 100000.0
-    TRADE_SLIPPAGE: float = 0.0005
-    
+    WHITELIST_SYMBOLS = _pydantic_settings.WHITELIST_SYMBOLS
+    DEFAULT_INITIAL_CASH = _pydantic_settings.DEFAULT_INITIAL_CASH
+    TRADE_SLIPPAGE = _pydantic_settings.TRADE_SLIPPAGE
+
     # OpenBB configuration
-    OPENBB_API_RETRIES: int = Field(3, gt=0)
-    OPENBB_TIMEOUT: int = 30
-    
+    OPENBB_API_RETRIES = _pydantic_settings.OPENBB_API_RETRIES
+    OPENBB_TIMEOUT = _pydantic_settings.OPENBB_TIMEOUT
+
     # Approval configuration
-    APPROVAL_TIMEOUT: int = 300
-    TELEGRAM_BOT_TOKEN: str = ""
-    TELEGRAM_CHAT_ID: str = ""
-    SLACK_BOT_TOKEN: str = ""
-    SLACK_CHANNEL: str = ""
-    
+    APPROVAL_TIMEOUT = _pydantic_settings.APPROVAL_TIMEOUT
+    TELEGRAM_BOT_TOKEN = _pydantic_settings.TELEGRAM_BOT_TOKEN
+    TELEGRAM_CHAT_ID = _pydantic_settings.TELEGRAM_CHAT_ID
+    SLACK_BOT_TOKEN = _pydantic_settings.SLACK_BOT_TOKEN
+    SLACK_CHANNEL = _pydantic_settings.SLACK_CHANNEL
+
     # Strategy configuration
-    STRATEGY_TYPE: str = "baseline_rule"
-    
-    model_config = SettingsConfigDict(
-        env_file=".env", 
-        env_file_encoding="utf-8", 
-        extra="ignore"
-    )
+    STRATEGY_TYPE = _pydantic_settings.STRATEGY_TYPE
 
-    @model_validator(mode='after')
-    def validate_setup(self) -> '_Config':
-        # Ensure storage directory exists
-        self.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-        return self
+    @classmethod
+    def validate(cls) -> bool:
+        """Validate essential configuration.
 
-    def load_config(self) -> Dict[str, Any]:
-        """Load YAML configuration, apply updates, and return agent config dict."""
-        yaml_path = self.BASE_DIR.parent / "config" / "finance.yaml"
-        yaml_config = {}
-        
-        if yaml_path.exists():
-            with open(yaml_path, 'r') as f:
-                yaml_config = yaml.safe_load(f) or {}
-                
-            # Update risk parameters from yaml if present
-            if "risk" in yaml_config:
-                risk = yaml_config["risk"]
-                if "max_position_size_pct" in risk:
-                    self.MAX_POSITION_SIZE = risk["max_position_size_pct"] / 100.0
-                if "max_exposure_pct" in risk:
-                    self.MAX_EXPOSURE = risk["max_exposure_pct"] / 100.0
-                if "max_daily_loss_pct" in risk:
-                    self.MAX_DAILY_LOSS = risk["max_daily_loss_pct"] / 100.0
-                if "max_drawdown_pct" in risk:
-                    self.MAX_DRAWDOWN = risk["max_drawdown_pct"] / 100.0
-                if "default_risk_budget_pct" in risk:
-                    self.DEFAULT_RISK_BUDGET = risk["default_risk_budget_pct"] / 100.0
-            
-            # Update portfolio parameters
-            if "portfolio" in yaml_config:
-                if "initial_cash" in yaml_config["portfolio"]:
-                    self.DEFAULT_INITIAL_CASH = float(yaml_config["portfolio"]["initial_cash"])
-                    
-        # Construct agent configurations based on yaml or env
-        # This matches what MainOrchestratorAgent expects in app.py
-        agent_configs = {
-            "telegram_agent": {
-                "telegram_bot_token": self.TELEGRAM_BOT_TOKEN,
-                "telegram_chat_id": self.TELEGRAM_CHAT_ID
-            },
-            "scheduler_agent": {},
-            "market_scanner": yaml_config.get("universe", {}),
-            "data_agent": yaml_config.get("data", {}),
-            "news_agent": {},
-            "analysis_agent": {},
-            "strategy_agent": yaml_config.get("strategy", {}),
-            "risk_agent": yaml_config.get("risk", {}),
-            "execution_agent": {},
-            "learning_agent": {},
-            "portfolio_agent": yaml_config.get("portfolio", {"initial_cash": self.DEFAULT_INITIAL_CASH})
-        }
-        
-        return agent_configs
-
-    def validate(self, *args, **kwargs) -> bool:
-        """Mock validate method for backwards compatibility."""
+        Note: Validation is already performed by Pydantic during settings load.
+        This method exists for backward compatibility and always returns True
+        if the module imported successfully (meaning config is valid).
+        """
+        # If we got here, Pydantic validation passed
         return True
 
-Config = _Config()
+    @classmethod
+    def load_config(cls) -> Dict[str, Any]:
+        """Load configuration as a dictionary of all uppercase class attributes"""
+        return _pydantic_settings.to_dict()
+
+    @classmethod
+    def ensure_storage_dirs(cls) -> None:
+        """Ensure storage directories exist"""
+        cls.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# Ensure storage directory exists on import
+Config.ensure_storage_dirs()

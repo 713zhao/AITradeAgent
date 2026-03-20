@@ -3,11 +3,12 @@ from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
+import pandas as pd
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
-from finance_service.indicators.models import IndicatorsSnapshot, SignalType
+from finance_service.indicators.models import IndicatorsSnapshot, SignalType, IndicatorResult
 
 logger = logging.getLogger(__name__)
 
@@ -180,11 +181,91 @@ class StrategyAgent(Agent):
     def goal(self) -> str:
         return "Generate actionable trade proposals by analyzing market indicators and news sentiment."
 
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
+    def __init__(self, config_engine):
+        self.config_engine = config_engine
         self.event_bus = get_event_bus()
-        self.rule_strategy = RuleStrategy(config.get("rules", [])) # Initialize RuleStrategy
-        logger.info(f"StrategyAgent initialized with config: {self.config}")
+        # Load rules from YAML config using correct pattern
+        rules_config = self._load_rules_from_config()
+        self.rule_strategy = RuleStrategy(rules_config)
+        logger.info(f"StrategyAgent initialized with {len(rules_config)} rules")
+
+    def _load_rules_from_config(self) -> List[Dict]:
+        """Load trading rules from YAML configuration."""
+        rules = []
+
+        # Get strategy type and rules section
+        strategy_type = self.config_engine.get("finance", "strategy/type", default="baseline_rule")
+        rules_enabled = self.config_engine.get("finance", "strategy/rules", default={})
+
+        # For backward compatibility with boolean flag format, convert to rule dicts
+        if isinstance(rules_enabled, dict):
+            # Map of flag names to rule definitions
+            rule_map = {
+                'rsi_entry_oversold': {
+                    'name': 'rsi_oversold_entry',
+                    'type': 'entry',
+                    'indicator': 'rsi',
+                    'condition': 'less_than',
+                    'value': self.config_engine.get("finance", "strategy/rules/rsi_entry_oversold_threshold", default=35)
+                },
+                'macd_crossover': {
+                    'name': 'macd_bullish_entry',
+                    'type': 'entry',
+                    'indicator': 'macd',
+                    'condition': 'greater_than',
+                    'value': 0
+                },
+                'price_above_sma': {
+                    'name': 'price_above_sma20_entry',
+                    'type': 'entry',
+                    'indicator': 'sma20',
+                    'condition': 'greater_than',
+                    'value': 0,
+                    'compare_to_price': True
+                },
+                'rsi_exit_overbought': {
+                    'name': 'rsi_overbought_exit',
+                    'type': 'exit',
+                    'indicator': 'rsi',
+                    'condition': 'greater_than',
+                    'value': self.config_engine.get("finance", "strategy/rules/rsi_exit_overbought_threshold", default=70)
+                },
+                'macd_signal_exit': {
+                    'name': 'macd_signal_cross_exit',
+                    'type': 'exit',
+                    'indicator': 'macd_histogram',
+                    'condition': 'less_than',
+                    'value': 0
+                }
+            }
+
+            # Build rules from enabled flags
+            for flag_name, rule_def in rule_map.items():
+                if rules_enabled.get(flag_name, False):
+                    # Create a copy to avoid modifying the template
+                    rule = rule_def.copy()
+                    rule['enabled'] = True
+                    rules.append(rule)
+                    logger.info(f"Enabled rule: {rule['name']} ({rule['type']})")
+        else:
+            # If rules_enabled is already a list of rule dicts (new format), use directly
+            if isinstance(rules_enabled, list):
+                rules = rules_enabled
+            else:
+                logger.warning(f"Unexpected rules config type: {type(rules_enabled)}")
+
+        # Add always-on exit rules
+        rules.append({
+            'name': 'always_exit_on_stop',
+            'type': 'exit',
+            'indicator': 'always',
+            'condition': 'equals',
+            'value': 0,
+            'enabled': False  # Disabled by default, use stop loss
+        })
+
+        logger.info(f"Loaded {len(rules)} rules from config")
+        return rules
 
     async def run(self, indicators_report: AgentReport, news_report: AgentReport) -> Optional[AgentReport]:
         """
@@ -228,7 +309,36 @@ class StrategyAgent(Agent):
         proposals: List[TradeProposal] = []
 
         if indicators_report and indicators_report.status == "success":
-            indicators_snapshot = IndicatorsSnapshot(**indicators_report.payload)
+            payload = indicators_report.payload.copy()  # Don't mutate original
+            # Remove computed 'signals' field if present (IndicatorsSnapshot doesn't accept it)
+            payload.pop('signals', None)
+
+            # Reconstruct IndicatorResult objects from dicts
+            indicators_dict = payload.get('indicators', {})
+            reconstructed_indicators = {}
+            for name, ind_data in indicators_dict.items():
+                if isinstance(ind_data, dict):
+                    # Convert dict back to IndicatorResult
+                    # Convert signal string to SignalType enum
+                    signal_str = ind_data.get('signal', 'HOLD')
+                    try:
+                        signal_enum = SignalType[signal_str] if signal_str in SignalType.__members__ else SignalType(signal_str)
+                    except:
+                        signal_enum = SignalType.HOLD
+                    timestamp = pd.Timestamp(ind_data.get('timestamp')) if ind_data.get('timestamp') else pd.Timestamp.now()
+                    reconstructed_indicators[name] = IndicatorResult(
+                        name=ind_data.get('name', name),
+                        value=float(ind_data.get('value', 0)),
+                        signal=signal_enum,
+                        timestamp=timestamp,
+                        metadata=ind_data.get('metadata', {})
+                    )
+                else:
+                    # Already an IndicatorResult object
+                    reconstructed_indicators[name] = ind_data
+            payload['indicators'] = reconstructed_indicators
+
+            indicators_snapshot = IndicatorsSnapshot(**payload)
             symbol = indicators_snapshot.symbol
 
             should_buy, buy_confidence, entry_rules = self.rule_strategy.evaluate_entry(indicators_snapshot)

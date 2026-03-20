@@ -718,3 +718,101 @@ if __name__ == "__main__":
         app.run(host="0.0.0.0", port=5000, debug=True)
 
     asyncio.run(main())
+
+
+# ============================================================================
+# Simple synchronous API for direct programmatic access (testing/demos)
+# ============================================================================
+
+class SimpleFinanceService:
+    """Simple synchronous wrapper for analysis and portfolio operations."""
+
+    def __init__(self):
+        self._config_engine = YAMLConfigEngine()
+        self._orchestrator = None
+
+    async def _get_orchestrator(self):
+        if self._orchestrator is None:
+            self._orchestrator = await initialize_orchestrator()
+        return self._orchestrator
+
+    def analyze(self, symbol: str) -> dict:
+        """
+        Run full analysis for a symbol and return decision.
+
+        Returns:
+            dict with keys: symbol, decision, confidence, required_approval,
+                           position (with action_qty, action_value), risk (risk_level, max_loss_estimate, stop_loss, take_profit)
+        """
+        try:
+            # Run async analysis synchronously
+            result = asyncio.run(self._analyze_async(symbol))
+            return result
+        except Exception as e:
+            logger.error(f"Analysis failed for {symbol}: {e}", exc_info=True)
+            return {"error": str(e), "symbol": symbol}
+
+    async def _analyze_async(self, symbol: str) -> dict:
+        orchestrator = await self._get_orchestrator()
+
+        # 1. Data fetch
+        data_report = await orchestrator.data_agent.run(symbol=symbol, interval="1d", emit_events=False)
+        if data_report.status != "success":
+            return {"error": data_report.message, "symbol": symbol}
+
+        # 2. Analysis
+        analysis_payload = data_report.payload.get("dataframe")
+        if not analysis_payload:
+            return {"error": "No data returned from data agent", "symbol": symbol}
+        analysis_report = await orchestrator.analysis_agent.run(data_payload=analysis_payload, symbol=symbol)
+        if analysis_report.status != "success":
+            return {"error": analysis_report.message, "symbol": symbol}
+
+        # 3. Strategy
+        strategy_report = await orchestrator.strategy_agent.run(analysis_report.payload, symbol=symbol)
+        if strategy_report.status != "success":
+            return {"error": strategy_report.message, "symbol": symbol}
+
+        # 4. Risk
+        risk_report = await orchestrator.risk_agent.run(strategy_report.payload, symbol=symbol)
+        if risk_report.status != "success":
+            return {"error": risk_report.message, "symbol": symbol}
+
+        # Build result
+        decision = risk_report.payload.get("decision", "HOLD")
+        confidence = risk_report.payload.get("confidence", 0.0)
+        requires_approval = risk_report.payload.get("requires_approval", False)
+
+        result = {
+            "symbol": symbol,
+            "decision": decision,
+            "confidence": confidence,
+            "required_approval": requires_approval,
+        }
+
+        # Add position sizing if available
+        if "position" in risk_report.payload:
+            result["position"] = risk_report.payload["position"]
+        if "risk" in risk_report.payload:
+            result["risk"] = risk_report.payload["risk"]
+
+        return result
+
+    def portfolio_state(self) -> dict:
+        """Get current portfolio state."""
+        try:
+            return asyncio.run(self._portfolio_state_async())
+        except Exception as e:
+            logger.error(f"Portfolio state error: {e}")
+            return {"error": str(e)}
+
+    async def _portfolio_state_async(self) -> dict:
+        orchestrator = await self._get_orchestrator()
+        report = await orchestrator.portfolio_agent.run(event_type=Events.GET_PORTFOLIO_STATE, payload={})
+        if report.status == "success":
+            return report.payload
+        else:
+            return {"error": report.message}
+
+# Create singleton for import
+finance_service = SimpleFinanceService()

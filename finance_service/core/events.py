@@ -1,4 +1,3 @@
-import asyncio
 """
 Event management and types for brokers and trading systems
 
@@ -76,11 +75,11 @@ class EventManager:
     def __init__(self, event_bus: Optional[EventBus] = None):
         """
         Initialize EventManager.
-        
+
         Args:
             event_bus: Optional EventBus instance. If None, uses global EventBus.
         """
-        self.event_bus = event_bus or asyncio.run(get_event_bus())
+        self.event_bus = event_bus or get_event_bus()
         self.logger = logging.getLogger(f"{__name__}.EventManager")
         self._event_handlers: Dict[str, List[Callable]] = {}
         self.logger.info("EventManager initialized")
