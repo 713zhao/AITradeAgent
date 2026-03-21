@@ -202,6 +202,8 @@ def main():
         "total_trades": latest["total_trades"],
         "final_value": latest["final_equity"],
         "run_date": latest.get("created_at") or f"{latest['start_date']} to {latest['end_date']}",
+        "start_date": latest["start_date"],
+        "end_date": latest["end_date"],
         "symbols_count": len(latest.get("symbols", [])) if isinstance(latest.get("symbols"), list) else 20,
         "strategy": latest.get("run_name", "Unknown")
     }

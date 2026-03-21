@@ -43,11 +43,13 @@ class BacktestRunner:
         initial_capital: float = 100000.0,
         commission: float = 0.001,  # 0.1% per trade
         slippage: float = 0.001,    # 0.1% slippage
+        strategy_name: Optional[str] = None,
     ):
         self.config_engine = config_engine
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
+        self.strategy_name = strategy_name
         
         self.data_agent = DataAgent(config_engine)
         # Build extended periods dict to include SMA10 and SMA30 for crossover
@@ -102,6 +104,17 @@ class BacktestRunner:
                 'risk_budget_pct': 1.0,
                 'confidence_threshold': 0.5
             }
+        
+        # If specific strategy requested, filter to only that one
+        if self.strategy_name:
+            if self.strategy_name in self.strategies:
+                self.strategies = {self.strategy_name: self.strategies[self.strategy_name]}
+                logger.info(f"Using only strategy: {self.strategy_name}")
+            else:
+                available = ", ".join(self.strategies.keys())
+                raise ValueError(f"Strategy '{self.strategy_name}' not found. Available: {available}")
+        
+        self.selected_strategy_name = self.strategy_name if self.strategy_name else (next(iter(self.strategies.keys())) if self.strategies else "default")
         
         self.repository = TradeRepository(use_db=False)
         self.current_cash = initial_capital
@@ -367,6 +380,13 @@ class BacktestRunner:
                         should_sell = True
                         exit_strategy = "stop_loss"
                         exit_rules_triggered = [f"stop_loss@2xATR (stop={stop_price:.2f}, price={current_price:.2f})"]
+                    # Check take-profit (3x ATR above entry) - only if not already selling
+                    if not should_sell:
+                        take_profit_price = pos.avg_cost + (atr_value * 3)
+                        if current_price >= take_profit_price:
+                            should_sell = True
+                            exit_strategy = "take_profit"
+                            exit_rules_triggered = [f"take_profit@3xATR (tp={take_profit_price:.2f}, price={current_price:.2f})"]
                 
                 # Check strategy exit rules if not already selling
                 if not should_sell:
@@ -409,7 +429,7 @@ class BacktestRunner:
         
         # Final metrics
         metrics = self._calculate_metrics()
-        await self._save_results_to_db(metrics, start_date, end_date, symbols)
+        await self._save_results_to_db(metrics, start, end, symbols)
         
         return {"metrics": metrics, "equity_curve": self.equity_curve, "trade_log": self.trade_log}
     
@@ -449,6 +469,7 @@ class BacktestRunner:
     async def _save_results_to_db(self, metrics: Dict[str, Any], start: datetime, end: datetime, symbols: List[str]):
         db = get_backtest_db()
         cursor = db.connection.cursor()
+        run_name = f"{self.selected_strategy_name} {start.date()} to {end.date()}"
         cursor.execute('''
             INSERT INTO backtest_runs (
                 run_name, start_date, end_date, initial_capital, final_equity,
@@ -457,7 +478,7 @@ class BacktestRunner:
                 winning_trades, losing_trades, avg_win, avg_loss, config_json, results_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            f"RSI+MACD {start.date()} to {end.date()}",
+            run_name,
             start, end,
             metrics.get("initial_capital", self.initial_capital),
             metrics.get("final_value", 0.0),
@@ -470,7 +491,7 @@ class BacktestRunner:
             0.0,  # profit_factor - placeholder
             metrics.get("total_trades", 0),
             0, 0, 0.0, 0.0,  # avg win/loss placeholders
-            json.dumps({"symbols": symbols, "strategy": "RSI+MACD", "commission": self.commission, "slippage": self.slippage}),
+            json.dumps({"symbols": symbols, "strategy": self.selected_strategy_name, "commission": self.commission, "slippage": self.slippage}),
             json.dumps({"metrics": metrics, "trade_count": len(self.trade_log)})
         ))
         db.connection.commit()
@@ -485,6 +506,7 @@ async def main():
     parser.add_argument("--capital", type=float, default=100000.0)
     parser.add_argument("--output", type=str)
     parser.add_argument("--config-dir", type=str, default="config")
+    parser.add_argument("--strategy", type=str, help="Strategy name from config under finance/strategies. If not set, uses first defined.")
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -496,7 +518,7 @@ async def main():
     if not config.validate():
         logger.error("Config validation failed"); sys.exit(1)
     
-    runner = BacktestRunner(config, initial_capital=args.capital)
+    runner = BacktestRunner(config, initial_capital=args.capital, strategy_name=args.strategy)
     
     try:
         results = await runner.run_backtest(args.symbols, start, end, progress_callback=lambda msg: logger.info(f"Progress: {msg}"))

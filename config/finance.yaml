@@ -186,27 +186,22 @@ scheduler:
 # ========================
 # These strategies are used by the backtest runner. Live trading uses the 'strategy' section above.
 strategies:
-  rsi_macd_trend:
+  # Test 1: momentum_trend (RSI>50 + MACD>0)
+  momentum_trend:
     allocation: 1.0
     risk_budget_pct: 1.5
-    confidence_threshold: 0.6  # Requires both entry rules (3-way AND) to get 100% confidence; however, RuleStrategy counts triggered/total, so threshold 0.6 allows 2/3 triggers
+    confidence_threshold: 0.7
     entry_rules:
-      - name: rsi_oversold_entry
+      - name: rsi_bullish
         type: entry
         indicator: rsi
-        condition: less_than
-        value: 45.0
+        condition: greater_than
+        value: 50.0
       - name: macd_bullish_entry
         type: entry
         indicator: macd
         condition: greater_than
         value: 0.0
-      - name: price_above_sma200
-        type: entry
-        indicator: 'sma_200'
-        condition: greater_than
-        value: 0.0
-        compare_to_price: true
     exit_rules:
       - name: rsi_overbought_exit
         type: exit
@@ -218,3 +213,71 @@ strategies:
         indicator: macd
         condition: less_than
         value: 0.0
+
+  # Test 2: relaxed RSI threshold (RSI<50 + MACD>0 + SMA200)
+  # rsi_macd_trend_relaxed:
+  #   allocation: 1.0
+  #   risk_budget_pct: 1.5
+  #   confidence_threshold: 0.6
+  #   entry_rules:
+  #     - name: rsi_oversold_relaxed
+  #       type: entry
+  #       indicator: rsi
+  #       condition: less_than
+  #       value: 50.0
+  #     - name: macd_bullish_entry
+  #       type: entry
+  #       indicator: macd
+  #       condition: greater_than
+  #       value: 0.0
+  #     - name: price_above_sma200
+  #       type: entry
+  #       indicator: 'sma_200'
+  #       condition: greater_than
+  #       value: 0.0
+  #       compare_to_price: true
+  #   exit_rules:
+  #     - name: rsi_overbought_exit
+  #       type: exit
+  #       indicator: rsi
+  #       condition: greater_than
+  #       value: 65.0
+  #     - name: macd_bearish_exit
+  #       type: exit
+  #       indicator: macd
+  #       condition: less_than
+  #       value: 0.0
+
+  # Test 3: baseline rsi_macd_trend (RSI<45 + MACD>0 + SMA200) – already tested
+  # rsi_macd_trend:
+  #   allocation: 1.0
+  #   risk_budget_pct: 1.5
+  #   confidence_threshold: 0.6
+  #   entry_rules:
+  #     - name: rsi_oversold_entry
+  #       type: entry
+  #       indicator: rsi
+  #       condition: less_than
+  #       value: 45.0
+  #     - name: macd_bullish_entry
+  #       type: entry
+  #       indicator: macd
+  #       condition: greater_than
+  #       value: 0.0
+  #     - name: price_above_sma200
+  #       type: entry
+  #       indicator: 'sma_200'
+  #       condition: greater_than
+  #       value: 0.0
+  #       compare_to_price: true
+  #   exit_rules:
+  #     - name: rsi_overbought_exit
+  #       type: exit
+  #       indicator: rsi
+  #       condition: greater_than
+  #       value: 65.0
+  #     - name: macd_bearish_exit
+  #       type: exit
+  #       indicator: macd
+  #       condition: less_than
+  #       value: 0.0
