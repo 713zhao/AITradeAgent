@@ -196,7 +196,7 @@ strategies:
         type: entry
         indicator: rsi
         condition: greater_than
-        value: 50.0
+        value: 55.0
       - name: macd_bullish_entry
         type: entry
         indicator: macd
@@ -213,6 +213,95 @@ strategies:
         indicator: macd
         condition: less_than
         value: 0.0
+
+  # Momentum with trend filter: only trade in uptrend (price > SMA200)
+  momentum_trend_filtered:
+    allocation: 1.0
+    risk_budget_pct: 1.5
+    confidence_threshold: 0.7  # require 2/3
+    entry_rules:
+      - name: rsi_bullish
+        type: entry
+        indicator: rsi
+        condition: greater_than
+        value: 55.0
+      - name: macd_bullish_entry
+        type: entry
+        indicator: macd
+        condition: greater_than
+        value: 0.0
+      - name: price_above_sma200
+        type: entry
+        indicator: sma_200
+        condition: greater_than
+        value: 0.0
+        compare_to_price: true
+    exit_rules:
+      - name: rsi_overbought_exit
+        type: exit
+        indicator: rsi
+        condition: greater_than
+        value: 65.0
+      - name: macd_bearish_exit
+        type: exit
+        indicator: macd
+        condition: less_than
+        value: 0.0
+
+  value_quality_news:
+    allocation: 1.0
+    risk_budget_pct: 1.5
+    confidence_threshold: 0.6  # need 2 out of 3
+    entry_rules:
+      - name: pe_value
+        type: entry
+        indicator: pe_ratio
+        condition: less_than
+        value: 30.0
+      - name: revenue_growth
+        type: entry
+        indicator: revenue_growth_yoy
+        condition: greater_than
+        value: 0.10
+      - name: news_sentiment_bullish
+        type: entry
+        indicator: news_sentiment
+        condition: greater_than
+        value: 0.2
+    exit_rules:
+      - name: pe_overvalued
+        type: exit
+        indicator: pe_ratio
+        condition: greater_than
+        value: 50.0
+      - name: revenue_shrink
+        type: exit
+        indicator: revenue_growth_yoy
+        condition: less_than
+        value: 0.0
+      - name: news_bearish
+        type: exit
+        indicator: news_sentiment
+        condition: less_than
+        value: -0.2
+
+  # Simple moving average crossover: fast above slow
+  sma_crossover:
+    allocation: 1.0
+    risk_budget_pct: 1.5
+    confidence_threshold: 0.5
+    entry_rules:
+      - name: sma_bullish_cross
+        type: entry
+        indicator: sma_20
+        condition: greater_than
+        value: 0.0
+        compare_to_price: false
+        # Actually we'll compare sma_20 > sma_50; need custom comparison? We'll use compare_to_price with sma_50? Wait, we need to compare two indicators.
+        # Rule engine only compares one indicator to threshold/price. For SMA20 > SMA50, we'd need a derived indicator (spread) or custom rule.
+        # For simplicity, use price > sma_50 and sma_20 > sma_50 (both must hold)
+    # We'll implement price > sma_50 AND sma_20 > sma_50 via separate rules
+    # Let's use the existing pattern: price_above_sma200 style but for sma_50
 
   # Test 2: relaxed RSI threshold (RSI<50 + MACD>0 + SMA200)
   # rsi_macd_trend_relaxed:

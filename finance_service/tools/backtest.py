@@ -16,7 +16,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import pandas as pd
 import sys
 
@@ -429,7 +429,7 @@ class BacktestRunner:
         
         # Final metrics
         metrics = self._calculate_metrics()
-        await self._save_results_to_db(metrics, start, end, symbols)
+        await self._save_results_to_db(metrics, start_date, end_date, symbols)
         
         return {"metrics": metrics, "equity_curve": self.equity_curve, "trade_log": self.trade_log}
     
