@@ -93,7 +93,7 @@ def analyze_performance(metrics):
     }
 
 def log_progress(analysis):
-    """Append analysis to progress log."""
+    """Append analysis to progress log and write latest summary to file."""
     PROGRESS_LOG.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     with open(PROGRESS_LOG, "a") as f:
@@ -108,22 +108,70 @@ def log_progress(analysis):
             for r in analysis["recommendations"]:
                 f.write(f"- {r}\n")
         f.write("\n---\n")
+    
+    # Also write latest summary to a simple file for quick reading
+    latest_summary = f"""
+📊 AiTradeAgent Progress Report ({timestamp})
+Strategy: {analysis['metrics'].get('strategy', 'Unknown')}
+Period: {analysis['metrics'].get('start_date', 'N/A')} to {analysis['metrics'].get('end_date', 'N/A')}
+Symbols: {analysis['metrics'].get('symbols_count', 'N/A')}
+
+CAGR: {analysis['metrics'].get('cagr_pct', 0):.2f}%
+Sharpe: {analysis['metrics'].get('sharpe_ratio', 0):.2f}
+Max DD: {analysis['metrics'].get('max_drawdown_pct', 0):.2f}%
+Trades: {analysis['metrics'].get('total_trades', 0):,}
+Final Value: ${analysis['metrics'].get('final_value', 0):,.2f}
+
+Overall: {analysis['overall']}
+
+Assessment:
+""".strip() + "\n" + "\n".join(analysis["status"])
+    if analysis["recommendations"]:
+        latest_summary += "\n\nRecommended Actions:\n" + "\n".join(f"  • {r}" for r in analysis["recommendations"])
+    
+    with open(WORKSPACE / "memory" / "latest_progress.txt", "w") as f:
+        f.write(latest_summary)
 
 def send_telegram(message: str):
-    """Send notification via OpenClaw message tool."""
+    """Send notification via OpenClaw CLI."""
     try:
-        # Use OpenClaw's message tool through the agent framework
-        # Since we're in a script, we simulate by writing to a file that can be picked up
-        # But in the context of a running agent, we can call message() directly
-        # For now, print clearly and rely on user seeing this output in cron logs/monitor
+        import subprocess
+        # Use openclaw CLI to send message to Telegram
+        result = subprocess.run(
+            ['openclaw', 'message', 'send', '-t', '8383381149', '-m', message],
+            capture_output=True,
+            text=True,
+            timeout=60  # Increased from 10s to 60s for slow gateway responses
+        )
+        if result.returncode == 0:
+            print("✅ Telegram notification sent")
+            return True
+        else:
+            print(f"❌ openclaw CLI error: {result.stderr}")
+            # Fallback to stdout
+            print("\n" + "="*60)
+            print("TELEGRAM NOTIFICATION (manual copy):")
+            print("="*60)
+            print(message)
+            print("="*60 + "\n")
+            return False
+    except subprocess.TimeoutExpired:
+        print("❌ openclaw CLI timed out after 60 seconds")
+        # Fallback to stdout
         print("\n" + "="*60)
-        print("TELEGRAM NOTIFICATION:")
+        print("TELEGRAM NOTIFICATION (manual copy):")
         print("="*60)
         print(message)
         print("="*60 + "\n")
-        return True
+        return False
     except Exception as e:
-        print(f"Failed to send Telegram: {e}")
+        print(f"❌ Failed to send Telegram: {e}")
+        # Fallback to stdout
+        print("\n" + "="*60)
+        print("TELEGRAM NOTIFICATION (manual copy):")
+        print("="*60)
+        print(message)
+        print("="*60 + "\n")
         return False
 
 def main():
