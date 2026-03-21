@@ -126,6 +126,7 @@ class AnalysisAgent(Agent):
             indicators['macd'] = self.macd(df)
             indicators['sma_20'] = self.sma(df, 20)
             indicators['sma_50'] = self.sma(df, 50)
+            indicators['sma_200'] = self.sma(df, 200)
             indicators['ema_12'] = self.ema(df, 12)
             indicators['ema_26'] = self.ema(df, 26)
             indicators['atr'] = self.atr(df)

@@ -330,7 +330,7 @@ class BacktestRunner:
                         "rules_triggered": best_rules
                     })
             
-            # Exit scan: any strategy exit signal sells the position
+            # Exit scan: any strategy exit signal OR stop-loss triggers sells the position
             for sym, pos in list(self.repository.positions.items()):
                 if sym not in all_data: continue
                 df = all_data[sym]
@@ -353,20 +353,33 @@ class BacktestRunner:
                 except Exception as e:
                     logger.debug(f"Indicator calc failed for exit {sym}: {e}"); continue
                 
-                # Check all strategies for exit
+                current_price = indicators.current_price
+                # Check stop-loss (2x ATR below entry) if ATR available
                 should_sell = False
                 exit_rules_triggered = []
                 exit_strategy = None
-                for strat_name, strat_cfg in self.strategies.items():
-                    sell_flag, rules = strat_cfg['rule_strategy'].evaluate_exit(indicators)
-                    if sell_flag:
+                
+                atr_ind = indicators.indicators.get("atr")
+                if atr_ind:
+                    atr_value = atr_ind.value
+                    stop_price = pos.avg_cost - (atr_value * 2)
+                    if current_price <= stop_price:
                         should_sell = True
-                        exit_strategy = strat_name  # Use last strategy that triggered (could be multiple, but we'll record one)
-                        exit_rules_triggered.extend([f"{strat_name}:{r}" for r in rules])
+                        exit_strategy = "stop_loss"
+                        exit_rules_triggered = [f"stop_loss@2xATR (stop={stop_price:.2f}, price={current_price:.2f})"]
+                
+                # Check strategy exit rules if not already selling
+                if not should_sell:
+                    for strat_name, strat_cfg in self.strategies.items():
+                        sell_flag, rules = strat_cfg['rule_strategy'].evaluate_exit(indicators)
+                        if sell_flag:
+                            should_sell = True
+                            exit_strategy = strat_name
+                            exit_rules_triggered.extend([f"{strat_name}:{r}" for r in rules])
                 
                 if should_sell:
                     quantity = pos.quantity
-                    exec_price = indicators.current_price * (1 - self.slippage)
+                    exec_price = current_price * (1 - self.slippage)
                     proceeds = quantity * exec_price * (1 - self.commission)
                     if self._execute_sell(sym, quantity, exec_price, exit_rules_triggered):
                         self.current_cash += proceeds

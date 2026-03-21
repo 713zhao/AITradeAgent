@@ -186,10 +186,10 @@ scheduler:
 # ========================
 # These strategies are used by the backtest runner. Live trading uses the 'strategy' section above.
 strategies:
-  simple_rsi_macd:
+  rsi_macd_trend:
     allocation: 1.0
     risk_budget_pct: 1.5
-    confidence_threshold: 0.5
+    confidence_threshold: 0.6  # Requires both entry rules (3-way AND) to get 100% confidence; however, RuleStrategy counts triggered/total, so threshold 0.6 allows 2/3 triggers
     entry_rules:
       - name: rsi_oversold_entry
         type: entry
@@ -201,6 +201,12 @@ strategies:
         indicator: macd
         condition: greater_than
         value: 0.0
+      - name: price_above_sma200
+        type: entry
+        indicator: 'sma_200'
+        condition: greater_than
+        value: 0.0
+        compare_to_price: true
     exit_rules:
       - name: rsi_overbought_exit
         type: exit
