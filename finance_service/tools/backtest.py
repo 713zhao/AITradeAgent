@@ -164,18 +164,18 @@ class BacktestRunner:
         except Exception as e:
             logger.error(f"Sell failed: {e}"); return False
     
-    def _compute_news_sentiment_proxy(self, df: pd.DataFrame, forward_days: int = 5, threshold: float = 0.03) -> pd.Series:
+    def _compute_news_sentiment_proxy(self, df: pd.DataFrame, lookback_days: int = 5, threshold: float = 0.03) -> pd.Series:
         """
-        Compute a simulated news sentiment proxy based on forward returns.
-        Positive forward returns → positive sentiment; negative → negative.
+        Compute a simulated news sentiment proxy based on past returns (momentum).
+        Positive past returns → positive sentiment; negative → negative.
         Returns a pandas Series aligned to df.index with values in [-1, 1].
         """
         if 'close' not in df.columns:
             logger.warning("No 'close' column for sentiment proxy; returning empty Series")
             return pd.Series(index=df.index, data=0.0)
         close = df['close']
-        # Compute forward return
-        future_ret = close.shift(-forward_days) / close - 1.0
+        # Compute past return over lookback_days (non-lookahead)
+        past_ret = close / close.shift(lookback_days) - 1.0
         # Map to sentiment
         def map_sentiment(ret):
             if pd.isna(ret):
@@ -187,7 +187,7 @@ class BacktestRunner:
             else:
                 # Linear scale between -threshold and +threshold to [-1,1]
                 return float(ret / threshold)
-        sentiment = future_ret.apply(map_sentiment)
+        sentiment = past_ret.apply(map_sentiment)
         return sentiment
     
     async def fetch_historical_data(self, symbol: str, start_date: datetime, end_date: datetime, interval: str = "1d", extra_days: int = 0) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -249,10 +249,10 @@ class BacktestRunner:
         self.trade_log = []
         self.next_trade_id = 1
         
-        # Precompute simulated news sentiment (proxy using forward returns)
+        # Precompute simulated news sentiment (proxy using past returns)
         sentiment_store = {}
         for sym, df in all_data.items():
-            sentiment_store[sym] = self._compute_news_sentiment_proxy(df, forward_days=5, threshold=0.03)
+            sentiment_store[sym] = self._compute_news_sentiment_proxy(df, lookback_days=5, threshold=0.03)
             logger.debug(f"Computed news sentiment proxy for {sym}")
         
         for i, date in enumerate(trading_dates):

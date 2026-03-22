@@ -22,6 +22,7 @@ class Rule:
     condition: str  # 'less_than', 'greater_than', 'crosses_above', etc.
     value: float  # threshold value
     enabled: bool = True
+    compare_to_price: bool = False  # If True, compare current_price to indicator value instead of ind.value to threshold
     
     def __str__(self):
         return f"{self.name} ({self.type.value}): {self.indicator} {self.condition} {self.value}"
@@ -55,7 +56,8 @@ class RuleStrategy:
                     indicator=rule_cfg.get('indicator'),
                     condition=rule_cfg.get('condition'),
                     value=rule_cfg.get('value'),
-                    enabled=rule_cfg.get('enabled', True)
+                    enabled=rule_cfg.get('enabled', True),
+                    compare_to_price=rule_cfg.get('compare_to_price', False)
                 )
                 rules.append(rule)
                 logger.debug(f"Parsed rule: {rule}")
@@ -89,8 +91,17 @@ class RuleStrategy:
                 logger.warning(f"Rule {rule.name}: indicator {rule.indicator} not found")
                 continue
             
+            # Determine what to compare based on compare_to_price flag
+            if rule.compare_to_price:
+                # Compare current price to indicator value
+                compare_value = indicators_snapshot.current_price
+                threshold_value = ind.value
+            else:
+                compare_value = ind.value
+                threshold_value = rule.value
+            
             # Evaluate condition
-            if self._check_condition(ind.value, rule.condition, rule.value):
+            if self._check_condition(compare_value, rule.condition, threshold_value):
                 triggered.append(rule.name)
         
         if not triggered:
@@ -128,8 +139,16 @@ class RuleStrategy:
                 logger.warning(f"Rule {rule.name}: indicator {rule.indicator} not found")
                 continue
             
+            # Determine comparison based on compare_to_price flag
+            if rule.compare_to_price:
+                compare_value = indicators_snapshot.current_price
+                threshold_value = ind.value
+            else:
+                compare_value = ind.value
+                threshold_value = rule.value
+            
             # Evaluate condition
-            if self._check_condition(ind.value, rule.condition, rule.value):
+            if self._check_condition(compare_value, rule.condition, threshold_value):
                 triggered.append(rule.name)
         
         should_sell = len(triggered) > 0

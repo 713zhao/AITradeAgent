@@ -30,12 +30,12 @@ risk:
 # STRATEGY CONFIGURATION
 # ========================
 strategy:
-  type: "sma50_trend_regime"
+  type: "baseline_rule"
   
   auto_execute:
     enabled: true
-    confidence_threshold: 1.0
-    require_approval: false
+    confidence_threshold: 0.40       # Lower threshold for more signals
+    require_approval: false          # Auto-execute without manual wait
   
   indicators:
     rsi:

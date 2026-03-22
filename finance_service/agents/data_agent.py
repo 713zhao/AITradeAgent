@@ -4,6 +4,8 @@ import logging
 from typing import Dict, List, Optional, Any
 import pandas as pd
 from datetime import datetime, timedelta
+import yfinance as yf
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from finance_service.data.yfinance_provider import YfinanceProvider, RateLimitConfig
 from finance_service.data.data_cache import DataCache
@@ -110,12 +112,25 @@ class DataAgent(Agent):
         if df is not None and not df.empty:
             # Normalize column names to lowercase for consistency with AnalysisAgent
             df.columns = [col.lower() for col in df.columns]
-            message = f"Successfully fetched data for {symbol}."
-            payload = {"symbol": symbol, "interval": interval, "dataframe": df.to_dict()}
+            # Fetch fundamentals asynchronously in a thread
+            def fetch_fundamentals_sync(sym):
+                try:
+                    ticker = yf.Ticker(sym)
+                    info = ticker.info
+                    return {
+                        'pe_ratio': info.get('trailingPE') or info.get('forwardPE'),
+                        'revenue_growth_yoy': info.get('revenueGrowth'),
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to fetch fundamentals for {sym}: {e}")
+                    return {}
+            fundamentals = await asyncio.to_thread(fetch_fundamentals_sync, symbol)
+            message = f"Fetched data and fundamentals for {symbol}."
+            payload = {"symbol": symbol, "interval": interval, "dataframe": df.to_dict(), "fundamentals": fundamentals}
             if emit_events:
                 await self.event_bus.publish(Event(
                     event_type=Events.DATA_FETCH_COMPLETE,
-                    data=payload # Send dataframe in event payload
+                    data=payload # Send dataframe and fundamentals in event payload
                 ))
             return AgentReport(agent_id=self.agent_id, status="success", message=message, payload=payload)
         else:

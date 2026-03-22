@@ -202,15 +202,26 @@ class StrategyAgent(Agent):
 
     def _load_rules_from_config(self) -> List[Dict]:
         """Load trading rules from YAML configuration."""
+        # New approach: select a strategy from the strategies dict by name
+        strategy_name = self.config_engine.get("finance", "strategy/type", default=None)
+        if strategy_name:
+            strategies = self.config_engine.get("finance", "strategies", default={})
+            if isinstance(strategies, dict) and strategy_name in strategies:
+                strat_cfg = strategies[strategy_name]
+                entry_rules = strat_cfg.get('entry_rules', [])
+                exit_rules = strat_cfg.get('exit_rules', [])
+                all_rules = entry_rules + exit_rules
+                logger.info(f"Loaded strategy '{strategy_name}' with {len(entry_rules)} entry and {len(exit_rules)} exit rules")
+                return all_rules
+            else:
+                available = ", ".join(strategies.keys()) if isinstance(strategies, dict) else "none"
+                logger.error(f"Strategy '{strategy_name}' not found in strategies. Available: {available}")
+        
+        # Fallback to legacy format (boolean flags)
+        logger.warning("Falling back to legacy strategy config format")
         rules = []
-
-        # Get strategy type and rules section
-        strategy_type = self.config_engine.get("finance", "strategy/type", default="baseline_rule")
         rules_enabled = self.config_engine.get("finance", "strategy/rules", default={})
-
-        # For backward compatibility with boolean flag format, convert to rule dicts
         if isinstance(rules_enabled, dict):
-            # Map of flag names to rule definitions
             rule_map = {
                 'rsi_entry_oversold': {
                     'name': 'rsi_oversold_entry',
@@ -249,69 +260,30 @@ class StrategyAgent(Agent):
                     'value': 0
                 }
             }
-
-            # Build rules from enabled flags
             for flag_name, rule_def in rule_map.items():
                 if rules_enabled.get(flag_name, False):
-                    # Create a copy to avoid modifying the template
                     rule = rule_def.copy()
                     rule['enabled'] = True
                     rules.append(rule)
                     logger.info(f"Enabled rule: {rule['name']} ({rule['type']})")
         else:
-            # If rules_enabled is already a list of rule dicts (new format), use directly
             if isinstance(rules_enabled, list):
                 rules = rules_enabled
             else:
                 logger.warning(f"Unexpected rules config type: {type(rules_enabled)}")
-
-        # Add always-on exit rules
+        
+        # Always-on exit rules placeholder (disabled by default)
         rules.append({
             'name': 'always_exit_on_stop',
             'type': 'exit',
             'indicator': 'always',
             'condition': 'equals',
             'value': 0,
-            'enabled': False  # Disabled by default, use stop loss
+            'enabled': False
         })
-
+        
         logger.info(f"Loaded {len(rules)} rules from config")
         return rules
-
-    async def run(self, indicators_report: AgentReport, news_report: AgentReport) -> Optional[AgentReport]:
-        """
-        Generates trade proposals based on indicators and news.
-        """
-        logger.info("StrategyAgent run: Generating trade proposals.")
-        
-        try:
-            trade_proposals = self._evaluate_strategies(indicators_report, news_report)
-
-            if trade_proposals:
-                message = f"{len(trade_proposals)} trade proposals generated."
-                payload = {"proposals": [p.model_dump() for p in trade_proposals]}
-                
-                await self.event_bus.publish(Event(
-                    event_type=Events.TRADE_PROPOSAL_GENERATED,
-                    data=payload
-                ))
-            else:
-                message = "No trade proposals generated."
-                payload = {"proposals": []}
-
-            return AgentReport(
-                agent_id=self.agent_id,
-                status="success",
-                message=message,
-                payload=payload
-            )
-        except Exception as e:
-            logger.error(f"Error in StrategyAgent run: {e}")
-            return AgentReport(
-                agent_id=self.agent_id,
-                status="error",
-                message=f"Error generating trade proposals: {e}"
-            )
 
     def _evaluate_strategies(self, indicators_report: AgentReport, news_report: AgentReport) -> list[TradeProposal]:
         """

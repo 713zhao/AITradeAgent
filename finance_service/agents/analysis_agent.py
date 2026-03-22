@@ -132,6 +132,7 @@ class AnalysisAgent(Agent):
             indicators['atr'] = self.atr(df)
             indicators['bb'] = self.bollinger_bands(df)
             indicators['stoch'] = self.stochastic(df)
+            indicators['regime_score'] = self.regime_score(df)
             
             # Integrate fundamental indicators if provided (for backtest news simulation, etc.)
             if fundamentals:
@@ -540,7 +541,103 @@ class AnalysisAgent(Agent):
                 'd_percent': current_d
             }
         )
-    
+
+    def regime_score(self, df: pd.DataFrame) -> IndicatorResult:
+        """
+        Composite Regime Score (0-1)
+        
+        Combines multiple indicators to detect bull/bear market regimes:
+        - SMA200 (30% weight): price above SMA200 = bullish
+        - 52-week high proximity (40% weight): within 10% of 52w high = bullish
+        - ADX trend strength (20% weight): ADX>25 + +DI>-DI = strong bullish trend
+        - RSI midpoint (10% weight): RSI>50 = bullish momentum
+        
+        Returns:
+            value: 0-100% bullish probability
+            signal: BUY if >70%, SELL if <30%, HOLD otherwise
+        """
+        n = len(df)
+        if n < 200:
+            raise ValueError(f"Need 200+ bars for regime score, got {n}")
+        close = float(df['close'].iloc[-1])
+        lookback_sma = min(200, n)
+        sma_200_series = df['close'].rolling(window=lookback_sma, min_periods=lookback_sma).mean()
+        sma_200 = float(sma_200_series.iloc[-1])
+        comp_sma200 = 1.0 if close > sma_200 else 0.0
+        lookback_52w = min(252, n)
+        high_period = df['high'].rolling(window=lookback_52w, min_periods=lookback_52w).max()
+        high_52w = float(high_period.iloc[-1])
+        pct_from_high = (close - high_52w) / high_52w if high_52w > 0 else -1.0
+        comp_52w = 1.0 if pct_from_high >= -0.10 else 0.0
+        comp_adx = 0.0
+        if n >= 14:
+            try:
+                from ta.trend import ADXIndicator
+                window_adx = min(14, n)
+                adx_ind = ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=window_adx)
+                adx_series = adx_ind.adx()
+                plus_di_series = adx_ind.adx_pos()
+                minus_di_series = adx_ind.adx_neg()
+                if len(adx_series) > 0:
+                    adx = float(adx_series.iloc[-1])
+                    plus_di = float(plus_di_series.iloc[-1])
+                    minus_di = float(minus_di_series.iloc[-1])
+                    comp_adx = 1.0 if (adx > 25 and plus_di > minus_di) else 0.0
+            except Exception:
+                comp_adx = 0.0
+        comp_rsi = 0.0
+        if n >= 14:
+            try:
+                from ta.momentum import RSIIndicator
+                window_rsi = min(14, n)
+                rsi_ind = RSIIndicator(close=df['close'], window=window_rsi)
+                rsi_series = rsi_ind.rsi()
+                if len(rsi_series) > 0:
+                    rsi = float(rsi_series.iloc[-1])
+                    comp_rsi = 1.0 if rsi > 50 else 0.0
+            except Exception:
+                comp_rsi = 0.0
+        weights = {'sma200': 0.30, '52w': 0.40, 'adx': 0.20, 'rsi': 0.10}
+        available = {
+            'sma200': 1.0 if n >= 200 else 0.0,
+            '52w': 1.0,
+            'adx': 1.0 if n >= 14 else 0.0,
+            'rsi': 1.0 if n >= 14 else 0.0
+        }
+        total_weight = sum(weights[k] * available[k] for k in weights)
+        if total_weight == 0:
+            composite = 0.0
+        else:
+            composite = (
+                comp_sma200 * weights['sma200'] * available['sma200'] +
+                comp_52w * weights['52w'] * available['52w'] +
+                comp_adx * weights['adx'] * available['adx'] +
+                comp_rsi * weights['rsi'] * available['rsi']
+            ) / total_weight
+        composite = max(0.0, min(1.0, composite))
+        regime_pct = composite * 100.0
+        if composite > 0.7:
+            signal = SignalType.BUY
+        elif composite < 0.3:
+            signal = SignalType.SELL
+        else:
+            signal = SignalType.HOLD
+        return IndicatorResult(
+            name='regime_score',
+            value=float(regime_pct),
+            signal=signal,
+            timestamp=df.index[-1],
+            metadata={
+                'components': {
+                    'sma200': comp_sma200,
+                    '52w_high': comp_52w,
+                    'adx': comp_adx,
+                    'rsi': comp_rsi
+                },
+                'interpretation': '0-100% bullish probability'
+            }
+        )
+
     @staticmethod
     def _validate_ohlcv(df: pd.DataFrame) -> None:
         """

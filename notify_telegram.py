@@ -13,11 +13,12 @@ if not SUMMARY_FILE.exists():
 with open(SUMMARY_FILE, "r") as f:
     message = f.read()
 
-# Try to send via openclaw CLI
+# Try to send via openclaw CLI with absolute path
 import subprocess
+OPENCLAW_CLI = "/home/eric/.npm-global/bin/openclaw"
 try:
     result = subprocess.run(
-        ['openclaw', 'message', 'send', '-t', '8383381149', '-m', message],
+        [OPENCLAW_CLI, 'message', 'send', '-t', '8383381149', '-m', message],
         capture_output=True,
         text=True,
         timeout=60
