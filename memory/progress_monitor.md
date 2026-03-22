@@ -1815,3 +1815,99 @@
 - ✅ Drawdown within limit: -16.1%
 
 ---
+
+## 2026-03-22 15:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 21.164915088202918,
+  "cagr_pct": 21.504621014571114,
+  "sharpe_ratio": 1.267888896788319,
+  "max_drawdown_pct": -16.14077175203236,
+  "total_trades": 127,
+  "final_value": 121116.45969889683,
+  "run_date": "2026-03-22 06:15:24",
+  "start_date": "2023-01-01 00:00:00",
+  "end_date": "2023-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2023-01-01 to 2023-12-31"
+}
+
+### Assessment
+- ✅ CAGR above target: 21.5% >= 20.0%
+- ✅ Sharpe acceptable: 1.27 >= 1.0
+- ✅ Drawdown within limit: -16.1%
+
+---
+
+## 2026-03-22 16:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 21.164915088202918,
+  "cagr_pct": 21.504621014571114,
+  "sharpe_ratio": 1.267888896788319,
+  "max_drawdown_pct": -16.14077175203236,
+  "total_trades": 127,
+  "final_value": 121116.45969889683,
+  "run_date": "2026-03-22 06:15:24",
+  "start_date": "2023-01-01 00:00:00",
+  "end_date": "2023-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2023-01-01 to 2023-12-31"
+}
+
+### Assessment
+- ✅ CAGR above target: 21.5% >= 20.0%
+- ✅ Sharpe acceptable: 1.27 >= 1.0
+- ✅ Drawdown within limit: -16.1%
+
+---
+
+## 2026-03-22 16:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 21.164915088202918,
+  "cagr_pct": 21.504621014571114,
+  "sharpe_ratio": 1.267888896788319,
+  "max_drawdown_pct": -16.14077175203236,
+  "total_trades": 127,
+  "final_value": 121116.45969889683,
+  "run_date": "2026-03-22 06:15:24",
+  "start_date": "2023-01-01 00:00:00",
+  "end_date": "2023-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2023-01-01 to 2023-12-31"
+}
+
+### Assessment
+- ✅ CAGR above target: 21.5% >= 20.0%
+- ✅ Sharpe acceptable: 1.27 >= 1.0
+- ✅ Drawdown within limit: -16.1%
+
+---
+
+## 2026-03-22 17:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 21.164915088202918,
+  "cagr_pct": 21.504621014571114,
+  "sharpe_ratio": 1.267888896788319,
+  "max_drawdown_pct": -16.14077175203236,
+  "total_trades": 127,
+  "final_value": 121116.45969889683,
+  "run_date": "2026-03-22 06:15:24",
+  "start_date": "2023-01-01 00:00:00",
+  "end_date": "2023-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2023-01-01 to 2023-12-31"
+}
+
+### Assessment
+- ✅ CAGR above target: 21.5% >= 20.0%
+- ✅ Sharpe acceptable: 1.27 >= 1.0
+- ✅ Drawdown within limit: -16.1%
+
+---

@@ -4,11 +4,17 @@
 cd "$(dirname "$0")"
 source venv/bin/activate
 
-echo "Starting Finance Service Orchestrator..."
-echo "Strategy: sma50_trend_regime (regime-filtered SMA50)"
-echo "Mode: Paper Trading (no real money)"
-echo ""
-echo "Logs will output to stdout. Press Ctrl+C to stop."
-echo "---
+export OPENBB_USE_YFINANCE=true
+export OPENBB_PROVIDER=yfinance
+export FLASK_ENV=production
+export PYTHONUNBUFFERED=1
+export LOG_LEVEL=INFO
 
-python -m finance_service.main --config config/finance.yaml
+echo "=========================================="
+echo "AiTradeAgent - Paper Trading"
+echo "Strategy: sma50_trend_regime"
+echo "Mode: Paper (no real money)"
+echo "=========================================="
+echo ""
+
+python3 run_finance_service.py

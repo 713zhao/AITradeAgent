@@ -200,8 +200,16 @@ class MainOrchestratorAgent(Agent):
         
         logger.info("Portfolio update attempt completed")
         
-        # Then let the learning agent process the full execution report
+        # Let the learning agent process the full execution report
         await self.learning_agent.run(execution_report=execution_report)
+        
+        # Send trade notification via health agent (to Telegram)
+        try:
+            await self.health_agent.run(event_type=Events.TRADE_EXECUTED, payload=execution_result)
+        except Exception as e:
+            logger.error(f"Error in health_agent trade notification: {e}", exc_info=True)
+        
+        logger.info("Trade execution handling complete")
         
         # Then let the learning agent process the full execution report
         await self.learning_agent.run(execution_report=execution_report)

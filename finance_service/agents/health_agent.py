@@ -51,11 +51,21 @@ class HealthAgent(Agent):
     async def run(self, event_type: Optional[str] = None, payload: Optional[Dict[str, Any]] = None) -> AgentReport:
         """
         Run health checks.
-        Can be triggered by timer (SCHEDULE_HEALTH_CHECK) or manually.
+        Can be triggered by timer (SCHEDULE_HEALTH_CHECK), trade events, or manually.
         """
         if event_type == Events.SCHEDULE:
             # Periodic health check
             return await self.perform_health_check()
+        
+        elif event_type == Events.TRADE_EXECUTED:
+            # Trade execution notification
+            await self.send_trade_notification(payload)
+            return AgentReport(agent_id=self.agent_id, status="success", message="Trade notification sent")
+        
+        elif event_type == Events.DAILY_REPORT_TRIGGER:
+            # Daily summary after market close
+            await self.send_daily_summary()
+            return AgentReport(agent_id=self.agent_id, status="success", message="Daily summary sent")
         
         elif event_type == Events.GET_SYSTEM_STATUS:
             # Return health status for system status query
@@ -150,3 +160,94 @@ class HealthAgent(Agent):
         # Use default chat ID from config if available, else orchestrator may forward
         await self.telegram_agent.send_message(chat_id=self.config.get("telegram_chat_id", ""), message=message)
         logger.info(f"Sent health alert via Telegram with {len(alerts)} alerts")
+    
+    async def send_trade_notification(self, execution_payload: Dict[str, Any]):
+        """Send trade execution notification via Telegram."""
+        if not self.telegram_agent:
+            logger.warning("TelegramAgent not configured, cannot send trade notification")
+            return
+        
+        result = execution_payload.get("execution_result", {})
+        symbol = result.get("symbol", "Unknown")
+        action = result.get("action", "??")
+        quantity = result.get("quantity", 0)
+        price = result.get("filled_price", 0)
+        status = result.get("status", "??")
+        
+        # Get current portfolio info for context
+        portfolio_summary = "Portfolio info unavailable"
+        if self.portfolio_agent:
+            try:
+                portfolio_report = await self.portfolio_agent.get_portfolio_state()
+                if portfolio_report.status == "success":
+                    portfolio = portfolio_report.payload
+                    equity = portfolio.get("total_equity", 0)
+                    positions = len(portfolio.get("positions", {}))
+                    portfolio_summary = f"Portfolio: ${equity:,.2f}, {positions} positions"
+            except Exception as e:
+                logger.warning(f"Could not get portfolio state for trade notification: {e}")
+        
+        message = f"🦞 Trade Executed\n"
+        message += f"• Symbol: {symbol}\n"
+        message += f"• Action: {action}\n"
+        message += f"• Quantity: {quantity}\n"
+        message += f"• Price: ${price:,.2f}\n"
+        message += f"• Status: {status}\n"
+        message += f"\n{portfolio_summary}"
+        
+        await self.telegram_agent.send_message(chat_id=self.config.get("telegram_chat_id", ""), message=message)
+        logger.info(f"Sent trade notification for {symbol} {action}")
+    
+    async def send_daily_summary(self):
+        """Send daily portfolio summary after market close."""
+        if not self.telegram_agent:
+            logger.warning("TelegramAgent not configured, cannot send daily summary")
+            return
+        
+        if not self.portfolio_agent:
+            logger.warning("PortfolioAgent not set, cannot send daily summary")
+            return
+        
+        try:
+            portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
+            if portfolio_report.status != "success":
+                logger.error(f"Failed to get portfolio state for daily summary: {portfolio_report.message}")
+                return
+            
+            metrics = portfolio_report.payload.get("equity_metrics", {})
+            positions = portfolio_report.payload.get("positions", {})
+            
+            # Get today's trades
+            from datetime import date
+            today = date.today()
+            trades = []
+            if self.portfolio_agent.repository:
+                all_trades = self.portfolio_agent.repository.get_all_trades()
+                for t in all_trades:
+                    trade_date = datetime.fromisoformat(t.get("timestamp", "")).date()
+                    if trade_date == today:
+                        trades.append(t)
+            
+            summary_lines = [f"📊 Daily Portfolio Summary - {today}\n"]
+            summary_lines.append(f"Equity: ${metrics.get('total_equity', 0):,.2f}")
+            summary_lines.append(f"Total Return: {metrics.get('total_return_pct', 0):.2f}%")
+            summary_lines.append(f"Drawdown: {metrics.get('drawdown_pct', 0):.2f}%")
+            summary_lines.append(f"Positions: {len(positions)}")
+            summary_lines.append(f"Trades Today: {len(trades)}")
+            
+            if positions:
+                summary_lines.append("\nCurrent Positions:")
+                for sym, pos in positions.items():
+                    summary_lines.append(f"  {sym}: {pos.quantity} @ ${pos.avg_cost:.2f}")
+            
+            if trades:
+                summary_lines.append("\nToday's Trades:")
+                for t in trades[-10:]:  # last 10 trades
+                    summary_lines.append(f"  {t.get('action')} {t.get('symbol')} x{t.get('quantity')} @ ${t.get('price'):,.2f}")
+            
+            message = "\n".join(summary_lines)
+            await self.telegram_agent.send_message(chat_id=self.config.get("telegram_chat_id", ""), message=message)
+            logger.info("Sent daily portfolio summary")
+            
+        except Exception as e:
+            logger.error(f"Error sending daily summary: {e}")

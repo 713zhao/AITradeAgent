@@ -29,20 +29,32 @@ class SchedulerAgent(Agent):
         """Starts the scheduler, running predefined tasks."""
         logger.info("SchedulerAgent starting...")
         try:
-            # Example: Schedule a daily market scan event
-            # In a real scenario, task definitions would come from config
+            # Schedule tasks with appropriate intervals
+            # Market scan: every 15 minutes during trading hours (simplified: every 15 min)
             self._schedule_task(
-                "daily_market_scan",
+                "market_scan",
                 self._trigger_daily_market_scan,
-                timedelta(minutes=1) # For testing, run every minute
+                timedelta(minutes=15)
             )
-            # Example: Schedule an hourly data refresh event
+            # Data refresh: every 30 minutes
             self._schedule_task(
-                "hourly_data_refresh",
+                "data_refresh",
                 self._trigger_hourly_data_refresh,
-                timedelta(minutes=5) # For testing, run every 5 minutes
+                timedelta(minutes=30)
             )
-
+            # Daily health check: every 4 hours
+            self._schedule_task(
+                "health_check",
+                self._trigger_health_check,
+                timedelta(hours=4)
+            )
+            # Daily summary after market close: run at 16:05 UTC+8 (08:05 UTC) daily
+            self._schedule_task(
+                "daily_report",
+                self._trigger_daily_report,
+                timedelta(days=1)
+            )
+            
             logger.info("SchedulerAgent tasks initiated.")
             return AgentReport(agent_id=self.agent_id, status="success", message="SchedulerAgent started.")
         except Exception as e:
@@ -68,14 +80,21 @@ class SchedulerAgent(Agent):
         logger.info(f"Task {task_name} scheduled to run every {interval}.")
 
     async def _trigger_daily_market_scan(self):
-        # Publish an event that the MainOrchestratorAgent (or MarketScannerAgent) will listen to
         await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={"interval": "daily"}))
         logger.info("Published MARKET_SCAN_TRIGGER event (daily).")
 
     async def _trigger_hourly_data_refresh(self):
-        # Publish an event to refresh data, which DataAgent might pick up
         await self.event_bus.publish(Event(event_type=Events.DATA_REFRESH_TRIGGER, data={"interval": "hourly"}))
         logger.info("Published DATA_REFRESH_TRIGGER event (hourly).")
+
+    async def _trigger_health_check(self):
+        await self.event_bus.publish(Event(event_type=Events.SCHEDULE, data={}))
+        logger.info("Published SCHEDULE event for health check.")
+
+    async def _trigger_daily_report(self):
+        """Trigger daily summary report after market close."""
+        await self.event_bus.publish(Event(event_type=Events.DAILY_REPORT_TRIGGER, data={}))
+        logger.info("Published DAILY_REPORT_TRIGGER event.")
 
     async def stop(self):
         """Stops all scheduled tasks."""
