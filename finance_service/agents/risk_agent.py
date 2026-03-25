@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, Any, Optional, List, Tuple, Union, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from enum import Enum
 
@@ -391,24 +391,27 @@ class RiskAgent(Agent):
                 "any_approval_required": any_approval_required
             }
 
-            # Publish event based on approval required status
-            if any_approval_required:
-                await self.event_bus.publish(Event(
-                    event_type=Events.APPROVAL_REQUIRED,
-                    data=payload_out
-                ))
-            else:
-                await self.event_bus.publish(Event(
-                    event_type=Events.RISK_CHECK_COMPLETE,
-                    data=payload_out
-                ))
-
-            return AgentReport(
+            # Build the AgentReport to return and publish
+            report = AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
                 payload=payload_out
             )
+
+            # Publish event based on approval required status
+            if any_approval_required:
+                await self.event_bus.publish(Event(
+                    event_type=Events.APPROVAL_REQUIRED,
+                    data=asdict(report)
+                ))
+            else:
+                await self.event_bus.publish(Event(
+                    event_type=Events.RISK_CHECK_COMPLETE,
+                    data=asdict(report)
+                ))
+
+            return report
         except Exception as e:
             logger.error(f"Error in RiskAgent run: {e}")
             return AgentReport(
