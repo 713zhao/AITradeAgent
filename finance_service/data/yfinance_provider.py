@@ -72,6 +72,7 @@ class YfinanceProvider:
         Returns:
             Dictionary of {symbol: DataFrame with OHLCV}
         """
+        logger.info(f"[YfinanceProvider.fetch_ohlcv] called with symbols={symbols}, start={start_date}, end={end_date}, interval={interval}")
         if not symbols:
             logger.warning("No symbols provided")
             return {}
@@ -106,6 +107,8 @@ class YfinanceProvider:
             try:
                 self._add_jitter()
                 
+                logger.info(f"[YfinanceProvider] Fetching batch {symbols} with start={start_date}, end={end_date}, interval={interval}")
+                
                 # Fetch batch
                 data = yf.download(
                     " ".join(symbols),
@@ -116,8 +119,13 @@ class YfinanceProvider:
                     timeout=self.config.timeout_sec
                 )
                 
+                logger.info(f"[YfinanceProvider] download returned {len(data)} rows, columns: {data.columns.tolist() if hasattr(data, 'columns') else 'N/A'}")
+                
                 # Parse results
-                return self._parse_yfinance_data(data, symbols)
+                results = self._parse_yfinance_data(data, symbols)
+                for sym, df in results.items():
+                    logger.info(f"[YfinanceProvider] Parsed {sym}: {len(df)} rows, index range: {df.index.min()} to {df.index.max()}")
+                return results
             
             except Exception as e:
                 if "Too Many Requests" in str(e) or "429" in str(e):

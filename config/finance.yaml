@@ -7,16 +7,16 @@
 # ========================
 risk:
   # Position sizing
-  max_position_size_pct: 25          # Max % of portfolio per trade (aggressive)
-  max_exposure_pct: 95               # Max % total deployed
-  max_daily_loss_pct: 4.0            # Daily loss stop
+  max_position_size_pct: 10          # Max % of portfolio per trade (moderate)
+  max_exposure_pct: 80               # Max % total deployed
+  max_daily_loss_pct: 2.0            # Daily loss stop
   max_drawdown_pct: 15.0             # Max drawdown stop
-  
+
   # Risk per trade
   default_risk_budget_pct: 1.5       # 1.5% risk per trade
   stop_loss_default_pct: 1.5         # ATR-based stop multiplier
   take_profit_default_pct: 3.0       # Take profit at 3x stop (2:1 R:R)
-  
+
   # Position limits
   max_concurrent_positions: 10
   min_position_size_usd: 100
@@ -30,46 +30,46 @@ risk:
 # STRATEGY CONFIGURATION
 # ========================
 strategy:
-  type: "sma50_trend_regime"
-  
+  type: "sma20_trend"
+
   auto_execute:
     enabled: true
-    confidence_threshold: 1.0
+    confidence_threshold: 0.7
     require_approval: false
-  
+
   indicators:
     rsi:
       enabled: true
       period: 14
       oversold: 40
       overbought: 65
-    
+
     macd:
       enabled: true
       fast_period: 12
       slow_period: 26
       signal_period: 9
-    
+
     sma:
       enabled: true
       periods: [10, 20, 50]          # Fast SMA for trend filter
-    
+
     atr:
       enabled: true
       period: 14
-  
+
   rules:
     # Entry rules
     rsi_entry_oversold: true
     rsi_entry_oversold_threshold: 40
     macd_crossover: true
     price_above_sma10: true          # Require fast uptrend
-    
+
     # Exit rules
     rsi_exit_overbought: true
     rsi_exit_overbought_threshold: 65
     macd_signal_exit: true
-    
+
     # Risk management
     stop_loss_enabled: true
     take_profit_enabled: true
@@ -108,6 +108,13 @@ universe:
         - AAPL
         - AMZN
         - META
+    - name: "Hong Kong"
+      symbols:
+        - 0700.HK   # Tencent
+        - 9988.HK   # Alibaba
+        - 0941.HK   # China Mobile
+        - 1398.HK   # ICBC
+        - 0388.HK   # Hong Kong Exchange
   
   # All symbols list (for whitelist and manual selection)
   all_symbols:
@@ -131,7 +138,13 @@ universe:
     - AAPL
     - AMZN
     - META
-  
+    # HK symbols
+    - 0700.HK
+    - 9988.HK
+    - 0941.HK
+    - 1398.HK
+    - 0388.HK
+
   # Whitelist mode
   whitelist:
     enabled: false
@@ -141,9 +154,9 @@ universe:
 # DATA CONFIGURATION
 # ========================
 data:
-  default_interval: "1day"
-  default_lookback_days: 252
-  cache_ttl_minutes: 1440
+  default_interval: "1h"
+  default_lookback_days: 30
+  cache_ttl_minutes: 15
   cache_enabled: true
   batch_size: 10
   batch_delay_sec: 0.5
@@ -371,7 +384,7 @@ strategies:
         type: entry
         indicator: regime_score
         condition: greater_than
-        value: 70.0
+        value: 50.0
     exit_rules:
       - name: price_below_sma50
         type: exit

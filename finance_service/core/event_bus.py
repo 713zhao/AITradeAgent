@@ -74,26 +74,74 @@ class EventBus:
         """
         Dispatch event to all subscribers, handling async callbacks.
         """
+        logger.info(f"[DEBUG] _dispatch_event called for {event.event_type}")
         async with self._lock:
             callbacks = self._subscribers.get(event.event_type, []).copy()
+        logger.info(f"[DEBUG] Found {len(callbacks)} callbacks for {event.event_type}")
         
         logger.debug(f"Dispatching {event.event_type} to {len(callbacks)} subscribers")
         
         # Run callbacks concurrently if they are async
         tasks = []
-        for callback in callbacks:
+        for i, callback in enumerate(callbacks):
             try:
-                if asyncio.iscoroutinefunction(callback):
-                    tasks.append(callback(event))
+                # Check if callback is an async function (including bound methods)
+                is_async = asyncio.iscoroutinefunction(callback) or (
+                    hasattr(callback, '__func__') and asyncio.iscoroutinefunction(callback.__func__)
+                )
+                logger.info(f"[DEBUG] Callback {i}: {callback}, async={is_async}")
+                if is_async:
+                    # Create a Task to allow cancellation on timeout
+                    task = asyncio.create_task(callback(event))
+                    logger.info(f"[DEBUG] Created task {i}: {task}")
+                    tasks.append(task)
                 else:
                     # Run sync callbacks in a thread pool to avoid blocking the event loop
-                    # This requires an executor to be set on the event loop, or using run_in_executor
+                    logger.info(f"[DEBUG] Running sync callback {callback} in executor")
                     await asyncio.get_event_loop().run_in_executor(None, callback, event)
             except Exception as e:
                 logger.error(f"Error in event handler for {event.event_type}: {e}", exc_info=True)
         
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info(f"[DEBUG] About to await gather of {len(tasks)} tasks")
+            # Add a timeout to prevent hanging; retry on timeout
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    timeout_seconds = 60.0  # Increased from 30s to 60s
+                    logger.info(f"[DEBUG] Attempt {attempt+1}/{max_retries}: waiting with timeout={timeout_seconds}s")
+                    results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout_seconds)
+                    logger.info(f"[DEBUG] Gather completed, results count: {len(results)}")
+                    for result in results:
+                        if isinstance(result, Exception):
+                            logger.error(f"Exception in event handler for {event.event_type}: {result}", exc_info=True)
+                    break  # Success, exit retry loop
+                except asyncio.TimeoutError:
+                    logger.warning(f"[DEBUG] TIMEOUT: Event handler tasks for {event.event_type} timed out after {timeout_seconds}s (attempt {attempt+1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        # Cancel current tasks and recreate them for retry
+                        for task in tasks:
+                            task.cancel()
+                        # Recreate tasks from original callbacks
+                        tasks = []
+                        for callback in callbacks:
+                            is_async = asyncio.iscoroutinefunction(callback) or (
+                                hasattr(callback, '__func__') and asyncio.iscoroutinefunction(callback.__func__)
+                            )
+                            if is_async:
+                                task = asyncio.create_task(callback(event))
+                                tasks.append(task)
+                            # Note: sync callbacks already handled above; they wouldn't cause timeout in same way
+                        logger.info(f"[DEBUG] Recreated {len(tasks)} tasks for retry")
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff before retry
+                    else:
+                        # Final attempt failed; log error but continue (non-fatal)
+                        for task in tasks:
+                            task.cancel()
+                        logger.error(f"[DEBUG] All {max_retries} attempts timed out for {event.event_type}. Giving up but continuing service.")
+        else:
+            logger.info(f"[DEBUG] No async tasks to run for {event.event_type}")
+        logger.info(f"[DEBUG] _dispatch_event finished for {event.event_type}")
 
     async def get_subscribers_count(self, event_type: str) -> int:
         """Get count of subscribers for event type"""
@@ -206,6 +254,18 @@ class Events:
     # Learning events
     LEARNING_COMPLETE = "learning_complete" # New event for learning agent
     LEARNING_FEEDBACK = "learning_feedback" # Optional feedback event
+    
+    # System query/response events
+    GET_SYSTEM_STATUS = "get_system_status"
+    GET_PORTFOLIO_STATE = "get_portfolio_state"
+    GET_HEALTH_STATUS = "get_health_status"
+    SCHEDULE = "schedule"  # Generic scheduling event
+    
+    # Scheduler events
+    MARKET_SCAN_TRIGGER = "market_scan_trigger"  # Trigger to start market scan (used by scheduler and manual triggers)
+    DATA_REFRESH_TRIGGER = "data_refresh_trigger"  # Trigger to refresh data for existing symbols
+    DAILY_REPORT_TRIGGER = "daily_report_trigger"
+    HEALTH_CHECK_TRIGGER = "health_check_trigger"
 
 # Global event bus instance (lazy-loaded singleton)
 # For backward compatibility, provide a direct reference

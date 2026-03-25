@@ -19,8 +19,8 @@ class DataCache:
         self.ttl_minutes = ttl_minutes
         self._lock = threading.Lock()
         
+        logger.info(f"DataCache initialized: absolute_path={self.db_path.resolve()}, ttl={ttl_minutes} min")
         self._init_schema()
-        logger.info(f"DataCache initialized (path={db_path}, ttl={ttl_minutes} min)")
     
     def _init_schema(self) -> None:
         """Initialize cache schema"""

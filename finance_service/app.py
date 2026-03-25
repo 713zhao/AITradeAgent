@@ -5,9 +5,51 @@ import asyncio
 from datetime import datetime
 from flask import Flask, request, jsonify
 import pandas as pd  # Added for DataFrame operations in quote endpoint
+from zoneinfo import ZoneInfo
 
 # Temporary storage for Flask-initiated async responses
 flask_response_queues: Dict[str, asyncio.Queue] = {}
+
+# Global orchestrator (initialized at startup, read-only thereafter)
+_orchestrator: Optional['MainOrchestratorAgent'] = None
+_startup_done: bool = False
+
+def is_us_market_open() -> bool:
+    """Check if US stock market is currently open (9:30 AM - 4:00 PM ET, Mon-Fri)."""
+    try:
+        eastern = ZoneInfo('US/Eastern')
+        now = datetime.now(eastern)
+        # Check weekday (Mon=0, Fri=4)
+        if now.weekday() >= 5:  # Saturday=5, Sunday=6
+            return False
+        # Check time range (9:30 AM to 4:00 PM)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+        return market_open <= now <= market_close
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Error checking market hours: {e}")
+        return False
+
+def is_hk_market_open() -> bool:
+    """Check if Hong Kong stock market is currently open (9:30 AM - 4:00 PM HKT, Mon-Fri)."""
+    try:
+        hkt = ZoneInfo('Asia/Hong_Kong')
+        now = datetime.now(hkt)
+        if now.weekday() >= 5:  # Weekend
+            return False
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+        return market_open <= now <= market_close
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Error checking HK market hours: {e}")
+        return False
+
+def get_orchestrator() -> 'MainOrchestratorAgent':
+    """Return the initialized orchestrator. Must be called after service startup."""
+    global _orchestrator
+    if _orchestrator is None:
+        raise RuntimeError("Orchestrator not initialized. Service is still starting up.")
+    return _orchestrator
 
 from .core.config import Config
 from .core.logging import setup_logger, RunLogger
@@ -38,6 +80,15 @@ def health_check():
     """Health check endpoint"""
     return jsonify({"service": "finance", "status": "ok"}), 200
 
+class DummyTelegramAgent:
+    """Fallback no-op Telegram agent when real one can't be initialized."""
+    
+    def __getattr__(self, name):
+        async def noop(*args, **kwargs):
+            logger.debug(f"DummyTelegramAgent.{name} called (no-op)")
+            return None
+        return noop
+
 class MainOrchestratorAgent(Agent):
     """Main Orchestrator Agent - Coordinates all specialized agents in the trading system."""
 
@@ -62,10 +113,21 @@ class MainOrchestratorAgent(Agent):
         self.news_agent = NewsAgent(config_engine)
         self.analysis_agent = AnalysisAgent({})  # AnalysisAgent uses periods_config dict, not YAML config yet
         self.strategy_agent = StrategyAgent(config_engine)  # Needs rules from YAML
-        self.risk_agent = RiskAgent(config_engine)
-        self.execution_agent = ExecutionAgent(config_engine)
+        
+        # Extract risk config dict from finance YAML for RiskAgent
+        risk_config = config_engine.get("finance", "risk", default={})
+        self.risk_agent = RiskAgent(risk_config)
+        
+        # ExecutionAgent can use empty config or simple dict
+        execution_config = config_engine.get("finance", "execution", default={})
+        self.execution_agent = ExecutionAgent(execution_config)
         self.learning_agent = LearningAgent({})
-        self.telegram_agent = TelegramAgent({})
+        # Initialize TelegramAgent with compatibility handling
+        try:
+            self.telegram_agent = TelegramAgent({})
+        except Exception as e:
+            logger.warning(f"TelegramAgent initialization failed: {e}. Using dummy no-op agent.")
+            self.telegram_agent = DummyTelegramAgent()
         self.scheduler_agent = SchedulerAgent({})
         self.portfolio_agent = PortfolioAgent({}, data_agent=self.data_agent)
         self.health_agent = HealthAgent(config_engine)  # Health monitoring agent
@@ -85,17 +147,56 @@ class MainOrchestratorAgent(Agent):
         # event.data is an AgentReport dict; symbols are in payload["symbols"]
         payload = event.data.get("payload", {})
         symbols = payload.get("symbols", [])
+        logger.info(f"Processing {len(symbols)} symbols: {symbols}")
+        # Use 365-day lookback (1 year) to ensure enough trading days for SMA200
+        from datetime import datetime, timedelta
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=365)
         for symbol in symbols:
-            await self.data_agent.run(symbol=symbol, interval="1d")
+            # Determine market and check if open
+            market = None
+            market_open = False
+            if symbol.endswith('.HK'):
+                market = 'HK'
+                market_open = is_hk_market_open()
+            else:
+                market = 'US'
+                market_open = is_us_market_open()
+            if not market_open:
+                logger.info(f"Market {market} is closed. Skipping {symbol}.")
+                continue
+            logger.info(f"Fetching data for {symbol} ({start_date} to {end_date}) [Market: {market}]")
+            try:
+                result = await self.data_agent.run(
+                    symbol=symbol,
+                    interval="1d",
+                    start_date=str(start_date),
+                    end_date=str(end_date),
+                    use_cache=False  # Disable cache to ensure fresh data
+                )
+                logger.info(f"Data fetch for {symbol} completed: {result.status}")
+            except Exception as e:
+                logger.error(f"Error fetching data for {symbol}: {e}", exc_info=True)
     
     async def handle_data_fetch_complete(self, event: Event):
         logger.info(f"Orchestrator received DATA_FETCH_COMPLETE event: {event.data}")
-        symbol = event.data.get("symbol")
-        data_payload = event.data.get("dataframe") # Now this is a dict
-        if data_payload is not None and symbol is not None:
-            await self.news_agent.run(symbol=symbol)
-            # Pass the data_payload (dict) to analysis_agent.run
-            await self.analysis_agent.run(data_payload=data_payload, symbol=symbol)
+        try:
+            symbol = event.data.get("symbol")
+            data_payload = event.data.get("dataframe") # dict of records
+            logger.info(f"DATA_FETCH_COMPLETE for symbol={symbol}, dataframe type: {type(data_payload)}, size: {len(data_payload) if data_payload else 0}")
+            if data_payload is not None and symbol is not None:
+                logger.info(f"Calling news_agent.run({symbol})")
+                await self.news_agent.run(symbol=symbol)
+                logger.info(f"News done, calling analysis_agent.run with full payload")
+                # Pass the entire event.data payload, which includes 'dataframe' and 'fundamentals'
+                analysis_report = await self.analysis_agent.run(data_payload=event.data, symbol=symbol)
+                logger.info(f"Analysis agent run completed for {symbol}, status: {analysis_report.status}")
+                # Note: AnalysisAgent already publishes ANALYSIS_COMPLETE event internally, no need to duplicate here
+            else:
+                logger.warning(f"DATA_FETCH_COMPLETE missing symbol or dataframe: symbol={symbol}, has_dataframe={data_payload is not None}")
+        except Exception as e:
+            logger.error(f"Error in handle_data_fetch_complete: {e}", exc_info=True)
+            raise
 
     async def handle_news_fetch_complete(self, event: Event):
         logger.info(f"Orchestrator received NEWS_FETCH_COMPLETE event: {event.data}")
@@ -108,12 +209,25 @@ class MainOrchestratorAgent(Agent):
 
     async def handle_analysis_complete(self, event: Event):
         logger.info(f"Orchestrator received ANALYSIS_COMPLETE event: {event.data}")
-        analysis_report = AgentReport(**event.data) # Reconstruct AgentReport
-        symbol = analysis_report.payload.get("symbol")
+        # event.data is a dict containing 'indicators_snapshot' key
+        snapshot = event.data.get('indicators_snapshot')
+        if not snapshot:
+            logger.error(f"ANALYSIS_COMPLETE event missing indicators_snapshot: {event.data}")
+            return
+        symbol = snapshot.symbol
         logger.info(f"Analysis complete for symbol={symbol}, about to call _try_trigger")
         if symbol:
+            # Wrap in AgentReport with payload containing the snapshot under 'indicators_snapshot' key
+            analysis_report = AgentReport(
+                agent_id="analysis_agent",
+                status="success",
+                message=f"Analysis complete for {symbol}",
+                payload={"indicators_snapshot": snapshot}
+            )
             self.pending_analysis_reports[symbol] = analysis_report
             await self._try_trigger_strategy_agent(symbol)
+        else:
+            logger.error(f"ANALYSIS_COMPLETE event missing symbol in snapshot: {snapshot}")
 
     async def _try_trigger_strategy_agent(self, symbol: str):
         logger.info(f">>> _try_trigger_strategy_agent called for symbol={symbol}")
@@ -132,6 +246,18 @@ class MainOrchestratorAgent(Agent):
             # Clear pending reports after triggering strategy agent
             del self.pending_news_reports[symbol]
             del self.pending_analysis_reports[symbol]
+            # If strategy generated trade proposals, publish event for RiskAgent
+            if result and result.status == "success" and result.payload and result.payload.get("proposals"):
+                proposals = result.payload["proposals"]
+                logger.info(f"Strategy generated {len(proposals)} trade proposal(s). Publishing TRADE_PROPOSAL_GENERATED event.")
+                # Convert AgentReport to dict for event payload
+                from dataclasses import asdict
+                await self.event_bus.publish(Event(
+                    event_type=Events.TRADE_PROPOSAL_GENERATED,
+                    data=asdict(result)
+                ))
+            else:
+                logger.info(f"No trade proposals generated for {symbol}.")
         else:
             logger.warning(f"_try_trigger: missing one or both reports for {symbol}")
             # Log which one is missing
@@ -222,10 +348,24 @@ class MainOrchestratorAgent(Agent):
         logger.info("!!! HANDLER ENTERED !!!")
         logger.info(f">>> HANDLER START: handle_market_scan_trigger with event {event}")
         logger.info(f"Orchestrator received MARKET_SCAN_TRIGGER event: {event.data}")
+        
+        # Check if at least one market (US or HK) is open
+        us_open = is_us_market_open()
+        hk_open = is_hk_market_open()
+        if not (us_open or hk_open):
+            logger.info("Both US and HK markets are closed. Skipping market scan.")
+            return
+        logger.info(f"Market status: US={us_open}, HK={hk_open}. Proceeding with market scan.")
+        
         try:
             logger.info("Calling market_scanner_agent.run()...")
             result = await self.market_scanner_agent.run()
             logger.info(f"<<< HANDLER DONE: market_scanner_agent.run() returned: {result}")
+            # Publish MARKET_SCANNED event to continue pipeline
+            await self.event_bus.publish(
+                Event(event_type=Events.MARKET_SCANNED, data={"payload": result.payload, "agent_id": result.agent_id, "status": result.status, "message": result.message})
+            )
+            logger.info("Published MARKET_SCANNED event")
         except Exception as e:
             logger.error(f"<<< HANDLER ERROR: Error in handle_market_scan_trigger: {e}", exc_info=True)
             raise
@@ -349,83 +489,6 @@ class MainOrchestratorAgent(Agent):
 _orchestrator: Optional[MainOrchestratorAgent] = None
 _event_bus_initialized: bool = False
 
-async def initialize_orchestrator() -> MainOrchestratorAgent:
-    global _orchestrator, _event_bus_initialized
-    if _orchestrator is None:
-        # Initialize YAML Config Engine
-        config_engine = YAMLConfigEngine(config_dir="config")
-        
-        _orchestrator = MainOrchestratorAgent(config_engine)
-        _orchestrator.event_bus = await get_event_bus() # Assign event bus after orchestrator is created
-        
-        # Inject event bus into all agents
-        agents = [
-            _orchestrator.market_scanner_agent,
-            _orchestrator.data_agent,
-            _orchestrator.news_agent,
-            _orchestrator.analysis_agent,
-            _orchestrator.strategy_agent,
-            _orchestrator.risk_agent,
-            _orchestrator.execution_agent,
-            _orchestrator.learning_agent,
-            _orchestrator.telegram_agent,
-            _orchestrator.scheduler_agent,
-            _orchestrator.portfolio_agent,
-            _orchestrator.health_agent,  # Add health agent
-        ]
-        for agent in agents:
-            if hasattr(agent, 'event_bus'):
-                agent.event_bus = _orchestrator.event_bus
-        
-        # Special injection: give strategy_agent a reference to portfolio_agent for position checks
-        _orchestrator.strategy_agent.portfolio_agent = _orchestrator.portfolio_agent
-        
-        # Inject dependencies for health_agent
-        _orchestrator.health_agent.portfolio_agent = _orchestrator.portfolio_agent
-        _orchestrator.health_agent.telegram_agent = _orchestrator.telegram_agent
-        
-        # Start the scheduler to trigger periodic scans
-        asyncio.create_task(_orchestrator.scheduler_agent.run())
-        
-        # Register event listeners for inter-agent communication
-        logger.info("Registering event handlers...")
-        handlers = [
-            (Events.MARKET_SCANNED, _orchestrator.handle_market_scanned, "MARKET_SCANNED"),
-            (Events.DATA_FETCH_COMPLETE, _orchestrator.handle_data_fetch_complete, "DATA_FETCH_COMPLETE"),
-            (Events.NEWS_FETCH_COMPLETE, _orchestrator.handle_news_fetch_complete, "NEWS_FETCH_COMPLETE"),
-            (Events.ANALYSIS_COMPLETE, _orchestrator.handle_analysis_complete, "ANALYSIS_COMPLETE"),
-            (Events.TRADE_PROPOSAL_GENERATED, _orchestrator.handle_trade_proposal_generated, "TRADE_PROPOSAL_GENERATED"),
-            (Events.RISK_CHECK_COMPLETE, _orchestrator.handle_risk_check_complete, "RISK_CHECK_COMPLETE"),
-            (Events.APPROVAL_REQUIRED, _orchestrator.handle_approval_required, "APPROVAL_REQUIRED"),
-            (Events.TRADE_EXECUTED, _orchestrator.handle_trade_executed, "TRADE_EXECUTED"),
-            (Events.LEARNING_COMPLETE, _orchestrator.handle_learning_complete, "LEARNING_COMPLETE"),
-            (Events.MARKET_SCAN_TRIGGER, _orchestrator.handle_market_scan_trigger, "MARKET_SCAN_TRIGGER"),
-            (Events.DATA_REFRESH_TRIGGER, _orchestrator.handle_data_refresh_trigger, "DATA_REFRESH_TRIGGER"),
-            (Events.DAILY_REPORT_TRIGGER, _orchestrator.handle_daily_report_trigger, "DAILY_REPORT_TRIGGER"),
-            (Events.HEALTH_CHECK_TRIGGER, _orchestrator.handle_health_check_trigger, "HEALTH_CHECK_TRIGGER"),
-            (Events.GET_SYSTEM_STATUS, _orchestrator.handle_get_system_status, "GET_SYSTEM_STATUS"),
-            (Events.GET_HEALTH_STATUS, _orchestrator.handle_get_health_status, "GET_HEALTH_STATUS"),
-        ]
-        for event_type, handler, name in handlers:
-            try:
-                logger.info(f"Attempting to register: {name}")
-                await _orchestrator.event_bus.on(event_type, handler)
-                logger.info(f"Registered successfully: {name}")
-            except Exception as e:
-                logger.error(f"Failed to register {name}: {e}", exc_info=True)
-                raise
-        
-        # Log subscriber counts for key events
-        for event_name in ["market_scan_trigger", "market_scanned"]:
-            count = await _orchestrator.event_bus.get_subscribers_count(event_name)
-            logger.info(f"Subscribers for {event_name}: {count}")
-        await _orchestrator.event_bus.on(Events.GET_PORTFOLIO_STATE, _orchestrator.handle_get_portfolio_state)
-
-        _event_bus_initialized = True
-        logger.info("MainOrchestratorAgent and event listeners initialized.")
-    return _orchestrator
-
-
 @app.route("/analyze", methods=["POST"])
 async def analyze_market():
     """Full analysis workflow: data → news → analysis → strategy → return trade proposals."""
@@ -442,7 +505,7 @@ async def analyze_market():
     end_date = datetime.now().date()
     start_date = (datetime.now() - timedelta(days=lookback_days)).date().isoformat()
     
-    orchestrator = await initialize_orchestrator()
+    orchestrator = get_orchestrator()
     
     try:
         # 1. Fetch data with sufficient lookback
@@ -546,7 +609,7 @@ async def analyze_market():
 @app.route("/portfolio/state", methods=["GET"])
 async def get_portfolio_state():
     """Get current portfolio state"""
-    orchestrator = await initialize_orchestrator()
+    orchestrator = get_orchestrator()
     request_id = f"flask_{id(request)}"
     flask_response_queues[request_id] = asyncio.Queue()
     # This needs to be handled by a PortfolioAgent later, for now we trigger an event
@@ -573,7 +636,7 @@ async def get_portfolio_state():
 @app.route("/portfolio/propose", methods=["POST"])
 async def propose_trade():
     """Propose a trade"""
-    orchestrator = await initialize_orchestrator()
+    orchestrator = get_orchestrator()
     request_id = f"flask_{id(request)}"
     flask_response_queues[request_id] = asyncio.Queue()
 
@@ -608,7 +671,7 @@ async def propose_trade():
 @app.route("/portfolio/execute", methods=["POST"])
 async def execute_trade():
     """Execute a proposed trade"""
-    orchestrator = await initialize_orchestrator()
+    orchestrator = get_orchestrator()
     request_id = f"flask_{id(request)}"
     flask_response_queues[request_id] = asyncio.Queue()
 
@@ -648,7 +711,7 @@ async def execute_trade():
 @app.route("/quote/<symbol>", methods=["GET"])
 async def get_quote(symbol):
     """Get latest quote for symbol"""
-    orchestrator = await initialize_orchestrator()
+    orchestrator = get_orchestrator()
     # For a simple quote, we can directly ask the DataAgent
     report = await orchestrator.data_agent.run(symbol=symbol, interval="1d", emit_events=False) # No events for simple quote
 
@@ -678,7 +741,7 @@ async def get_quote(symbol):
 async def trigger_event(trigger_type: str):
     """Manual trigger endpoint for testing scheduled tasks."""
     logger.info(f"TRIGGER ENDPOINT CALLED with trigger_type={trigger_type}")
-    orchestrator = await initialize_orchestrator()
+    orchestrator = get_orchestrator()
     
     event_type_map = {
         "market-scan": Events.MARKET_SCAN_TRIGGER,
@@ -712,7 +775,7 @@ async def trigger_event(trigger_type: str):
 if __name__ == "__main__":
     Config.validate()
     async def main():
-        orchestrator = await initialize_orchestrator()
+        orchestrator = get_orchestrator()
         # You can trigger the orchestrator's run method here if it has a continuous loop
         asyncio.create_task(orchestrator.run()) # Start the orchestrator's main loop in the background
         # Use gunicorn or hypercorn for production async Flask deployment
@@ -741,7 +804,7 @@ class SimpleFinanceService:
 
     async def _get_orchestrator(self):
         if self._orchestrator is None:
-            self._orchestrator = await initialize_orchestrator()
+            self._orchestrator = get_orchestrator()
         return self._orchestrator
 
     def analyze(self, symbol: str) -> dict:
@@ -821,6 +884,75 @@ class SimpleFinanceService:
             return report.payload
         else:
             return {"error": report.message}
+
+# ============================================================================
+# Global orchestrator startup function (called from main thread before serving)
+# ============================================================================
+async def startup_orchestrator() -> MainOrchestratorAgent:
+    """Initialize the orchestrator at service startup. Must be called in main thread before any requests."""
+    global _orchestrator, _startup_done
+    if _startup_done and _orchestrator is not None:
+        logger.info("[STARTUP] Orchestrator already initialized, returning existing")
+        return _orchestrator
+    
+    logger.info("[STARTUP] Initializing orchestrator...")
+    config_engine = YAMLConfigEngine(config_dir="config")
+    _orchestrator = MainOrchestratorAgent(config_engine)
+    _orchestrator.event_bus = get_event_bus()
+    
+    # Inject event bus into all agents
+    agents = [
+        _orchestrator.market_scanner_agent,
+        _orchestrator.data_agent,
+        _orchestrator.news_agent,
+        _orchestrator.analysis_agent,
+        _orchestrator.strategy_agent,
+        _orchestrator.risk_agent,
+        _orchestrator.execution_agent,
+        _orchestrator.learning_agent,
+        _orchestrator.telegram_agent,
+        _orchestrator.scheduler_agent,
+        _orchestrator.portfolio_agent,
+        _orchestrator.health_agent,
+    ]
+    for agent in agents:
+        if hasattr(agent, 'event_bus'):
+            agent.event_bus = _orchestrator.event_bus
+    
+    # Additional cross-agent dependencies
+    _orchestrator.strategy_agent.portfolio_agent = _orchestrator.portfolio_agent
+    _orchestrator.health_agent.portfolio_agent = _orchestrator.portfolio_agent
+    _orchestrator.health_agent.telegram_agent = _orchestrator.telegram_agent
+    _orchestrator.scheduler_agent._orchestrator = _orchestrator  # Scheduler needs orchestrator to publish events
+    
+    # Start scheduler
+    asyncio.create_task(_orchestrator.scheduler_agent.run())
+    
+    # Register event handlers
+    handlers = [
+        (Events.MARKET_SCANNED, _orchestrator.handle_market_scanned, "MARKET_SCANNED"),
+        (Events.DATA_FETCH_COMPLETE, _orchestrator.handle_data_fetch_complete, "DATA_FETCH_COMPLETE"),
+        (Events.NEWS_FETCH_COMPLETE, _orchestrator.handle_news_fetch_complete, "NEWS_FETCH_COMPLETE"),
+        (Events.ANALYSIS_COMPLETE, _orchestrator.handle_analysis_complete, "ANALYSIS_COMPLETE"),
+        (Events.TRADE_PROPOSAL_GENERATED, _orchestrator.handle_trade_proposal_generated, "TRADE_PROPOSAL_GENERATED"),
+        (Events.RISK_CHECK_COMPLETE, _orchestrator.handle_risk_check_complete, "RISK_CHECK_COMPLETE"),
+        (Events.APPROVAL_REQUIRED, _orchestrator.handle_approval_required, "APPROVAL_REQUIRED"),
+        (Events.TRADE_EXECUTED, _orchestrator.handle_trade_executed, "TRADE_EXECUTED"),
+        (Events.LEARNING_COMPLETE, _orchestrator.handle_learning_complete, "LEARNING_COMPLETE"),
+        (Events.MARKET_SCAN_TRIGGER, _orchestrator.handle_market_scan_trigger, "MARKET_SCAN_TRIGGER"),
+        (Events.DATA_REFRESH_TRIGGER, _orchestrator.handle_data_refresh_trigger, "DATA_REFRESH_TRIGGER"),
+        (Events.DAILY_REPORT_TRIGGER, _orchestrator.handle_daily_report_trigger, "DAILY_REPORT_TRIGGER"),
+        (Events.HEALTH_CHECK_TRIGGER, _orchestrator.handle_health_check_trigger, "HEALTH_CHECK_TRIGGER"),
+        (Events.GET_SYSTEM_STATUS, _orchestrator.handle_get_system_status, "GET_SYSTEM_STATUS"),
+        (Events.GET_HEALTH_STATUS, _orchestrator.handle_get_health_status, "GET_HEALTH_STATUS"),
+        (Events.GET_PORTFOLIO_STATE, _orchestrator.handle_get_portfolio_state, "GET_PORTFOLIO_STATE"),
+    ]
+    for event_type, handler, name in handlers:
+        await _orchestrator.event_bus.on(event_type, handler)
+    
+    logger.info("[STARTUP] Orchestrator initialization complete")
+    _startup_done = True
+    return _orchestrator
 
 # Create singleton for import
 finance_service = SimpleFinanceService()

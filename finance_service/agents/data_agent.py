@@ -57,7 +57,7 @@ class DataAgent(Agent):
             timeout_sec=self.config.get("finance", "performance/api_timeout_sec", default=30),
         )
     
-    async def run(self, symbol: str, 
+    async def run(self, symbol: str = "", 
                   start_date: Optional[str] = None,
                   end_date: Optional[str] = None,
                   interval: str = "1d",
@@ -100,6 +100,15 @@ class DataAgent(Agent):
             payload = {"symbols": list(all_fetched_data.keys()), "count": len(all_fetched_data)}
             return AgentReport(agent_id=self.agent_id, status="success", message=message, payload=payload)
 
+        # Validate symbol for single fetch
+        if not symbol:
+            return AgentReport(
+                agent_id=self.agent_id,
+                status="error",
+                message="Symbol is required for single-symbol fetch",
+                payload={}
+            )
+
         # Path for single symbol fetch
         df = await self._fetch_data_for_symbol(
             symbol=symbol,
@@ -126,7 +135,9 @@ class DataAgent(Agent):
                     return {}
             fundamentals = await asyncio.to_thread(fetch_fundamentals_sync, symbol)
             message = f"Fetched data and fundamentals for {symbol}."
-            payload = {"symbol": symbol, "interval": interval, "dataframe": df.to_dict(), "fundamentals": fundamentals}
+            # Convert to dict with index as a column to preserve all rows
+            df_for_payload = df.reset_index()
+            payload = {"symbol": symbol, "interval": interval, "dataframe": df_for_payload.to_dict('records'), "fundamentals": fundamentals}
             if emit_events:
                 await self.event_bus.publish(Event(
                     event_type=Events.DATA_FETCH_COMPLETE,
@@ -145,6 +156,15 @@ class DataAgent(Agent):
         use_cache: bool = True
     ) -> Optional[pd.DataFrame]:
         """Fetches and caches data for a single symbol."""
+        logger.info(f"[_fetch_data_for_symbol] symbol={symbol}, start_date={start_date}, end_date={end_date}, interval={interval}")
+        
+        # Set default date range: ~400 calendar days to ensure 200+ trading days
+        if start_date is None or end_date is None:
+            end_dt = datetime.now().date() if end_date is None else datetime.strptime(end_date, "%Y-%m-%d").date()
+            start_dt = end_dt - timedelta(days=400) if start_date is None else datetime.strptime(start_date, "%Y-%m-%d").date()
+            start_date = start_dt.strftime("%Y-%m-%d")
+            end_date = end_dt.strftime("%Y-%m-%d")
+            logger.info(f"[_fetch_data_for_symbol] Using default date range: {start_date} to {end_date}")
         cache_key = f"{symbol}_{interval}_{start_date or ''}_{end_date or ''}"
         cached_df = None
 
@@ -157,6 +177,7 @@ class DataAgent(Agent):
         logger.debug(f"[Cache Miss] Fetching {symbol} data from provider.")
         # fetch_ohlcv is synchronous; run in thread to avoid blocking
         # It expects a list of symbols and returns dict {symbol: DataFrame}
+        logger.info(f"[_fetch_data_for_symbol] about to fetch from provider: start={start_date}, end={end_date}, interval={interval}")
         result_dict = await asyncio.to_thread(
             self.provider.fetch_ohlcv,
             [symbol],
@@ -165,6 +186,10 @@ class DataAgent(Agent):
             interval=interval
         )
         df = result_dict.get(symbol)
+        if df is not None:
+            logger.info(f"[_fetch_data_for_symbol] provider returned DataFrame with {len(df)} rows, date range: {df.index.min()} to {df.index.max()}")
+        else:
+            logger.warning(f"[_fetch_data_for_symbol] provider returned None for {symbol}")
 
         if df is not None and not df.empty:
             if use_cache:

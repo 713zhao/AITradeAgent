@@ -204,3 +204,50 @@ All 4 priority fixes have been implemented and verified. The system now:
 - Imports cleanly without warnings
 
 Ready for further development and CI integration.
+
+---
+
+## 5. Strategy Optimization - Regime Filter Adjustment (2026-03-24)
+
+### Rationale
+Backtest results from MEMORY.md (2026-03-22) showed that the simple `sma20_trend` strategy achieved 47.4% CAGR with 1.88 Sharpe. The live strategy `sma50_trend_regime` uses a regime filter (requires `regime_score > 70`) which reduces trade frequency. Even after lowering the regime threshold to 50 at 09:51, no trades have been generated (as of 11:58). To maximize signal frequency and align with backtested performance, we switch to the pure `sma20_trend` strategy.
+
+### Change
+- File: `config/finance.yaml`
+- Target: `strategy.type`
+- Old value: `"sma50_trend_regime"`
+- New value: `"sma20_trend"`
+
+### Expected Impact
+- Higher trade frequency (no regime filter, faster SMA)
+- Potential for higher CAGR but also higher drawdowns
+- Will monitor performance after paper trading resumes
+
+### Service Recovery
+- Finance service was intermittently down; restarted at 11:58 with PID 473752; health check returns OK.
+- Data refresh bug fixed earlier; pipeline verified working.
+
+
+---
+
+## 5. Strategy Optimization - Regime Filter Adjustment (2026-03-24)
+
+### Rationale
+Backtest results from MEMORY.md (2026-03-22) showed that the simple `sma20_trend` strategy achieved 47.4% CAGR with 1.88 Sharpe. The current live strategy `sma50_trend_regime` adds a regime filter (requires `regime_score > 70`) which likely reduces trade frequency. To increase exposure while retaining some market-safety, we lower the regime threshold.
+
+### Change
+- File: `config/finance.yaml`
+- Target: `strategies.sma50_trend_regime.entry_rules[regime_bullish].value`
+- Old value: `70.0` (only trade in strongly bullish regimes)
+- New value: `50.0` (allow neutral-to-bullish regimes)
+
+### Expected Impact
+- More entry signals as regime filter is less restrictive
+- Potentially higher CAGR but may increase drawdowns slightly
+- Will monitor performance after paper trading resumes
+
+### Service Recovery
+- Finance service was down due to missing `_startup_done` fix (already in working tree)
+- Restarted service at 09:54; health check returns OK
+- Data pipeline will be verified; first trades expected after next market open
+

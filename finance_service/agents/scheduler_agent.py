@@ -31,25 +31,25 @@ class SchedulerAgent(Agent):
         try:
             # Schedule tasks with appropriate intervals
             # Market scan: every 15 minutes during trading hours (simplified: every 15 min)
-            self._schedule_task(
+            await self._schedule_task(
                 "market_scan",
                 self._trigger_daily_market_scan,
                 timedelta(minutes=15)
             )
             # Data refresh: every 30 minutes
-            self._schedule_task(
+            await self._schedule_task(
                 "data_refresh",
                 self._trigger_hourly_data_refresh,
                 timedelta(minutes=30)
             )
             # Daily health check: every 4 hours
-            self._schedule_task(
+            await self._schedule_task(
                 "health_check",
                 self._trigger_health_check,
                 timedelta(hours=4)
             )
             # Daily summary after market close: run at 16:05 UTC+8 (08:05 UTC) daily
-            self._schedule_task(
+            await self._schedule_task(
                 "daily_report",
                 self._trigger_daily_report,
                 timedelta(days=1)
@@ -68,9 +68,16 @@ class SchedulerAgent(Agent):
                 try:
                     logger.info(f"Executing scheduled task: {task_name}")
                     await coro()
+                except asyncio.CancelledError:
+                    logger.info(f"Scheduled task {task_name} cancelled, exiting loop.")
+                    break
                 except Exception as e:
                     logger.error(f"Error in scheduled task {task_name}: {e}", exc_info=True)
-                await asyncio.sleep(interval.total_seconds())
+                try:
+                    await asyncio.sleep(interval.total_seconds())
+                except asyncio.CancelledError:
+                    logger.info(f"Scheduled task {task_name} sleep cancelled, exiting loop.")
+                    break
         
         # Cancel existing task if it exists
         if task_name in self.scheduled_tasks and not self.scheduled_tasks[task_name].done():

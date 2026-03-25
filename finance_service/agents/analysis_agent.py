@@ -49,27 +49,48 @@ class AnalysisAgent(Agent):
         logger.info(f"AnalysisAgent run: Calculating indicators for {symbol}")
         
         try:
-            # Reconstruct DataFrame from the data_payload
-            df = pd.DataFrame.from_dict(data_payload)
-            # Ensure the index is datetime if it was originally so. Assuming 'Date' is the index name.
-            if 'Date' in df.columns:
-                df.set_index('Date', inplace=True)
+            # data_payload is the full Event.data from DATA_FETCH_COMPLETE
+            # Extract the actual dataframe (list of records) and fundamentals
+            if isinstance(data_payload, dict):
+                df_data = data_payload.get('dataframe')
+                fundamentals = data_payload.get('fundamentals')
+            else:
+                raise ValueError("data_payload must be a dict")
+            
+            logger.info(f"AnalysisAgent: reconstructing DataFrame from {len(df_data) if df_data else 'None'} records")
+            if df_data is None:
+                raise ValueError("Missing 'dataframe' in payload")
+            
+            # Reconstruct DataFrame from the list of records
+            df = pd.DataFrame.from_dict(df_data)
+            logger.info(f"DataFrame constructed: rows={len(df)}, cols={list(df.columns)}")
+            
+            # Normalize column names to lowercase (yfinance returns capitalized)
+            df.columns = [col.lower() for col in df.columns]
+            logger.info(f"Columns normalized to lowercase: {list(df.columns)}")
+            
+            # The records should have a 'date' column; set as index
+            if 'date' in df.columns:
+                df.set_index('date', inplace=True)
             df.index = pd.to_datetime(df.index)
+            logger.info(f"DataFrame after set_index: rows={len(df)}, index range: {df.index.min()} to {df.index.max()}")
             
-            snapshot = self._calculate_all(df, symbol)
+            snapshot = self._calculate_all(df, symbol, fundamentals=fundamentals)
             message = f"Indicators calculated for {symbol} at {snapshot.timestamp.isoformat()}"
-            payload = snapshot.to_dict()  # Convert to dict using model's method
             
+            # Publish ANALYSIS_COMPLETE event with snapshot wrapped in dict (required by EventBus)
+            # Use key 'indicators_snapshot' to match StrategyAgent expectations
             await self.event_bus.publish(Event(
                 event_type=Events.ANALYSIS_COMPLETE,
-                data=payload
+                data={"indicators_snapshot": snapshot}
             ))
             
+            # Return an AgentReport with the snapshot directly for immediate callers
             return AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
-                payload=payload
+                payload=snapshot
             )
         except ValueError as e:
             logger.warning(f"AnalysisAgent failed for {symbol}: {e}")
@@ -188,12 +209,20 @@ class AnalysisAgent(Agent):
                             metadata={'fundamental': True}
                         )
             
+            # Get latest close price as current_price
+            try:
+                current_price = float(df['close'].iloc[-1])
+            except Exception as e:
+                logger.warning(f"Could not get current_price for {symbol}: {e}")
+                current_price = None
+            
             logger.debug(f"Calculated {len(indicators)} indicators for {symbol} at {latest_ts}")
             
             return IndicatorsSnapshot(
                 symbol=symbol,
                 timestamp=latest_ts,
-                indicators=indicators
+                indicators=indicators,
+                current_price=current_price
             )
         except Exception as e:
             logger.error(f"Error calculating indicators for {symbol}: {e}")

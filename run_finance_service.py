@@ -37,18 +37,28 @@ def main():
     
     try:
         # Import the Flask app and run with Hypercorn (ASGI server for async Flask)
-        from finance_service.app import app
+        from finance_service.app import app, startup_orchestrator
         from hypercorn.asyncio import serve
         from hypercorn.config import Config
         
-        # Configure Hypercorn
-        hypercorn_config = Config()
-        hypercorn_config.bind = ["0.0.0.0:8801"]
-        hypercorn_config.loglevel = "info"
-        hypercorn_config.accesslog = "-"
+        async def async_main():
+            # Initialize orchestrator before starting server
+            logger.info("🔧 Initializing orchestrator...")
+            await startup_orchestrator()
+            logger.info("✅ Orchestrator initialized")
+            
+            # Configure Hypercorn
+            hypercorn_config = Config()
+            hypercorn_config.bind = ["0.0.0.0:8801"]
+            hypercorn_config.loglevel = "info"
+            hypercorn_config.accesslog = "-"
+            
+            # Run the async server
+            logger.info("🌐 Starting server on http://0.0.0.0:8801")
+            await serve(app, hypercorn_config)
         
-        # Run the async server
-        asyncio.run(serve(app, hypercorn_config))
+        # Run the combined async main
+        asyncio.run(async_main())
         
     except KeyboardInterrupt:
         logger.info("🛑 Service stopped by user")

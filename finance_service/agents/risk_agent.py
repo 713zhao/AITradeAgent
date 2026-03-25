@@ -343,47 +343,71 @@ class RiskAgent(Agent):
 
     async def run(self, trade_proposal_report: AgentReport) -> Optional[AgentReport]:
         """
-        Evaluates a trade proposal against risk policies and potentially initiates an approval process.
+        Evaluates trade proposal(s) against risk policies and potentially initiates an approval process.
+        Supports both single proposal ({"proposal": {...}}) and multiple proposals ({"proposals": [{...}]}).
         """
-        logger.info("RiskAgent run: Evaluating trade proposal for risk.")
+        logger.info("RiskAgent run: Evaluating trade proposal(s) for risk.")
 
         try:
-            proposal = TradeProposal(**trade_proposal_report.payload["proposal"])
-            # For now, current_positions and portfolio_equity are placeholders.
-            # These would typically come from a PortfolioAgent or external source.
+            payload = trade_proposal_report.payload
+            
+            # Handle both singular "proposal" and plural "proposals"
+            if "proposals" in payload:
+                proposals_data = payload["proposals"]
+                if not isinstance(proposals_data, list):
+                    proposals_data = [proposals_data]
+            elif "proposal" in payload:
+                proposals_data = [payload["proposal"]]
+            else:
+                raise ValueError("No proposal or proposals found in payload")
+            
+            results = []
             current_positions: Dict[str, Position] = {}
             portfolio_equity: float = 100000.0
-
-            risk_check_result = self._check_trade(
-                trade_id=f"trade_{proposal.symbol}_{datetime.utcnow().timestamp()}", # Generate unique ID
-                symbol=proposal.symbol,
-                quantity=1.0, # Placeholder quantity, assuming 1 unit for now or infer from proposal
-                price=proposal.target_price or 1.0, # Use target price as trade price for risk assessment
-                portfolio_equity=portfolio_equity,
-                current_positions=current_positions,
-                confidence=proposal.confidence,
-            )
             
-            message = f"Risk assessment complete for {proposal.symbol}. Approval Required: {risk_check_result.approval_required}"
-            payload = {"risk_assessment": risk_check_result.to_dict(), "trade_proposal": proposal.model_dump()}
+            for proposal_data in proposals_data:
+                proposal = TradeProposal(**proposal_data)
+                
+                risk_check_result = self._check_trade(
+                    trade_id=f"trade_{proposal.symbol}_{datetime.utcnow().timestamp()}",
+                    symbol=proposal.symbol,
+                    quantity=1.0,  # Placeholder quantity
+                    price=proposal.target_price or 1.0,
+                    portfolio_equity=portfolio_equity,
+                    current_positions=current_positions,
+                    confidence=proposal.confidence,
+                )
+                results.append(risk_check_result)
+            
+            # Aggregate results
+            any_approval_required = any(r.approval_required for r in results)
+            all_passed = all(r.passed for r in results)
+            
+            message = f"Risk assessment complete for {len(results)} proposal(s). Approval Required: {any_approval_required}"
+            payload_out = {
+                "risk_assessments": [r.to_dict() for r in results],
+                "trade_proposals": [proposal_data for proposal_data in proposals_data],
+                "all_passed": all_passed,
+                "any_approval_required": any_approval_required
+            }
 
             # Publish event based on approval required status
-            if risk_check_result.approval_required:
+            if any_approval_required:
                 await self.event_bus.publish(Event(
                     event_type=Events.APPROVAL_REQUIRED,
-                    data=payload
+                    data=payload_out
                 ))
             else:
                 await self.event_bus.publish(Event(
                     event_type=Events.RISK_CHECK_COMPLETE,
-                    data=payload
+                    data=payload_out
                 ))
 
             return AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
-                payload=payload
+                payload=payload_out
             )
         except Exception as e:
             logger.error(f"Error in RiskAgent run: {e}")

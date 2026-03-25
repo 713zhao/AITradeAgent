@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import pandas as pd
 
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -198,6 +198,17 @@ class StrategyAgent(Agent):
         # Load rules from YAML config using correct pattern
         rules_config = self._load_rules_from_config()
         self.rule_strategy = RuleStrategy(rules_config)
+        # Load portfolio and risk parameters for position sizing
+        self.initial_cash = self.config_engine.get("finance", "portfolio/initial_cash", default=100000.0)
+        # Get active strategy's risk_budget_pct
+        strategy_name = self.config_engine.get("finance", "strategy/type", default=None)
+        self.risk_budget_pct = 1.5  # default
+        if strategy_name:
+            strategies = self.config_engine.get("finance", "strategies", default={})
+            if isinstance(strategies, dict) and strategy_name in strategies:
+                strat_cfg = strategies[strategy_name]
+                self.risk_budget_pct = strat_cfg.get('risk_budget_pct', 1.5)
+        logger.info(f"StrategyAgent: portfolio_value=${self.initial_cash:,.2f}, risk_budget_pct={self.risk_budget_pct}%")
         logger.info(f"StrategyAgent initialized with {len(rules_config)} rules")
 
     def _load_rules_from_config(self) -> List[Dict]:
@@ -285,6 +296,106 @@ class StrategyAgent(Agent):
         logger.info(f"Loaded {len(rules)} rules from config")
         return rules
 
+    async def run(self, indicators_report: AgentReport, news_report: AgentReport) -> AgentReport:
+        """
+        Generate trade proposals based on analysis and news.
+        
+        Args:
+            indicators_report: AgentReport with indicators_snapshot
+            news_report: AgentReport with news sentiment
+        
+        Returns:
+            AgentReport with proposals list in payload
+        """
+        try:
+            # Get indicator snapshot from analysis report
+            indicators_snapshot = indicators_report.payload.get("indicators_snapshot")
+            if not indicators_snapshot:
+                return AgentReport(
+                    agent_id=self.agent_id,
+                    status="error",
+                    message="No indicators_snapshot in analysis_report"
+                )
+            
+            # Evaluate entry/exit rules
+            should_buy, confidence, entry_rules = self.rule_strategy.evaluate_entry(indicators_snapshot)
+            should_sell, exit_rules = self.rule_strategy.evaluate_exit(indicators_snapshot)
+            
+            # Build trade proposals if entry signal
+            proposals = []
+            if should_buy:
+                symbol = indicators_snapshot.symbol
+                # Use close price as target for market orders
+                current_price = indicators_snapshot.current_price
+                target_price = current_price
+                
+                # Calculate stop loss based on ATR (2x ATR default)
+                atr_indicator = indicators_snapshot.indicators.get('atr')
+                if atr_indicator:
+                    atr_value = atr_indicator.value
+                else:
+                    # Fallback: 2% of price if ATR not available
+                    atr_value = current_price * 0.02
+                
+                stop_loss_price = round(current_price - (atr_value * 2), 2)
+                # Ensure stop is below current price
+                if stop_loss_price >= current_price:
+                    stop_loss_price = round(current_price * 0.95, 2)  # 5% below as fallback
+                
+                # Position sizing: risk-based
+                # Risk per share = current_price - stop_loss_price
+                risk_per_share = current_price - stop_loss_price
+                if risk_per_share <= 0:
+                    logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share}. Using default 1 share.")
+                    quantity = 1
+                else:
+                    # Maximum loss amount we're willing to take for this trade
+                    risk_budget_usd = self.initial_cash * (self.risk_budget_pct / 100.0)
+                    quantity = int(risk_budget_usd / risk_per_share)
+                    # Minimum 1 share, and ensure not too large (max 10% of daily volume? skip for now)
+                    quantity = max(1, quantity)
+                
+                proposal = TradeProposal(
+                    symbol=symbol,
+                    action="BUY",
+                    confidence=confidence,
+                    target_price=target_price,
+                    stop_loss_price=stop_loss_price,
+                    rationale=[f"Entry rules triggered: {entry_rules}"]
+                )
+                # Attach quantity separately (not part of TradeProposal model but needed for execution)
+                # We'll include it in the dict representation
+                proposal_dict = asdict(proposal)
+                proposal_dict['quantity'] = quantity
+                proposals.append(proposal_dict)
+            
+            # Note: Exits are handled by PortfolioAgent when rules trigger; strategy only generates BUY proposals
+            
+            if proposals:
+                logger.info(f"Strategy generated {len(proposals)} trade proposal(s)")
+                return AgentReport(
+                    agent_id=self.agent_id,
+                    status="success",
+                    message=f"Generated {len(proposals)} trade proposals",
+                    payload={"proposals": proposals}
+                )
+            else:
+                # No proposals generated - this is normal, not an error
+                return AgentReport(
+                    agent_id=self.agent_id,
+                    status="success",
+                    message="No trade proposals generated",
+                    payload={"proposals": []}
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in StrategyAgent.run: {e}", exc_info=True)
+            return AgentReport(
+                agent_id=self.agent_id,
+                status="error",
+                message=f"StrategyAgent error: {e}"
+            )
+
     def _evaluate_strategies(self, indicators_report: AgentReport, news_report: AgentReport) -> list[TradeProposal]:
         """
         Internal method to evaluate various trading strategies.
@@ -338,14 +449,14 @@ class StrategyAgent(Agent):
                 target_price = round(current_price * 1.05, 2) # Example: 5% above
                 stop_loss_price = round(current_price - (atr_value * 2), 2) # Example: 2x ATR below
 
-                proposals.append(TradeProposal(
+                proposals.append(asdict(TradeProposal(
                     symbol=symbol,
                     action="BUY",
                     confidence=buy_confidence,
                     target_price=target_price,
                     stop_loss_price=stop_loss_price,
                     rationale=entry_rules
-                ))
+                )))
             elif should_sell:
                 # For now, if sell signals, we propose to sell existing positions
                 # In a real scenario, this would check existing positions and propose selling relevant quantity
@@ -356,14 +467,14 @@ class StrategyAgent(Agent):
                 target_price = round(current_price * 0.95, 2)
                 stop_loss_price = round(current_price + (atr_value * 2), 2)
 
-                proposals.append(TradeProposal(
+                proposals.append(asdict(TradeProposal(
                     symbol=symbol,
                     action="SELL",
                     confidence=0.7, # Placeholder confidence for selling
                     target_price=target_price,
                     stop_loss_price=stop_loss_price,
                     rationale=exit_rules
-                ))
+                )))
         
         logger.debug(f"Generated {len(proposals)} proposals.")
         return proposals
