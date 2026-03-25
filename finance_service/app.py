@@ -282,15 +282,17 @@ class MainOrchestratorAgent(Agent):
     async def handle_risk_check_complete(self, event: Event):
         logger.info(f"Orchestrator received RISK_CHECK_COMPLETE event: {event.data}")
         risk_check_report = AgentReport(**event.data)
-        # Assuming RiskAgent's report contains a RiskCheckResult with approval_required
-        risk_check_result = risk_check_report.payload.get("risk_check_result")
-
-        if risk_check_result and not risk_check_result.get("approval_required", False):
-            # If no approval is required, proceed to execution
-            # Pass the full risk_check_report as the approval_report (it contains both trade_proposal and risk_assessment)
+        # RiskAgent payload has 'any_approval_required' and 'all_passed' flags
+        any_approval_required = risk_check_report.payload.get("any_approval_required", False)
+        all_passed = risk_check_report.payload.get("all_passed", False)
+        
+        if all_passed and not any_approval_required:
+            # If no approval is required and all checks passed, proceed to execution
+            # Pass the full risk_check_report as the approval_report (it contains both trade_proposals and risk_assessments)
+            logger.info("Risk check passed, proceeding to execution.")
             await self.execution_agent.run(approval_report=risk_check_report)
         else:
-            logger.info("Approval required for trade proposal.")
+            logger.info(f"Approval required for trade proposal (all_passed={all_passed}, any_approval_required={any_approval_required}). Skipping automatic execution.")
 
     async def handle_approval_required(self, event: Event):
         logger.info(f"Orchestrator received APPROVAL_REQUIRED event: {event.data}")
