@@ -139,3 +139,18 @@ config/local/
 logs/
 tmp/
 temp/
+
+# Temporary and output files
+*.sqlite
+*.sqlite3
+*.db
+*.out
+*.bak
+*.lock
+*.pid
+*.tmp
+.tmp/
+storage/
+nohup.out
+finance_service_restart.out
+telegram_notifier.out
