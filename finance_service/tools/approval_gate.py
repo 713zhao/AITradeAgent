@@ -58,6 +58,9 @@ class TelegramApprovalGate(ApprovalGate):
         self.bot_token = bot_token or Config.TELEGRAM_BOT_TOKEN
         self.chat_id = chat_id or Config.TELEGRAM_CHAT_ID
         
+        raw_thread_id = Config.TELEGRAM_MESSAGE_THREAD_ID
+        self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id is not None and str(raw_thread_id).strip() != "" else None
+        
         if not self.bot_token or not self.chat_id:
             logger.warning("Telegram credentials not configured")
             self.enabled = False
@@ -137,11 +140,15 @@ class TelegramApprovalGate(ApprovalGate):
             self.pending_approvals[task_id] = event
             self.approval_responses[task_id] = (False, "Timeout") # Default to timeout
 
-            await self.bot_instance.send_message(
-                chat_id=self.chat_id,
-                text=message,
-                parse_mode="Markdown"
-            )
+            kwargs = {
+                "chat_id": self.chat_id,
+                "text": message,
+                "parse_mode": "Markdown"
+            }
+            if self.thread_id is not None:
+                kwargs["message_thread_id"] = self.thread_id
+
+            await self.bot_instance.send_message(**kwargs)
             
             logger.info(f"Telegram approval request sent for {task_id}")
             return True, "Approval request sent via Telegram"
