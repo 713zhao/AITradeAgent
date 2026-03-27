@@ -18,19 +18,21 @@
 - [ ] **Step 1: Delete temporary untracked log and out files**
 
 ```bash
-rm -f *.log *.out
+ls -1 *.log *.out 2>/dev/null || true
+rm -vf *.log *.out || true
 ```
 
 - [ ] **Step 2: Remove tracked temporary python scripts**
 
 ```bash
-git rm -f check_*.py fix_*.py test_*.py
+ls -1 check_*.py fix_*.py test_*.py 2>/dev/null || true
+git rm -q --ignore-unmatch check_*.py fix_*.py test_*.py || true
 ```
 
 - [ ] **Step 3: Commit the cleanup**
 
 ```bash
-git commit -m "chore: Remove temporary logs and scripts from root directory"
+git status --porcelain | grep -q '^[ MADRCU]' && git commit -m "chore: Remove temporary logs and scripts from root directory" || echo "No changes to commit"
 ```
 
 ### Task 2: Configuration Updates
@@ -41,7 +43,13 @@ git commit -m "chore: Remove temporary logs and scripts from root directory"
 
 - [ ] **Step 1: Add field to Pydantic config**
 
-In `finance_service/core/pydantic_config.py`, add `TELEGRAM_MESSAGE_THREAD_ID` under "Approval configuration" and a validator:
+In `finance_service/core/pydantic_config.py`, ensure imports:
+```python
+from typing import Dict, Any, Optional, List
+from pydantic import Field, field_validator
+```
+
+Add `TELEGRAM_MESSAGE_THREAD_ID` under "Approval configuration" and a validator:
 
 ```python
     TELEGRAM_CHAT_ID: str = Field("", description="Telegram chat ID for notifications")
