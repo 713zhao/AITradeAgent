@@ -49,6 +49,7 @@ class Config:
     APPROVAL_TIMEOUT = _pydantic_settings.APPROVAL_TIMEOUT
     TELEGRAM_BOT_TOKEN = _pydantic_settings.TELEGRAM_BOT_TOKEN
     TELEGRAM_CHAT_ID = _pydantic_settings.TELEGRAM_CHAT_ID
+    TELEGRAM_MESSAGE_THREAD_ID = _pydantic_settings.TELEGRAM_MESSAGE_THREAD_ID
     SLACK_BOT_TOKEN = _pydantic_settings.SLACK_BOT_TOKEN
     SLACK_CHANNEL = _pydantic_settings.SLACK_CHANNEL
 
