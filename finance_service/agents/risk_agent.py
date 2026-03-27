@@ -6,7 +6,8 @@ from enum import Enum
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
-from finance_service.core.models import TradeProposal, Position # Import Position for risk checks
+from finance_service.core.models import TradeProposal, Position  # Position from core (qty, avg_cost, current_price)
+from finance_service.agents.portfolio_agent import PortfolioAgent  # For portfolio state
 
 logger = logging.getLogger(__name__)
 
@@ -323,9 +324,10 @@ class RiskAgent(Agent):
     def goal(self) -> str:
         return "Enforce risk management policies and facilitate trade approval workflows."
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], portfolio_agent: Optional[PortfolioAgent] = None):
         self.config = config
         self.event_bus = get_event_bus()
+        self.portfolio_agent = portfolio_agent  # For fetching live portfolio state
         # Initialize risk policy (from config or default)
         policy_config = config.get("policy", {})
         self.policy = RiskPolicy(
@@ -361,17 +363,63 @@ class RiskAgent(Agent):
             else:
                 raise ValueError("No proposal or proposals found in payload")
             
-            results = []
+            # Fetch current portfolio state if PortfolioAgent is available
             current_positions: Dict[str, Position] = {}
-            portfolio_equity: float = 100000.0
+            portfolio_equity: float = 100000.0  # fallback
+            if self.portfolio_agent:
+                try:
+                    portfolio_report = await self.portfolio_agent.run(
+                        event_type=Events.GET_PORTFOLIO_STATE,
+                        payload={}
+                    )
+                    if portfolio_report.status == "success":
+                        portfolio_data = portfolio_report.payload
+                        positions_list = portfolio_data.get("positions", [])
+                        # Convert portfolio Position dicts to core.models.Position (which uses 'qty')
+                        current_positions = {}
+                        for p in positions_list:
+                            try:
+                                pos = Position(
+                                    symbol=p["symbol"],
+                                    qty=p["quantity"],  # map portfolio's 'quantity' to Position's 'qty'
+                                    avg_cost=p["avg_cost"],
+                                    current_price=p["current_price"]
+                                )
+                                current_positions[p["symbol"]] = pos
+                            except Exception as e:
+                                logger.warning(f"Failed to convert position {p.get('symbol')}: {e}")
+                                continue
+                        portfolio_equity = portfolio_data["equity_metrics"]["total_equity"]
+                        logger.info(f"RiskAgent using live portfolio: equity=${portfolio_equity:,.2f}, positions={len(current_positions)}")
+                        
+                        # Safety check: if equity is negative or severely impaired, reject all proposals
+                        if portfolio_equity <= 0:
+                            logger.error(f"Portfolio equity is non-positive (${portfolio_equity:,.2f}). Rejecting all proposals.")
+                            return AgentReport(
+                                agent_id=self.agent_id,
+                                status="error",
+                                message="Portfolio equity is non-positive; risk manager halting all trades.",
+                                payload={}
+                            )
+                    else:
+                        logger.warning(f"Failed to get portfolio state: {portfolio_report.message}. Using defaults.")
+                except Exception as e:
+                    logger.error(f"Error fetching portfolio state: {e}. Using defaults.")
+            else:
+                logger.warning("No portfolio_agent configured; using static portfolio values.")
+            
+            results = []
             
             for proposal_data in proposals_data:
                 proposal = TradeProposal(**proposal_data)
                 
+                # Use the quantity calculated by the strategy; fallback to 1.0 if missing
+                trade_quantity = proposal.quantity if proposal.quantity is not None else 1.0
+                
                 risk_check_result = self._check_trade(
                     trade_id=f"trade_{proposal.symbol}_{datetime.utcnow().timestamp()}",
                     symbol=proposal.symbol,
-                    quantity=1.0,  # Placeholder quantity
+                    quantity=trade_quantity,
                     price=proposal.target_price or 1.0,
                     portfolio_equity=portfolio_equity,
                     current_positions=current_positions,
@@ -444,9 +492,9 @@ class RiskAgent(Agent):
             logger.info(f"Risk policy disabled, skipping checks for {trade_id}")
             return result
         
-        # Check 1: Position Size
+        # Check 1: Position Size (include existing position)
         if not self._check_position_size(
-            symbol, quantity, price, portfolio_equity, result
+            symbol, quantity, price, portfolio_equity, result, current_positions
         ):
             result.checks_performed["position_size"] = False
         else:
@@ -490,13 +538,22 @@ class RiskAgent(Agent):
         price: float,
         portfolio_equity: float,
         result: RiskCheckResult,
+        current_positions: Dict[str, Position],  # Add current_positions parameter
     ) -> bool:
-        """Check position size limit."""
+        """Check position size limit (including existing position)."""
         if portfolio_equity <= 0:
             return True
         
-        position_value = abs(quantity * price)
-        position_pct = (position_value / portfolio_equity) * 100
+        # New trade value
+        new_value = abs(quantity * price)
+        # Existing position value (if any)
+        existing_value = 0.0
+        if symbol in current_positions:
+            pos = current_positions[symbol]
+            existing_value = abs(pos.qty * pos.current_price)
+        # Total position value after trade
+        total_value = existing_value + new_value
+        position_pct = (total_value / portfolio_equity) * 100
         
         limit = self.policy.get_limit("position_size")
         if limit:

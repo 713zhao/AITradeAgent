@@ -63,17 +63,29 @@ class PortfolioAgent(Agent):
         quantity = trade_info.get("quantity")
         price = trade_info.get("price")
         trade_id = trade_info.get("trade_id") or f"exec_{int(datetime.utcnow().timestamp()*1000)}"
-        
+
         logger.info(f"[PORTFOLIO DEBUG] Parsed: symbol={symbol}, side={side}, quantity={quantity}, price={price}, trade_id={trade_id}")
-        
+
         if not all([symbol, side, quantity, price]):
             msg = f"Missing required trade fields: {trade_info}"
             logger.error(msg)
             return AgentReport(agent_id=self.agent_id, status="error", message=msg)
-        
+
         try:
             side = side.upper()
             if side == "BUY":
+                # --- FIX 1: Cash sufficiency check ---
+                trade_value = quantity * price
+                # Get current available cash from repository (track running cash balance)
+                # Since repository doesn't track cash separately, we compute from portfolio formula
+                # available_cash = initial_cash - spent_on_long_positions
+                current_portfolio = self.repository.calculate_portfolio(self.initial_cash)
+                available_cash = current_portfolio.current_cash
+                if trade_value > available_cash:
+                    msg = f"Insufficient cash for BUY: need ${trade_value:,.2f}, available ${available_cash:,.2f}"
+                    logger.error(msg)
+                    return AgentReport(agent_id=self.agent_id, status="error", message=msg)
+
                 logger.info(f"[PORTFOLIO DEBUG] Creating BUY trade for {symbol}")
                 trade = self.repository.create_trade(
                     task_id=trade_id,

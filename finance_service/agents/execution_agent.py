@@ -1,5 +1,7 @@
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional
+from dataclasses import asdict
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
@@ -25,29 +27,33 @@ class ExecutionAgent(Agent):
     async def run(self, approval_report: AgentReport) -> Optional[AgentReport]:
         """
         Receives an approved trade proposal and executes it.
+        The approval_report.payload contains:
+        - trade_proposals: list of proposals (usually single item)
+        - risk_assessments: list of assessments (matching proposals)
+        - all_passed: bool
+        - any_approval_required: bool
         """
         logger.info("ExecutionAgent run: Executing approved trade proposal.")
 
         try:
-            # Placeholder for actual trade execution logic
-            # This will involve:
-            # 1. Extracting TradeProposal and possibly RiskCheckResult from approval_report.payload
-            # 2. Selecting an execution algorithm (e.g., TWAP, VWAP, market order)
-            # 3. Interacting with a BrokerManager to place the order
-            # 4. Monitoring the order status
-            # 5. Returning an ExecutionReport or similar payload in the AgentReport
+            # Extract the first trade proposal (single-proposal flow)
+            trade_proposals = approval_report.payload.get("trade_proposals", [])
+            if not trade_proposals:
+                raise ValueError("No trade_proposals found in approval_report.payload")
+            trade_proposal_data = trade_proposals[0]
+            trade_proposal = TradeProposal(**trade_proposal_data)
 
-            trade_proposal = TradeProposal(**approval_report.payload["trade_proposal"])
-            # Assuming approval_report.payload also contains risk_assessment
-            risk_assessment = approval_report.payload["risk_assessment"]
+            # Extract risk assessment if needed
+            risk_assessments = approval_report.payload.get("risk_assessments", [])
+            risk_assessment = risk_assessments[0] if risk_assessments else {}
 
             # Mock execution result
             execution_result = {
-                "trade_id": trade_proposal.symbol + "_exec_" + str(datetime.utcnow().timestamp()),
+                "trade_id": f"trade_{trade_proposal.symbol}_{datetime.utcnow().timestamp()}",
                 "symbol": trade_proposal.symbol,
                 "action": trade_proposal.action,
-                "quantity": 1.0, # Placeholder quantity
-                "filled_price": trade_proposal.target_price, # Assuming filled at target for mock
+                "quantity": trade_proposal.quantity or 1.0,
+                "filled_price": trade_proposal.target_price,  # mock: fill at target
                 "status": "FILLED",
                 "timestamp": datetime.utcnow().isoformat()
             }
@@ -55,17 +61,20 @@ class ExecutionAgent(Agent):
             message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
             payload = {"execution_result": execution_result}
 
-            await self.event_bus.publish(Event(
-                event_type=Events.TRADE_EXECUTED,
-                data=payload
-            ))
-
-            return AgentReport(
+            # Publish execution event as an AgentReport
+            report = AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
                 payload=payload
             )
+            event_data = asdict(report)
+            logger.info(f"[EXECUTION DEBUG] Publishing TRADE_EXECUTED event with data keys: {list(event_data.keys())}")
+            await self.event_bus.publish(Event(
+                event_type=Events.TRADE_EXECUTED,
+                data=event_data
+            ))
+            return report
         except Exception as e:
             logger.error(f"Error in ExecutionAgent run: {e}")
             return AgentReport(

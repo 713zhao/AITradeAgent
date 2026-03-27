@@ -188,60 +188,19 @@ class DataAgent(Agent):
         # fetch_ohlcv is synchronous; run in thread to avoid blocking
         # It expects a list of symbols and returns dict {symbol: DataFrame}
         logger.info(f"[_fetch_data_for_symbol] about to fetch from provider: start={start_date}, end={end_date}, interval={interval}")
-        
-        df = None
-        try:
-            result_dict = await asyncio.to_thread(
-                self.provider.fetch_ohlcv,
-                [symbol],
-                start_date=start_date,
-                end_date=end_date,
-                interval=interval
-            )
-            df = result_dict.get(symbol)
-            if df is not None:
-                logger.info(f"[_fetch_data_for_symbol] provider returned DataFrame with {len(df)} rows, date range: {df.index.min()} to {df.index.max()}")
-            else:
-                logger.warning(f"[_fetch_data_for_symbol] provider returned None for {symbol}")
-        except Exception as e:
-            logger.error(f"[_fetch_data_for_symbol] Provider error for {symbol}: {e}", exc_info=True)
-            logger.info(f"[_fetch_data_for_symbol] Attempting to use cached data (even if expired) as fallback...")
-            # Try to get any cached data, even if expired (graceful degradation)
-            with self.cache._lock:
-                try:
-                    import sqlite3
-                    with sqlite3.connect(str(self.cache.db_path)) as conn:
-                        conn.row_factory = sqlite3.Row
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            SELECT timestamp, open, high, low, close, volume
-                            FROM ohlcv_cache
-                            WHERE symbol = ? AND interval = ?
-                            ORDER BY timestamp DESC
-                            LIMIT 1
-                        ''', (symbol, interval))
-                        last_row = cursor.fetchone()
-                        
-                        if last_row:
-                            # Get all cached data for this symbol/interval
-                            cursor.execute('''
-                                SELECT timestamp, open, high, low, close, volume
-                                FROM ohlcv_cache
-                                WHERE symbol = ? AND interval = ?
-                                ORDER BY timestamp ASC
-                            ''', (symbol, interval))
-                            rows = cursor.fetchall()
-                            if rows:
-                                import pandas as pd
-                                data = pd.DataFrame([dict(row) for row in rows])
-                                data['timestamp'] = pd.to_datetime(data['timestamp'])
-                                data.set_index('timestamp', inplace=True)
-                                df = data
-                                cached_at = last_row['cached_at']
-                                logger.warning(f"[_fetch_data_for_symbol] Using STALE cached data for {symbol} (cached at {cached_at}). Data has {len(df)} rows.")
-                except Exception as cache_err:
-                    logger.error(f"[_fetch_data_for_symbol] Failed to retrieve cache fallback for {symbol}: {cache_err}")
-        
+        result_dict = await asyncio.to_thread(
+            self.provider.fetch_ohlcv,
+            [symbol],
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
+        )
+        df = result_dict.get(symbol)
+        if df is not None:
+            logger.info(f"[_fetch_data_for_symbol] provider returned DataFrame with {len(df)} rows, date range: {df.index.min()} to {df.index.max()}")
+        else:
+            logger.warning(f"[_fetch_data_for_symbol] provider returned None for {symbol}")
+
         if df is not None and not df.empty:
             if use_cache:
                 self.cache.store(cache_key, df)

@@ -112,11 +112,13 @@ class MainOrchestratorAgent(Agent):
         self.data_agent = DataAgent(config_engine)
         self.news_agent = NewsAgent(config_engine)
         self.analysis_agent = AnalysisAgent({})  # AnalysisAgent uses periods_config dict, not YAML config yet
-        self.strategy_agent = StrategyAgent(config_engine)  # Needs rules from YAML
+        # Initialize PortfolioAgent BEFORE StrategyAgent (so it can be injected)
+        self.portfolio_agent = PortfolioAgent({}, data_agent=self.data_agent)
+        self.strategy_agent = StrategyAgent(config_engine, portfolio_agent=self.portfolio_agent)  # Inject portfolio_agent
         
         # Extract risk config dict from finance YAML for RiskAgent
         risk_config = config_engine.get("finance", "risk", default={})
-        self.risk_agent = RiskAgent(risk_config)
+        self.risk_agent = RiskAgent(risk_config, portfolio_agent=self.portfolio_agent)
         
         # ExecutionAgent can use empty config or simple dict
         execution_config = config_engine.get("finance", "execution", default={})
@@ -129,7 +131,6 @@ class MainOrchestratorAgent(Agent):
             logger.warning(f"TelegramAgent initialization failed: {e}. Using dummy no-op agent.")
             self.telegram_agent = DummyTelegramAgent()
         self.scheduler_agent = SchedulerAgent({})
-        self.portfolio_agent = PortfolioAgent({}, data_agent=self.data_agent)
         self.health_agent = HealthAgent(config_engine)  # Health monitoring agent
 
         # Event handlers will be registered in initialize_orchestrator after event_bus is awaited
@@ -285,12 +286,17 @@ class MainOrchestratorAgent(Agent):
         # RiskAgent payload has 'any_approval_required' and 'all_passed' flags
         any_approval_required = risk_check_report.payload.get("any_approval_required", False)
         all_passed = risk_check_report.payload.get("all_passed", False)
-        
+
+        # Check auto_execute config
+        auto_execute_enabled = self.config_engine.get("finance", "strategy/auto_execute/enabled", default=False)
+
         if all_passed and not any_approval_required:
-            # If no approval is required and all checks passed, proceed to execution
-            # Pass the full risk_check_report as the approval_report (it contains both trade_proposals and risk_assessments)
-            logger.info("Risk check passed, proceeding to execution.")
-            await self.execution_agent.run(approval_report=risk_check_report)
+            if auto_execute_enabled:
+                # If no approval is required and all checks passed, proceed to execution
+                logger.info("Risk check passed and auto_execute enabled, proceeding to execution.")
+                await self.execution_agent.run(approval_report=risk_check_report)
+            else:
+                logger.info("Auto_execute is disabled. Skipping automatic execution. Trade would require manual execution.")
         else:
             logger.info(f"Approval required for trade proposal (all_passed={all_passed}, any_approval_required={any_approval_required}). Skipping automatic execution.")
 
@@ -314,7 +320,11 @@ class MainOrchestratorAgent(Agent):
         if not execution_result:
             logger.warning("No execution_result found in payload")
             return
-        
+
+        # Map filled_price -> price for PortfolioAgent compatibility
+        if "filled_price" in execution_result and "price" not in execution_result:
+            execution_result["price"] = execution_result.pop("filled_price")
+
         logger.info(f"Calling portfolio_agent.run with execution_result: symbol={execution_result.get('symbol')} action={execution_result.get('action')}")
         try:
             # Update portfolio with trade details
@@ -325,22 +335,17 @@ class MainOrchestratorAgent(Agent):
             logger.info(f"PortfolioAgent.run returned: status={port_report.status}, message={port_report.message}")
         except Exception as e:
             logger.error(f"Error calling portfolio_agent.run: {e}", exc_info=True)
-        
-        logger.info("Portfolio update attempt completed")
-        
+
         # Let the learning agent process the full execution report
         await self.learning_agent.run(execution_report=execution_report)
-        
+
         # Send trade notification via health agent (to Telegram)
         try:
             await self.health_agent.run(event_type=Events.TRADE_EXECUTED, payload=execution_result)
         except Exception as e:
             logger.error(f"Error in health_agent trade notification: {e}", exc_info=True)
-        
+
         logger.info("Trade execution handling complete")
-        
-        # Then let the learning agent process the full execution report
-        await self.learning_agent.run(execution_report=execution_report)
 
     async def handle_learning_complete(self, event: Event):
         logger.info(f"Orchestrator received LEARNING_COMPLETE event: {event.data}")
@@ -496,7 +501,7 @@ async def analyze_market():
     """Full analysis workflow: data → news → analysis → strategy → return trade proposals."""
     data = request.get_json() or {}
     symbol = data.get("symbol", "").upper()
-    lookback_days = int(data.get("lookback_days", 30))
+    lookback_days = int(data.get("lookback_days", 365))
     interval = data.get("interval", "1d")
     
     if not symbol:
@@ -518,13 +523,13 @@ async def analyze_market():
             start_date=start_date,
             end_date=end_date.isoformat(),
             emit_events=False,
-            use_cache=False  # Bypass cache to ensure correct date range
+            use_cache=True  # Use cache to reduce yfinance load
         )
         if data_report.status != "success" or "dataframe" not in data_report.payload:
             return jsonify({"error": f"Data fetch failed: {data_report.message}"}), 500
         
         # Check if we got enough data
-        df_len = len(data_report.payload["dataframe"].get("close", {}))
+        df_len = len(data_report.payload["dataframe"])
         if df_len < 50:
             return jsonify({"error": f"Insufficient historical data: only {df_len} rows, need 50+ for indicators. Try a longer lookback_days."}), 400
         
@@ -543,7 +548,7 @@ async def analyze_market():
         # 3. Calculate indicators
         logger.info(f"[Analyze] Step 3: Analyzing indicators for {symbol}")
         analysis_report = await orchestrator.analysis_agent.run(
-            data_payload=data_report.payload["dataframe"],
+            data_payload=data_report.payload,  # Pass full payload with dataframe and fundamentals
             symbol=symbol
         )
         if analysis_report.status != "success":

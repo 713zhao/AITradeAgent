@@ -11,8 +11,6 @@ from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events
 from finance_service.agents.portfolio_agent import PortfolioAgent
 from finance_service.agents.telegram_agent import TelegramAgent
-from finance_service.core.remediation_helper import RemediationHelper
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -47,19 +45,6 @@ class HealthAgent(Agent):
             self.alert_cooldown_hours = 4
         
         self.last_alert_time: Optional[datetime] = None
-        
-        # Initialize remediation helper for auto-recovery
-        try:
-            workspace = Path(__file__).parent.parent.parent.parent
-            venv = workspace / "venv"
-            self.remediation = RemediationHelper(
-                config={},
-                venv_path=str(venv),
-                workspace_path=str(workspace)
-            )
-        except Exception as e:
-            logger.warning(f"Failed to initialize remediation helper: {e}")
-            self.remediation = None
         
         logger.info("HealthAgent initialized")
     
@@ -100,30 +85,7 @@ class HealthAgent(Agent):
         # Get recent portfolio metrics
         portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
         if portfolio_report.status != "success":
-            logger.warning(f"Portfolio state retrieval failed: {portfolio_report.message}")
-            
-            # Attempt auto-remediation for critical issues
-            if self.remediation and ("500" in str(portfolio_report.message) or "async" in str(portfolio_report.message).lower()):
-                logger.info("Triggering auto-remediation for portfolio error")
-                issue_detail = f"portfolio_error: {portfolio_report.message}"
-                fix_result = await self.remediation.attempt_fix("portfolio_state_error", issue_detail)
-                logger.info(f"Remediation result: {fix_result}")
-                
-                # If remediation succeeded, retry portfolio state fetch
-                if fix_result.success:
-                    logger.info("Remediation succeeded, retrying portfolio state fetch")
-                    import asyncio
-                    await asyncio.sleep(2)  # Wait for service to fully restart
-                    portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
-                    if portfolio_report.status == "success":
-                        logger.info("Portfolio state fetch successful after remediation")
-                    else:
-                        logger.error(f"Portfolio state still failing after remediation: {portfolio_report.message}")
-                        return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state even after remediation: {portfolio_report.message}")
-                else:
-                    return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state and remediation failed: {fix_result.reason}")
-            else:
-                return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state: {portfolio_report.message}")
+            return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state: {portfolio_report.message}")
         
         metrics = portfolio_report.payload.get("equity_metrics", {})
         drawdown = metrics.get("drawdown_pct", 0)

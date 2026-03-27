@@ -30,11 +30,11 @@ risk:
 # STRATEGY CONFIGURATION
 # ========================
 strategy:
-  type: "sma20_trend"
+  type: "sma20_trend"  # revert to conservative trend‑following
 
   auto_execute:
-    enabled: true
-    confidence_threshold: 0.7
+    enabled: true      # enable automatic trade execution when risk checks pass
+    confidence_threshold: 1.0
     require_approval: false
 
   indicators:
@@ -154,17 +154,17 @@ universe:
 # DATA CONFIGURATION
 # ========================
 data:
-  default_interval: "1h"
-  default_lookback_days: 30
-  cache_ttl_minutes: 15
+  default_interval: "1d"
+  default_lookback_days: 120
+  cache_ttl_minutes: 60
   cache_enabled: true
-  batch_size: 10
-  batch_delay_sec: 0.5
+  batch_size: 20
+  batch_delay_sec: 1.0
   request_jitter_sec: 0.5
   backoff:
     enabled: true
     initial_wait_sec: 1
-    max_wait_sec: 30
+    max_wait_sec: 60
     multiplier: 2.0
 
 # ========================
@@ -198,9 +198,12 @@ scheduler:
   data_refresh_interval_minutes: 5
 
 # ========================
-# BACKTEST STRATEGIES
+# FUNDAMENTALS CONFIGURATION
 # ========================
-# These strategies are used by the backtest runner. Live trading uses the 'strategy' section above.
+fundamentals:
+  enabled: true                    # Set false for price-only strategies to speed up
+  providers: ["yfinance", "alphavantage"]  # Order: try yfinance, fallback to alphavantage
+  alphavantage_api_key: "plMOu5bijgq_Dci68wl0vk5mZvAyysxF"
 strategies:
   # Existing: momentum_trend (strict, both rules required)
   momentum_trend:
