@@ -32,7 +32,7 @@ git rm -q --ignore-unmatch check_*.py fix_*.py test_*.py || true
 - [ ] **Step 3: Commit the cleanup**
 
 ```bash
-git status --porcelain | grep -q '^[ MADRCU]' && git commit -m "chore: Remove temporary logs and scripts from root directory" || echo "No changes to commit"
+git diff --cached --exit-code >/dev/null || git commit -m "chore: Remove temporary logs and scripts from root directory"
 ```
 
 ### Task 2: Configuration Updates
@@ -103,7 +103,7 @@ In `finance_service/agents/telegram_agent.py`, update `__init__`:
         self.chat_id = config.get("telegram_chat_id", Config.TELEGRAM_CHAT_ID)
         
         raw_thread_id = config.get("telegram_message_thread_id", Config.TELEGRAM_MESSAGE_THREAD_ID)
-        self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id and str(raw_thread_id).strip() else None
+        self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id is not None and str(raw_thread_id).strip() != "" else None
 ```
 
 - [ ] **Step 2: Update `send_message`**
@@ -153,7 +153,7 @@ In `finance_service/tools/approval_gate.py`:
         self.chat_id = chat_id or Config.TELEGRAM_CHAT_ID
         
         raw_thread_id = Config.TELEGRAM_MESSAGE_THREAD_ID
-        self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id and str(raw_thread_id).strip() else None
+        self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id is not None and str(raw_thread_id).strip() != "" else None
 ```
 
 - [ ] **Step 2: Update `send_approval_request`**
