@@ -15,29 +15,31 @@ The root directory will be cleaned of the following file patterns:
 - `*.out`
 
 ### Action
-- Execute a deletion command targeting these explicit patterns in the root directory.
-- This will not affect actual application code, `pytest` files inside the `tests/` directory, or legitimate documentation.
+- Execute a `git rm` command for the tracked `.py` files, and `rm` for untracked logs/outs.
+- The script must list the explicitly deleted files for transparency.
 
 ## 2. Telegram Topic Support
 ### Configuration Updates
 - **Environment Variable**: Introduce `TELEGRAM_MESSAGE_THREAD_ID`.
 - **Pydantic Config (`finance_service/core/pydantic_config.py`)**:
-  - Add `TELEGRAM_MESSAGE_THREAD_ID: str = Field("", description="Telegram message thread ID for topics")`.
+  - Add `TELEGRAM_MESSAGE_THREAD_ID: Optional[int] = Field(None, description="Telegram message thread ID for topics")`.
+  - Add a `@field_validator("TELEGRAM_MESSAGE_THREAD_ID", mode="before")` to handle empty strings `""` by converting them to `None`.
 - **Core Config (`finance_service/core/config.py`)**:
   - Expose `TELEGRAM_MESSAGE_THREAD_ID = _pydantic_settings.TELEGRAM_MESSAGE_THREAD_ID`.
 
 ### Agent Updates (`finance_service/agents/telegram_agent.py`)
 - **Initialization**:
-  - Load `self.thread_id = config.get("telegram_message_thread_id", Config.TELEGRAM_MESSAGE_THREAD_ID)`.
+  - Load `raw_thread_id = config.get("telegram_message_thread_id", Config.TELEGRAM_MESSAGE_THREAD_ID)`.
+  - Set `self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id and str(raw_thread_id).strip() else None`.
 - **Message Sending (`send_message`, `send_scheduled_report`)**:
-  - Modify the `self.bot_instance.send_message` calls to include `message_thread_id=self.thread_id` if `self.thread_id` is truthy.
-  - Wait, Telegram API requires `message_thread_id` to be an integer if provided, or cast it appropriately.
+  - Modify the `self.bot_instance.send_message` calls to conditionally include `message_thread_id=self.thread_id` if `self.thread_id is not None`.
 
 ### Approval Gate Updates (`finance_service/tools/approval_gate.py`)
 - **Initialization (`TelegramApprovalGate`)**:
-  - Load `self.thread_id = Config.TELEGRAM_MESSAGE_THREAD_ID`.
+  - Load `raw_thread_id = Config.TELEGRAM_MESSAGE_THREAD_ID`.
+  - Set `self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id and str(raw_thread_id).strip() else None`.
 - **Message Sending (`send_approval_request`)**:
-  - Modify the `self.bot_instance.send_message` call to include `message_thread_id=self.thread_id` if `self.thread_id` is truthy.
+  - Modify the `self.bot_instance.send_message` call to conditionally include `message_thread_id=self.thread_id` if `self.thread_id is not None`.
 
 ## Execution Plan
 1. Delete matching temporary files from the root directory.
