@@ -29,6 +29,9 @@ class TelegramAgent(Agent):
         self.bot_token = config.get("telegram_bot_token", Config.TELEGRAM_BOT_TOKEN)
         self.chat_id = config.get("telegram_chat_id", Config.TELEGRAM_CHAT_ID)
         
+        raw_thread_id = config.get("telegram_message_thread_id", Config.TELEGRAM_MESSAGE_THREAD_ID)
+        self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id is not None and str(raw_thread_id).strip() != "" else None
+        
         if not self.bot_token or not self.chat_id:
             logger.warning("Telegram Agent not fully configured (missing token or chat ID). Disabling.")
             self.enabled = False
@@ -67,7 +70,10 @@ class TelegramAgent(Agent):
         if not self.enabled:
             return
         try:
-            await self.bot_instance.send_message(chat_id=chat_id, text=message, parse_mode=parse_mode)
+            kwargs = {"chat_id": chat_id, "text": message, "parse_mode": parse_mode}
+            if self.thread_id is not None:
+                kwargs["message_thread_id"] = self.thread_id
+            await self.bot_instance.send_message(**kwargs)
             logger.info(f"Message sent to chat ID: {chat_id}")
         except TelegramError as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
@@ -109,7 +115,10 @@ class TelegramAgent(Agent):
             message_text += f"**{key}:** {value}\n"
         
         try:
-            await self.bot_instance.send_message(chat_id=target_chat_id, text=message_text, parse_mode="Markdown")
+            kwargs = {"chat_id": target_chat_id, "text": message_text, "parse_mode": "Markdown"}
+            if self.thread_id is not None:
+                kwargs["message_thread_id"] = self.thread_id
+            await self.bot_instance.send_message(**kwargs)
             logger.info(f"Scheduled report sent to chat ID: {target_chat_id}")
         except TelegramError as e:
             logger.error(f"Failed to send scheduled report to {target_chat_id}: {e}")
