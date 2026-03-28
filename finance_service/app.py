@@ -934,6 +934,8 @@ async def startup_orchestrator() -> MainOrchestratorAgent:
     
     # Start scheduler
     asyncio.create_task(_orchestrator.scheduler_agent.run())
+    # Start Telegram agent (if enabled)
+    asyncio.create_task(_orchestrator.telegram_agent.run())
     
     # Register event handlers
     handlers = [

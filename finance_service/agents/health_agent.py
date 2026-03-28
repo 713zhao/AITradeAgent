@@ -180,8 +180,13 @@ class HealthAgent(Agent):
     
     async def send_telegram_alert(self, alerts: list, metrics: Dict[str, Any]):
         """Send alert message via TelegramAgent."""
-        if not self.telegram_agent:
-            logger.warning("TelegramAgent not configured, cannot send alerts")
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured or disabled, cannot send alerts")
+            return
+        
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            logger.warning("TelegramAgent has no chat_id configured, cannot send alerts")
             return
         
         message_lines = ["🦞 AiTradeAgent Health Alert 🦞\n"]
@@ -195,21 +200,26 @@ class HealthAgent(Agent):
         message_lines.append(f"Trades: {metrics.get('trade_count', 0)}")
         
         message = "\n".join(message_lines)
-        # Use default chat ID from config if available, else orchestrator may forward
-        await self.telegram_agent.send_message(chat_id=self.config_engine.get("telegram_chat_id", ""), message=message)
+        await self.telegram_agent.send_message(chat_id=chat_id, message=message)
         logger.info(f"Sent health alert via Telegram with {len(alerts)} alerts")
     
     async def send_trade_notification(self, execution_payload: Dict[str, Any]):
         """Send trade execution notification via Telegram."""
-        if not self.telegram_agent:
-            logger.warning("TelegramAgent not configured, cannot send trade notification")
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured or disabled, cannot send trade notification")
             return
         
-        result = execution_payload.get("execution_result", {})
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            logger.warning("TelegramAgent has no chat_id configured, cannot send trade notification")
+            return
+        
+        # Handle both wrapped (execution_result inside) and unwrapped payloads
+        result = execution_payload.get("execution_result", execution_payload)
         symbol = result.get("symbol", "Unknown")
         action = result.get("action", "??")
         quantity = result.get("quantity", 0)
-        price = result.get("filled_price", 0)
+        price = result.get("filled_price", result.get("price", 0))
         status = result.get("status", "??")
         
         # Get current portfolio info for context
@@ -233,17 +243,22 @@ class HealthAgent(Agent):
         message += f"• Status: {status}\n"
         message += f"\n{portfolio_summary}"
         
-        await self.telegram_agent.send_message(chat_id=self.config_engine.get("telegram_chat_id", ""), message=message)
+        await self.telegram_agent.send_message(chat_id=chat_id, message=message)
         logger.info(f"Sent trade notification for {symbol} {action}")
     
     async def send_daily_summary(self):
         """Send daily portfolio summary after market close."""
-        if not self.telegram_agent:
-            logger.warning("TelegramAgent not configured, cannot send daily summary")
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured or disabled, cannot send daily summary")
             return
         
         if not self.portfolio_agent:
             logger.warning("PortfolioAgent not set, cannot send daily summary")
+            return
+        
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            logger.warning("TelegramAgent has no chat_id configured, cannot send daily summary")
             return
         
         try:
@@ -284,7 +299,7 @@ class HealthAgent(Agent):
                     summary_lines.append(f"  {t.get('action')} {t.get('symbol')} x{t.get('quantity')} @ ${t.get('price'):,.2f}")
             
             message = "\n".join(summary_lines)
-            await self.telegram_agent.send_message(chat_id=self.config_engine.get("telegram_chat_id", ""), message=message)
+            await self.telegram_agent.send_message(chat_id=chat_id, message=message)
             logger.info("Sent daily portfolio summary")
             
         except Exception as e:
