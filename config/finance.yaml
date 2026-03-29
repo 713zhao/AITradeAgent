@@ -1,162 +1,121 @@
-# OpenClaw Finance Agent - Finance Configuration
-# Version: 1.0
-# Last Updated: 2026-03-20
-
-# ========================
-# RISK CONFIGURATION
-# ========================
 risk:
-  # Position sizing
-  max_position_size_pct: 1.0          # Max % of portfolio per trade (SAFE - reduced from 10)
-  max_exposure_pct: 80               # Max % total deployed
-  max_daily_loss_pct: 2.0            # Daily loss stop
-  max_drawdown_pct: 15.0             # Max drawdown stop
-
-  # Risk per trade
-  default_risk_budget_pct: 1.0       # 1.0% risk per trade (SAFE - reduced from 1.5%)
-  stop_loss_default_pct: 1.5         # ATR-based stop multiplier
-  take_profit_default_pct: 3.0       # Take profit at 3x stop (2:1 R:R)
-
-  # Position limits
+  max_position_size_pct: 1.0
+  max_exposure_pct: 80
+  max_daily_loss_pct: 2.0
+  max_drawdown_pct: 15.0
+  default_risk_budget_pct: 1.0
+  stop_loss_default_pct: 1.5
+  take_profit_default_pct: 3.0
   max_concurrent_positions: 10
   min_position_size_usd: 100
   allow_short_selling: false
   margin_enabled: false
-
-# ========================
-# STRATEGY CONFIGURATION
-# ========================
-# ========================
-# STRATEGY CONFIGURATION
-# ========================
 strategy:
-  type: "sma20_trend"  # revert to conservative trend‑following
-
+  type: sma20_trend
   auto_execute:
-    enabled: false     # DISABLED for safety - auto_execute turned off due to extreme margin breach risk
+    enabled: false
     confidence_threshold: 1.0
     require_approval: false
-
   indicators:
     rsi:
       enabled: true
       period: 14
       oversold: 40
       overbought: 65
-
     macd:
       enabled: true
       fast_period: 12
       slow_period: 26
       signal_period: 9
-
     sma:
       enabled: true
-      periods: [10, 20, 50]          # Fast SMA for trend filter
-
+      periods:
+      - 10
+      - 20
+      - 50
     atr:
       enabled: true
       period: 14
-
   rules:
-    # Entry rules
     rsi_entry_oversold: true
     rsi_entry_oversold_threshold: 40
     macd_crossover: true
-    price_above_sma10: true          # Require fast uptrend
-
-    # Exit rules
+    price_above_sma10: true
     rsi_exit_overbought: true
     rsi_exit_overbought_threshold: 65
     macd_signal_exit: true
-
-    # Risk management
     stop_loss_enabled: true
     take_profit_enabled: true
-
-# ========================
-# UNIVERSE CONFIGURATION
-# ========================
 universe:
-  # Theme-based scanning
   themes:
-    - name: "AI"
-      symbols:
-        - NVDA
-        - PLTR
-        - UPST
-        - AVGO
-        - MSTR
-    - name: "Semiconductor"
-      symbols:
-        - TSM
-        - QCOM
-        - AMD
-        - ASR
-        - ASML
-    - name: "Cloud"
-      symbols:
-        - CRWD
-        - DDOG
-        - NET
-        - MDB
-        - SNOW
-    - name: "MegaCap"
-      symbols:
-        - MSFT
-        - GOOGL
-        - AAPL
-        - AMZN
-        - META
-    - name: "Hong Kong"
-      symbols:
-        - 0700.HK   # Tencent
-        - 9988.HK   # Alibaba
-        - 0941.HK   # China Mobile
-        - 1398.HK   # ICBC
-        - 0388.HK   # Hong Kong Exchange
-  
-  # All symbols list (for whitelist and manual selection)
-  all_symbols:
+  - name: AI
+    symbols:
     - NVDA
     - PLTR
     - UPST
     - AVGO
     - MSTR
+  - name: Semiconductor
+    symbols:
     - TSM
     - QCOM
     - AMD
     - ASR
     - ASML
+  - name: Cloud
+    symbols:
     - CRWD
     - DDOG
     - NET
     - MDB
     - SNOW
+  - name: MegaCap
+    symbols:
     - MSFT
     - GOOGL
     - AAPL
     - AMZN
     - META
-    # HK symbols
+  - name: Hong Kong
+    symbols:
     - 0700.HK
     - 9988.HK
     - 0941.HK
     - 1398.HK
     - 0388.HK
-
-  # Whitelist mode
+  all_symbols:
+  - NVDA
+  - PLTR
+  - UPST
+  - AVGO
+  - MSTR
+  - TSM
+  - QCOM
+  - AMD
+  - ASR
+  - ASML
+  - CRWD
+  - DDOG
+  - NET
+  - MDB
+  - SNOW
+  - MSFT
+  - GOOGL
+  - AAPL
+  - AMZN
+  - META
+  - 0700.HK
+  - 9988.HK
+  - 0941.HK
+  - 1398.HK
+  - 0388.HK
   whitelist:
     enabled: false
     symbols: []
-
-# ========================
-# DATA CONFIGURATION
-# ========================
 data:
-  default_interval: "1d"
+  default_interval: 1d
   default_lookback_days: 120
-  cache_ttl_minutes: 60
+  cache_ttl_minutes: 5
   cache_enabled: true
   batch_size: 20
   batch_delay_sec: 1.0
@@ -166,10 +125,12 @@ data:
     initial_wait_sec: 1
     max_wait_sec: 60
     multiplier: 2.0
-
-# ========================
-# PERFORMANCE
-# ========================
+  cache_ttl_market_hours: 5
+  cache_ttl_after_hours: 15
+  cache_ttl_weekend: 60
+  cache_volatility_invalidation:
+    enabled: true
+    price_change_threshold_pct: 2.0
 performance:
   max_workers: 4
   verbose: false
@@ -178,225 +139,204 @@ performance:
   buffer_size: 100
   api_timeout_sec: 30
   api_retries: 3
-
-# ========================
-# PORTFOLIO INITIALIZATION
-# ========================
 portfolio:
   initial_cash: 100000
-  base_currency: "USD"
+  base_currency: USD
   reset_on_startup: false
   archive_trades_on_reset: true
   auto_rebalance_enabled: false
-  rebalance_frequency: "monthly"
-
-# ========================
-# SCHEDULER SETTINGS
-# ========================
+  rebalance_frequency: monthly
 scheduler:
   market_scan_interval_minutes: 15
   data_refresh_interval_minutes: 5
-
-# ========================
-# FUNDAMENTALS CONFIGURATION
-# ========================
 fundamentals:
-  enabled: true                    # Set false for price-only strategies to speed up
-  providers: ["yfinance", "alphavantage"]  # Order: try yfinance, fallback to alphavantage
-  alphavantage_api_key: "plMOu5bijgq_Dci68wl0vk5mZvAyysxF"
+  enabled: true
+  providers:
+  - yfinance
+  - alphavantage
+  alphavantage_api_key: plMOu5bijgq_Dci68wl0vk5mZvAyysxF
 strategies:
-  # Existing: momentum_trend (strict, both rules required)
   momentum_trend:
     allocation: 1.0
     risk_budget_pct: 1.5
     confidence_threshold: 0.7
     entry_rules:
-      - name: rsi_bullish
-        type: entry
-        indicator: rsi
-        condition: greater_than
-        value: 55.0
-      - name: macd_bullish_entry
-        type: entry
-        indicator: macd
-        condition: greater_than
-        value: 0.0
+    - name: rsi_bullish
+      type: entry
+      indicator: rsi
+      condition: greater_than
+      value: 55.0
+    - name: macd_bullish_entry
+      type: entry
+      indicator: macd
+      condition: greater_than
+      value: 0.0
     exit_rules:
-      - name: rsi_overbought_exit
-        type: exit
-        indicator: rsi
-        condition: greater_than
-        value: 65.0
-      - name: macd_bearish_exit
-        type: exit
-        indicator: macd
-        condition: less_than
-        value: 0.0
-
+    - name: rsi_overbought_exit
+      type: exit
+      indicator: rsi
+      condition: greater_than
+      value: 65.0
+    - name: macd_bearish_exit
+      type: exit
+      indicator: macd
+      condition: less_than
+      value: 0.0
   momentum_trend_filtered:
     allocation: 1.0
     risk_budget_pct: 1.5
     confidence_threshold: 0.7
     entry_rules:
-      - name: rsi_bullish
-        type: entry
-        indicator: rsi
-        condition: greater_than
-        value: 55.0
-      - name: macd_bullish_entry
-        type: entry
-        indicator: macd
-        condition: greater_than
-        value: 0.0
-      - name: price_above_sma200
-        type: entry
-        indicator: sma_200
-        condition: greater_than
-        value: 0.0
-        compare_to_price: true
+    - name: rsi_bullish
+      type: entry
+      indicator: rsi
+      condition: greater_than
+      value: 55.0
+    - name: macd_bullish_entry
+      type: entry
+      indicator: macd
+      condition: greater_than
+      value: 0.0
+    - name: price_above_sma200
+      type: entry
+      indicator: sma_200
+      condition: greater_than
+      value: 0.0
+      compare_to_price: true
     exit_rules:
-      - name: rsi_overbought_exit
-        type: exit
-        indicator: rsi
-        condition: greater_than
-        value: 65.0
-      - name: macd_bearish_exit
-        type: exit
-        indicator: macd
-        condition: less_than
-        value: 0.0
-
+    - name: rsi_overbought_exit
+      type: exit
+      indicator: rsi
+      condition: greater_than
+      value: 65.0
+    - name: macd_bearish_exit
+      type: exit
+      indicator: macd
+      condition: less_than
+      value: 0.0
   value_quality_news:
     allocation: 1.0
     risk_budget_pct: 1.5
-    confidence_threshold: 0.6  # need 2 out of 3
+    confidence_threshold: 0.6
     entry_rules:
-      - name: pe_value
-        type: entry
-        indicator: pe_ratio
-        condition: less_than
-        value: 60.0  # relaxed from 30 for tech growth stocks
-      - name: revenue_growth
-        type: entry
-        indicator: revenue_growth_yoy
-        condition: greater_than
-        value: 0.10
-      - name: news_sentiment_bullish
-        type: entry
-        indicator: news_sentiment
-        condition: greater_than
-        value: 0.1  # lower threshold to capture more momentum
+    - name: pe_value
+      type: entry
+      indicator: pe_ratio
+      condition: less_than
+      value: 60.0
+    - name: revenue_growth
+      type: entry
+      indicator: revenue_growth_yoy
+      condition: greater_than
+      value: 0.1
+    - name: news_sentiment_bullish
+      type: entry
+      indicator: news_sentiment
+      condition: greater_than
+      value: 0.1
     exit_rules:
-      - name: pe_overvalued
-        type: exit
-        indicator: pe_ratio
-        condition: greater_than
-        value: 100.0  # allow PE to run higher
-      - name: revenue_shrink
-        type: exit
-        indicator: revenue_growth_yoy
-        condition: less_than
-        value: 0.0
-      - name: news_bearish
-        type: exit
-        indicator: news_sentiment
-        condition: less_than
-        value: -0.2
-
-  # Option A: momentum with lenient confidence (allow single rule) and higher exit
+    - name: pe_overvalued
+      type: exit
+      indicator: pe_ratio
+      condition: greater_than
+      value: 100.0
+    - name: revenue_shrink
+      type: exit
+      indicator: revenue_growth_yoy
+      condition: less_than
+      value: 0.0
+    - name: news_bearish
+      type: exit
+      indicator: news_sentiment
+      condition: less_than
+      value: -0.2
   momentum_lenient:
     allocation: 1.0
     risk_budget_pct: 1.5
     confidence_threshold: 0.5
     entry_rules:
-      - name: rsi_bullish
-        type: entry
-        indicator: rsi
-        condition: greater_than
-        value: 55.0
-      - name: macd_bullish_entry
-        type: entry
-        indicator: macd
-        condition: greater_than
-        value: 0.0
+    - name: rsi_bullish
+      type: entry
+      indicator: rsi
+      condition: greater_than
+      value: 55.0
+    - name: macd_bullish_entry
+      type: entry
+      indicator: macd
+      condition: greater_than
+      value: 0.0
     exit_rules:
-      - name: rsi_overbought_exit
-        type: exit
-        indicator: rsi
-        condition: greater_than
-        value: 70.0
-      - name: macd_bearish_exit
-        type: exit
-        indicator: macd
-        condition: less_than
-        value: 0.0
-
-  # Option D: SMA20 trend following
+    - name: rsi_overbought_exit
+      type: exit
+      indicator: rsi
+      condition: greater_than
+      value: 70.0
+    - name: macd_bearish_exit
+      type: exit
+      indicator: macd
+      condition: less_than
+      value: 0.0
   sma20_trend:
     allocation: 1.0
     risk_budget_pct: 1.5
     confidence_threshold: 1.0
     entry_rules:
-      - name: price_above_sma20
-        type: entry
-        indicator: sma_20
-        condition: greater_than
-        value: 0.0
-        compare_to_price: true
+    - name: price_above_sma20
+      type: entry
+      indicator: sma_20
+      condition: greater_than
+      value: 0.0
+      compare_to_price: true
     exit_rules:
-      - name: price_below_sma20
-        type: exit
-        indicator: sma_20
-        condition: less_than
-        value: 0.0
-        compare_to_price: true
-
-  # Optimized: SMA50 trend with smaller position (via risk_budget_pct)
+    - name: price_below_sma20
+      type: exit
+      indicator: sma_20
+      condition: less_than
+      value: 0.0
+      compare_to_price: true
   sma50_trend:
     allocation: 1.0
     risk_budget_pct: 1.5
     confidence_threshold: 1.0
     entry_rules:
-      - name: price_above_sma50
-        type: entry
-        indicator: sma_50
-        condition: greater_than
-        value: 0.0
-        compare_to_price: true
+    - name: price_above_sma50
+      type: entry
+      indicator: sma_50
+      condition: greater_than
+      value: 0.0
+      compare_to_price: true
     exit_rules:
-      - name: price_below_sma50
-        type: exit
-        indicator: sma_50
-        condition: less_than
-        value: 0.0
-        compare_to_price: true
-
-  # Regime-filtered SMA50: only trade in bull markets (regime > 70%)
+    - name: price_below_sma50
+      type: exit
+      indicator: sma_50
+      condition: less_than
+      value: 0.0
+      compare_to_price: true
   sma50_trend_regime:
     allocation: 1.0
     risk_budget_pct: 1.5
     confidence_threshold: 1.0
     entry_rules:
-      - name: price_above_sma50
-        type: entry
-        indicator: sma_50
-        condition: greater_than
-        value: 0.0
-        compare_to_price: true
-      - name: regime_bullish
-        type: entry
-        indicator: regime_score
-        condition: greater_than
-        value: 50.0
+    - name: price_above_sma50
+      type: entry
+      indicator: sma_50
+      condition: greater_than
+      value: 0.0
+      compare_to_price: true
+    - name: regime_bullish
+      type: entry
+      indicator: regime_score
+      condition: greater_than
+      value: 50.0
     exit_rules:
-      - name: price_below_sma50
-        type: exit
-        indicator: sma_50
-        condition: less_than
-        value: 0.0
-        compare_to_price: true
-      - name: regime_bearish
-        type: exit
-        indicator: regime_score
-        condition: less_than
-        value: 30.0
+    - name: price_below_sma50
+      type: exit
+      indicator: sma_50
+      condition: less_than
+      value: 0.0
+      compare_to_price: true
+    - name: regime_bearish
+      type: exit
+      indicator: regime_score
+      condition: less_than
+      value: 30.0
