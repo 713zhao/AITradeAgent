@@ -149,6 +149,32 @@ class MainOrchestratorAgent(Agent):
         payload = event.data.get("payload", {})
         symbols = payload.get("symbols", [])
         logger.info(f"Processing {len(symbols)} symbols: {symbols}")
+
+        # Send market scan summary to Telegram (always; includes details and top analysis)
+        if self.telegram_agent and self.telegram_agent.enabled:
+            chat_id = self.telegram_agent.chat_id
+            if chat_id:
+                # Build detailed summary for first 10 symbols
+                preview_symbols = symbols[:10]
+                details = []
+                for sym in preview_symbols:
+                    snap = await self._get_symbol_snapshot(sym)
+                    if snap:
+                        change_str = f"({snap['change']:+.1f}%)" if snap.get('change') is not None else ""
+                        details.append(f"• {snap['symbol']}: ${snap['price']:.2f} {change_str}")
+                    else:
+                        details.append(f"• {sym}: no data")
+                if len(symbols) > 10:
+                    details.append(f"... (+{len(symbols)-10} more)")
+                message = f"🔍 Market Scan: {len(symbols)} symbols\n" + "\n".join(details)
+                try:
+                    await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+                    logger.info("Sent market scan summary to Telegram")
+                except Exception as e:
+                    logger.error(f"Failed to send market scan Telegram: {e}")
+                # Also send top analysis summary in background (does not block)
+                asyncio.create_task(self._send_top_analysis_summary(symbols))
+
         # Use 365-day lookback (1 year) to ensure enough trading days for SMA200
         from datetime import datetime, timedelta
         end_date = datetime.now().date()
@@ -493,6 +519,105 @@ class MainOrchestratorAgent(Agent):
                 await flask_response_queues[request_id].put(report)
 
 
+    async def _get_symbol_snapshot(self, symbol: str) -> Optional[Dict]:
+        """Fetch latest price, day change %, and volume for a symbol using yfinance."""
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(symbol)
+            # Get 2 days of data to compute change from previous close
+            hist = ticker.history(period="2d")
+            if hist.empty or len(hist) < 1:
+                return None
+            last = hist.iloc[-1]
+            prev_close = hist.iloc[-2]["Close"] if len(hist) >= 2 else last["Close"]
+            close = last["Close"]
+            change = ((close - prev_close) / prev_close) * 100 if prev_close else None
+            volume = last.get("Volume")
+            return {
+                "symbol": symbol,
+                "price": float(close),
+                "change": float(change) if change is not None else None,
+                "volume": int(volume) if volume is not None else None
+            }
+        except Exception as e:
+            logger.debug(f"Snapshot fetch failed for {symbol}: {e}")
+            return None
+
+    async def _send_top_analysis_summary(self, symbols: List[str]):
+        """Perform quick analysis on first 20 scanned symbols and send top 10 BUY candidates to Telegram."""
+        # Limit to first 20 to avoid overload
+        symbols_to_check = symbols[:20]
+        results = []
+        for sym in symbols_to_check:
+            try:
+                # 1. Fetch recent data (90 days is enough for indicators)
+                data_report = await self.data_agent.run(
+                    symbol=sym,
+                    interval="1d",
+                    start_date=None,  # default 60d
+                    emit_events=False
+                )
+                if data_report.status != "success" or "dataframe" not in data_report.payload:
+                    continue
+                df = data_report.payload["dataframe"]
+                # 2. Analysis
+                analysis_report = await self.analysis_agent.run(data_payload=df, symbol=sym)
+                if analysis_report.status != "success":
+                    continue
+                # 3. Strategy proposal
+                strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=sym)
+                if strategy_report.status != "success":
+                    continue
+                proposals = strategy_report.payload.get("proposals", [])
+                if not proposals:
+                    continue
+                # take first proposal
+                prop = proposals[0]
+                action = prop.get("action", "WAIT")
+                confidence = prop.get("confidence", 0.0)
+                price = prop.get("price") or self._get_latest_price_from_df(df)
+                results.append({
+                    "symbol": sym,
+                    "action": action,
+                    "confidence": confidence,
+                    "price": price
+                })
+            except Exception as e:
+                logger.debug(f"Quick analysis skipped for {sym}: {e}")
+                continue
+
+        # Rank: BUY first, then by confidence descending
+        results.sort(key=lambda x: (0 if x["action"] == "BUY" else 1, -x.get("confidence", 0)))
+        top10 = results[:10]
+
+        if not top10:
+            return
+
+        # Format message
+        lines = [f"🏆 Top {len(top10)} Candidates (quick analysis)"]
+        for r in top10:
+            lines.append(f"• {r['symbol']}: {r['action']} @ ${r['price']:.2f} (conf: {r['confidence']:.2f})")
+        message = "\n".join(lines)
+
+        if self.telegram_agent and self.telegram_agent.enabled:
+            chat_id = self.telegram_agent.chat_id
+            if chat_id:
+                try:
+                    await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+                    logger.info("Sent top analysis summary to Telegram")
+                except Exception as e:
+                    logger.error(f"Failed to send top analysis Telegram: {e}")
+
+    def _get_latest_price_from_df(self, df) -> float:
+        """Safely extract latest close from DataFrame."""
+        try:
+            if hasattr(df, 'iloc') and len(df) > 0:
+                return float(df.iloc[-1]["Close"])
+        except Exception:
+            pass
+        return 0.0
+
+
 _orchestrator: Optional[MainOrchestratorAgent] = None
 _event_bus_initialized: bool = False
 
@@ -742,6 +867,106 @@ async def get_quote(symbol):
         return jsonify({"error": f"No quote data found for {symbol}"}), 404
     else:
         return jsonify({"error": report.message}), 500
+
+
+@app.route("/portfolio/performance", methods=["GET"])
+async def get_portfolio_performance():
+    """Calculate performance metrics from portfolio snapshots."""
+    import sqlite3
+    import os
+    import math
+    from datetime import datetime, timedelta
+    
+    runs_db = Config.RUNS_FILE
+    if not os.path.exists(runs_db):
+        return jsonify({"error": "Runs database not found"}), 404
+    
+    try:
+        conn = sqlite3.connect(runs_db)
+        query = "SELECT timestamp, cash, equity, total_value FROM portfolio_snapshots ORDER BY created_at"
+        cursor = conn.execute(query)
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if len(rows) < 2:
+            return jsonify({"error": "Insufficient snapshot data for performance calculation"}), 400
+        
+        # Build time series
+        timestamps = []
+        values = []
+        for row in rows:
+            try:
+                t = datetime.fromisoformat(row[0])
+                v = float(row[3])
+                timestamps.append(t)
+                values.append(v)
+            except Exception:
+                continue
+        
+        if len(values) < 2:
+            return jsonify({"error": "Not enough valid data points"}), 400
+        
+        # Aggregate to daily (last value of each day)
+        daily = {}
+        for t, v in zip(timestamps, values):
+            day = t.date()
+            daily[day] = v
+        sorted_days = sorted(daily.keys())
+        daily_values = [daily[d] for d in sorted_days]
+        
+        # Daily returns
+        daily_returns = []
+        for i in range(1, len(daily_values)):
+            r = (daily_values[i] - daily_values[i-1]) / daily_values[i-1]
+            daily_returns.append(r)
+        
+        if not daily_returns:
+            return jsonify({"error": "No daily returns computed"}), 400
+        
+        # Metrics
+        start_value = daily_values[0]
+        end_value = daily_values[-1]
+        total_return = (end_value / start_value) - 1
+        days_elapsed = (sorted_days[-1] - sorted_days[0]).days or 1
+        annualized_return = (1 + total_return) ** (365.0 / days_elapsed) - 1
+        
+        # Max drawdown
+        running_max = 0
+        max_drawdown = 0.0
+        for v in daily_values:
+            if running_max == 0:
+                running_max = v
+            else:
+                drawdown = (running_max - v) / running_max
+                if drawdown > max_drawdown:
+                    max_drawdown = drawdown
+                if v > running_max:
+                    running_max = v
+        
+        # Sharpe ratio
+        mean_return = sum(daily_returns) / len(daily_returns)
+        if len(daily_returns) > 1:
+            variance = sum((r - mean_return) ** 2 for r in daily_returns) / (len(daily_returns) - 1)
+            stdev_return = math.sqrt(variance)
+            sharpe = (mean_return / stdev_return) * math.sqrt(252) if stdev_return > 0 else 0.0
+        else:
+            sharpe = 0.0
+        
+        result = {
+            "start_date": sorted_days[0].isoformat(),
+            "end_date": sorted_days[-1].isoformat(),
+            "total_return_pct": round(total_return * 100, 2),
+            "annualized_return_pct": round(annualized_return * 100, 2),
+            "max_drawdown_pct": round(max_drawdown * 100, 2),
+            "sharpe_ratio": round(sharpe, 3),
+            "days_elapsed": days_elapsed,
+            "data_points": len(daily_values)
+        }
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error computing performance: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/trigger/<trigger_type>", methods=["POST"])

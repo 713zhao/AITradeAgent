@@ -7,13 +7,13 @@
 # ========================
 risk:
   # Position sizing
-  max_position_size_pct: 10          # Max % of portfolio per trade (moderate)
+  max_position_size_pct: 1.0          # Max % of portfolio per trade (SAFE - reduced from 10)
   max_exposure_pct: 80               # Max % total deployed
   max_daily_loss_pct: 2.0            # Daily loss stop
   max_drawdown_pct: 15.0             # Max drawdown stop
 
   # Risk per trade
-  default_risk_budget_pct: 1.5       # 1.5% risk per trade
+  default_risk_budget_pct: 1.0       # 1.0% risk per trade (SAFE - reduced from 1.5%)
   stop_loss_default_pct: 1.5         # ATR-based stop multiplier
   take_profit_default_pct: 3.0       # Take profit at 3x stop (2:1 R:R)
 
@@ -33,7 +33,7 @@ strategy:
   type: "sma20_trend"  # revert to conservative trend‑following
 
   auto_execute:
-    enabled: true      # enable automatic trade execution when risk checks pass
+    enabled: false     # DISABLED for safety - auto_execute turned off due to extreme margin breach risk
     confidence_threshold: 1.0
     require_approval: false
 
