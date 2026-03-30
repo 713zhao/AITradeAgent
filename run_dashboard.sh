@@ -46,4 +46,4 @@ echo "   Dashboard will open at: http://localhost:8501"
 echo "   Press Ctrl+C to stop"
 echo ""
 
-streamlit run finance_service/ui/dashboard.py
+venv/bin/python3 -m streamlit run finance_service/ui/dashboard.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true

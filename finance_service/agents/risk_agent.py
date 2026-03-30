@@ -343,15 +343,20 @@ class RiskAgent(Agent):
         )
         logger.info(f"RiskAgent initialized with policy: {self.policy.policy_name}")
 
-    async def run(self, trade_proposal_report: AgentReport) -> Optional[AgentReport]:
+    async def run(self, proposal_input: Union[Dict[str, Any], AgentReport]) -> AgentReport:
         """
         Evaluates trade proposal(s) against risk policies and potentially initiates an approval process.
-        Supports both single proposal ({"proposal": {...}}) and multiple proposals ({"proposals": [{...}]}).
+        Supports both single proposal (dict) and AgentReport payload with "proposal" or "proposals".
         """
         logger.info("RiskAgent run: Evaluating trade proposal(s) for risk.")
 
         try:
-            payload = trade_proposal_report.payload
+            # Determine payload from input
+            if isinstance(proposal_input, AgentReport):
+                payload = proposal_input.payload
+            else:
+                # Assume it's a single proposal dict; wrap as {"proposal": ...}
+                payload = {"proposal": proposal_input}
             
             # Handle both singular "proposal" and plural "proposals"
             if "proposals" in payload:
@@ -432,11 +437,14 @@ class RiskAgent(Agent):
             all_passed = all(r.passed for r in results)
             
             message = f"Risk assessment complete for {len(results)} proposal(s). Approval Required: {any_approval_required}"
+            # Determine decision: auto-execute only if all risk checks passed and no approval required
+            decision = "APPROVED" if (all_passed and not any_approval_required) else "REJECTED"
             payload_out = {
                 "risk_assessments": [r.to_dict() for r in results],
                 "trade_proposals": [proposal_data for proposal_data in proposals_data],
                 "all_passed": all_passed,
-                "any_approval_required": any_approval_required
+                "any_approval_required": any_approval_required,
+                "decision": decision
             }
 
             # Build the AgentReport to return and publish

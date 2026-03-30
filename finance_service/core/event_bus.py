@@ -208,6 +208,7 @@ class Events:
     
     # Data events
     MARKET_SCANNED = "market_scanned" # New event for market scanner
+    PRICE_REFRESH_COMPLETE = "price_refresh_complete"  # Tier 2: watchlist price update done
     DATA_FETCH_STARTED = "data_fetch_started"
     DATA_FETCH_COMPLETE = "data_fetch_complete"
     DATA_READY = "data_ready"                 # Symbol data ready for analysis (can be removed if DATA_FETCH_COMPLETE is sufficient)
@@ -233,6 +234,7 @@ class Events:
     TRADE_OPENED = "trade_opened"
     TRADE_CLOSED = "trade_closed"
     TRADE_STOPPED = "trade_stopped"
+    POSITION_DEGRADED = "position_degraded"  # Exit agent: position no longer meets buy criteria
     
     # Risk events
     RISK_ALERT = "risk_alert"                # Position limit, drawdown, etc.
@@ -263,7 +265,9 @@ class Events:
     
     # Scheduler events
     MARKET_SCAN_TRIGGER = "market_scan_trigger"  # Trigger to start market scan (used by scheduler and manual triggers)
+    EXIT_CHECK_TRIGGER = "exit_check_trigger"  # Trigger to check open positions for exits and degradation
     DATA_REFRESH_TRIGGER = "data_refresh_trigger"  # Trigger to refresh data for existing symbols
+    PRICE_MONITOR_TRIGGER = "price_monitor_trigger"  # Tier 2: lightweight price refresh (every 15 min)
     DAILY_REPORT_TRIGGER = "daily_report_trigger"
     HEALTH_CHECK_TRIGGER = "health_check_trigger"
 

@@ -13,8 +13,8 @@ risk:
 strategy:
   type: sma20_trend
   auto_execute:
-    enabled: false
-    confidence_threshold: 1.0
+    enabled: true
+    confidence_threshold: 0.8
     require_approval: false
   indicators:
     rsi:
@@ -55,13 +55,43 @@ universe:
     - UPST
     - AVGO
     - MSTR
+    - AI
+    - SYM
+    - PATH
+    - BBAI
+    - SOUN
+    - GFAI
+    - AITX
+    - PRCT
+    - LQDA
+    - EXAI
+    - HIMS
+    - GRAB
+    - IONQ
+    - RGTI
+    - QUBT
   - name: Semiconductor
     symbols:
     - TSM
     - QCOM
     - AMD
-    - ASR
     - ASML
+    - ASR
+    - INTC
+    - MU
+    - MRVL
+    - ADI
+    - NXPI
+    - KLAC
+    - LRCX
+    - AMAT
+    - 'ON'
+    - SWKS
+    - ARM
+    - MCHP
+    - TXN
+    - GFS
+    - WOLF
   - name: Cloud
     symbols:
     - CRWD
@@ -69,6 +99,21 @@ universe:
     - NET
     - MDB
     - SNOW
+    - ZS
+    - PANW
+    - FTNT
+    - S
+    - OKTA
+    - TEAM
+    - HUBS
+    - VEEV
+    - BILL
+    - MNDY
+    - NOW
+    - WDAY
+    - ADBE
+    - CRM
+    - SHOP
   - name: MegaCap
     symbols:
     - MSFT
@@ -76,6 +121,21 @@ universe:
     - AAPL
     - AMZN
     - META
+    - TSLA
+    - BRK-B
+    - LLY
+    - V
+    - UNH
+    - JPM
+    - XOM
+    - JNJ
+    - WMT
+    - MA
+    - PG
+    - COST
+    - HD
+    - NFLX
+    - ORCL
   - name: Hong Kong
     symbols:
     - 0700.HK
@@ -83,32 +143,122 @@ universe:
     - 0941.HK
     - 1398.HK
     - 0388.HK
+    - 2318.HK
+    - 0005.HK
+    - 1299.HK
+    - 0027.HK
+    - 0003.HK
+    - 9618.HK
+    - 9999.HK
+    - 3690.HK
+    - 1810.HK
+    - 0966.HK
+    - 0175.HK
+    - 2382.HK
+    - 0883.HK
+    - 0002.HK
+    - 0001.HK
   all_symbols:
-  - NVDA
-  - PLTR
-  - UPST
-  - AVGO
-  - MSTR
-  - TSM
-  - QCOM
+  - 0001.HK
+  - 0002.HK
+  - 0003.HK
+  - 0005.HK
+  - 0027.HK
+  - 0175.HK
+  - 0388.HK
+  - 0700.HK
+  - 0883.HK
+  - 0941.HK
+  - 0966.HK
+  - 1299.HK
+  - 1398.HK
+  - 1810.HK
+  - 2318.HK
+  - 2382.HK
+  - 3690.HK
+  - 9618.HK
+  - 9988.HK
+  - 9999.HK
+  - AAPL
+  - ADBE
+  - ADI
+  - AI
+  - AITX
+  - AMAT
   - AMD
-  - ASR
+  - AMZN
+  - ARM
   - ASML
+  - ASR
+  - AVGO
+  - BBAI
+  - BILL
+  - BRK-B
+  - COST
+  - CRM
   - CRWD
   - DDOG
-  - NET
-  - MDB
-  - SNOW
-  - MSFT
+  - EXAI
+  - FTNT
+  - GFAI
+  - GFS
   - GOOGL
-  - AAPL
-  - AMZN
+  - GRAB
+  - HD
+  - HIMS
+  - HUBS
+  - INTC
+  - IONQ
+  - JNJ
+  - JPM
+  - KLAC
+  - LLY
+  - LQDA
+  - LRCX
+  - MA
+  - MCHP
+  - MDB
   - META
-  - 0700.HK
-  - 9988.HK
-  - 0941.HK
-  - 1398.HK
-  - 0388.HK
+  - MNDY
+  - MRVL
+  - MSFT
+  - MSTR
+  - MU
+  - NET
+  - NFLX
+  - NOW
+  - NVDA
+  - NXPI
+  - OKTA
+  - 'ON'
+  - ORCL
+  - PANW
+  - PATH
+  - PG
+  - PLTR
+  - PRCT
+  - QCOM
+  - QUBT
+  - RGTI
+  - S
+  - SHOP
+  - SNOW
+  - SOUN
+  - SWKS
+  - SYM
+  - TEAM
+  - TSLA
+  - TSM
+  - TXN
+  - UNH
+  - UPST
+  - V
+  - VEEV
+  - WDAY
+  - WMT
+  - WOLF
+  - XOM
+  - ZS
   whitelist:
     enabled: false
     symbols: []
@@ -340,3 +490,8 @@ strategies:
       indicator: regime_score
       condition: less_than
       value: 30.0
+scanner:
+  discovery_top_n_per_theme: 10
+  price_monitor_top_n: 50
+  price_monitor_interval_minutes: 15
+  discovery_interval: daily

@@ -302,7 +302,7 @@ class StrategyAgent(Agent):
         logger.info(f"Loaded {len(rules)} rules from config")
         return rules
 
-    async def run(self, indicators_report: AgentReport, news_report: AgentReport) -> AgentReport:
+    async def run(self, analysis_payload: Dict[str, Any], symbol: str = None) -> AgentReport:
         """
         Generate trade proposals based on market analysis and news.
         
@@ -315,7 +315,7 @@ class StrategyAgent(Agent):
         """
         try:
             # Get indicator snapshot from analysis report
-            indicators_snapshot = indicators_report.payload.get("indicators_snapshot")
+            indicators_snapshot = analysis_payload.get("indicators_snapshot")
             if not indicators_snapshot:
                 return AgentReport(
                     agent_id=self.agent_id,

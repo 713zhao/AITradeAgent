@@ -48,6 +48,9 @@ class Position:
     
     def market_value(self) -> float:
         """Current market value of position."""
+        # Guard against NaN or infinite current_price
+        if self.current_price is None or not isinstance(self.current_price, (int, float)) or self.current_price != self.current_price or self.current_price in (float('inf'), float('-inf')):
+            return 0.0
         return self.quantity * self.current_price
     
     def cost_basis(self) -> float:

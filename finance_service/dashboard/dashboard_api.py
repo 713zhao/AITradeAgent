@@ -197,17 +197,22 @@ class DashboardAPI:
                 "data": [
                     {
                         "trade_id": t.trade_id,
+                        "task_id": t.task_id,
                         "symbol": t.symbol,
                         "side": t.side,
                         "quantity": t.quantity,
-                        "entry_price": t.entry_price,
-                        "exit_price": t.exit_price,
-                        "pnl": t.pnl,
-                        "pnl_pct": t.pnl_pct,
-                        "duration_seconds": t.duration_seconds,
-                        "filled_at": t.filled_at.isoformat(),
-                        "closed_at": t.closed_at.isoformat() if t.closed_at else None,
-                        "status": t.status,
+                        "price": t.price,
+                        "filled_quantity": t.filled_quantity,
+                        "fill_percentage": t.fill_percentage(),
+                        "confidence": t.confidence,
+                        "stop_loss": t.stop_loss,
+                        "take_profit": t.take_profit,
+                        "reason": t.reason,
+                        "ordered_at": t.ordered_at.isoformat(),
+                        "filled_at": t.filled_at.isoformat() if t.filled_at else None,
+                        "status": t.status.value if hasattr(t.status, 'value') else str(t.status),
+                        "approval_required": t.approval_required,
+                        "approval_received": t.approval_received,
                     }
                     for t in trades
                 ]

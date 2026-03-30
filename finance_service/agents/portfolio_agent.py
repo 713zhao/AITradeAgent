@@ -149,8 +149,12 @@ class PortfolioAgent(Agent):
                     df = pd.DataFrame.from_dict(df_dict)
                     if not df.empty:
                         latest_price = df.iloc[-1]['close']
-                        self.repository.update_position(symbol, current_price=latest_price)
-                        logger.debug(f"Updated {symbol} current price to {latest_price}")
+                        # Only update if price is valid (non-NaN, positive)
+                        if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
+                            self.repository.update_position(symbol, current_price=latest_price)
+                            logger.debug(f"Updated {symbol} current price to {latest_price}")
+                        else:
+                            logger.warning(f"Invalid price fetched for {symbol}: {latest_price}. Skipping update.")
             except Exception as e:
                 logger.warning(f"Failed to fetch price for {symbol}: {e}")
                 continue
