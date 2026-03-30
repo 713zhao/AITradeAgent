@@ -31,6 +31,7 @@ class Position:
         symbol: Trading symbol (e.g., 'AAPL')
         quantity: Number of shares held (positive = long, negative = short)
         avg_cost: Average cost per share (purchase price or short price)
+        entry_price: Alias for avg_cost (for compatibility with broker/code expecting entry_price)
         current_price: Current market price (updated real-time)
         opened_at: Timestamp when position opened
         updated_at: Last update timestamp
@@ -45,6 +46,16 @@ class Position:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     trades: List[str] = field(default_factory=list)  # Trade IDs
     metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    @property
+    def entry_price(self) -> float:
+        """Alias for avg_cost to maintain compatibility with broker-style code."""
+        return self.avg_cost
+    
+    @entry_price.setter
+    def entry_price(self, value: float):
+        """Allow setting entry_price as alias for avg_cost."""
+        self.avg_cost = value
     
     def market_value(self) -> float:
         """Current market value of position."""
@@ -73,6 +84,7 @@ class Position:
             "symbol": self.symbol,
             "quantity": self.quantity,
             "avg_cost": self.avg_cost,
+            "entry_price": self.avg_cost,  # alias for compatibility
             "current_price": self.current_price,
             "market_value": self.market_value(),
             "cost_basis": self.cost_basis(),

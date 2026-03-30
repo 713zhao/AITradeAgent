@@ -46,6 +46,19 @@ class IndicatorsSnapshot:
         """Get all indicator signals"""
         return {k: v.signal for k, v in self.indicators.items()}
     
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Get indicator value by name (e.g., 'rsi') or other metadata.
+        Returns the numeric value from IndicatorResult, or the default if not found.
+        """
+        if key == "close":
+            return self.current_price if self.current_price is not None else default
+        if key in ("symbol", "timestamp"):
+            return getattr(self, key, default)
+        if key in self.indicators:
+            return self.indicators[key].value
+        return default
+    
     def to_dict(self):
         """Convert to dictionary"""
         return {

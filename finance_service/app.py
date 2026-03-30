@@ -177,8 +177,8 @@ class MainOrchestratorAgent:
         if not (is_us_market_open() or is_hk_market_open()):
             logger.info("Markets closed (US and HK). Skipping scan.")
             return
-        # Trigger scanner
-        report = await self.market_scanner_agent.run()
+        # Trigger scanner with DataAgent for proper ranking
+        report = await self.market_scanner_agent.run(data_agent=self.data_agent)
         if report.status == "success" or report.status == "opportunity":
             # Publish the payload as event data; include status in payload if needed
             event_data = report.payload.copy()
