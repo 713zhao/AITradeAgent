@@ -108,7 +108,7 @@ class EventBus:
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    timeout_seconds = 60.0  # Increased from 30s to 60s
+                    timeout_seconds = 300.0  # 5 minutes for long-running scans
                     logger.info(f"[DEBUG] Attempt {attempt+1}/{max_retries}: waiting with timeout={timeout_seconds}s")
                     results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout_seconds)
                     logger.info(f"[DEBUG] Gather completed, results count: {len(results)}")
