@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
@@ -25,29 +26,37 @@ class ExecutionAgent(Agent):
     async def run(self, approval_report: AgentReport) -> Optional[AgentReport]:
         """
         Receives an approved trade proposal and executes it.
+        Supports payload with either 'trade_proposal' (single) or 'trade_proposals' (array).
         """
         logger.info("ExecutionAgent run: Executing approved trade proposal.")
 
         try:
-            # Placeholder for actual trade execution logic
-            # This will involve:
-            # 1. Extracting TradeProposal and possibly RiskCheckResult from approval_report.payload
-            # 2. Selecting an execution algorithm (e.g., TWAP, VWAP, market order)
-            # 3. Interacting with a BrokerManager to place the order
-            # 4. Monitoring the order status
-            # 5. Returning an ExecutionReport or similar payload in the AgentReport
-
-            trade_proposal = TradeProposal(**approval_report.payload["trade_proposal"])
+            # Extract trade proposal(s) from payload
+            payload_data = approval_report.payload
+            
+            if "trade_proposals" in payload_data:
+                proposals_data = payload_data["trade_proposals"]
+                if not isinstance(proposals_data, list):
+                    proposals_data = [proposals_data]
+                # For now, execute first proposal only (batch execution can be added later)
+                proposal_data = proposals_data[0]
+                logger.info(f"Found {len(proposals_data)} proposals, executing first one for {proposal_data.get('symbol')}")
+            elif "trade_proposal" in payload_data:
+                proposal_data = payload_data["trade_proposal"]
+            else:
+                raise ValueError(f"Neither 'trade_proposal' nor 'trade_proposals' found in approval_report payload. Keys: {list(payload_data.keys())}")
+            
+            trade_proposal = TradeProposal(**proposal_data)
             # Assuming approval_report.payload also contains risk_assessment
-            risk_assessment = approval_report.payload["risk_assessment"]
+            risk_assessment = approval_report.payload.get("risk_assessment", {})
 
             # Mock execution result
             execution_result = {
-                "trade_id": trade_proposal.symbol + "_exec_" + str(datetime.utcnow().timestamp()),
+                "trade_id": f"trade_{trade_proposal.symbol}_{datetime.utcnow().timestamp()}",
                 "symbol": trade_proposal.symbol,
                 "action": trade_proposal.action,
-                "quantity": 1.0, # Placeholder quantity
-                "filled_price": trade_proposal.target_price, # Assuming filled at target for mock
+                "quantity": 1.0,  # TODO: use actual position sizing
+                "price": trade_proposal.target_price,  # PortfolioAgent expects 'price'
                 "status": "FILLED",
                 "timestamp": datetime.utcnow().isoformat()
             }
@@ -67,7 +76,7 @@ class ExecutionAgent(Agent):
                 payload=payload
             )
         except Exception as e:
-            logger.error(f"Error in ExecutionAgent run: {e}")
+            logger.error(f"Error in ExecutionAgent run: {e}", exc_info=True)
             return AgentReport(
                 agent_id=self.agent_id,
                 status="error",

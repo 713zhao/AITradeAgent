@@ -305,14 +305,11 @@ class MainOrchestratorAgent(Agent):
 
     async def handle_trade_executed(self, event: Event):
         logger.info(f"Orchestrator received TRADE_EXECUTED event: {event.data}")
-        execution_report = AgentReport(**event.data)
         
-        # Extract execution_result from payload
-        execution_result = execution_report.payload.get("execution_result", {})
-        logger.info(f"Extracted execution_result: {execution_result}")
-        
+        # ExecutionAgent publishes: data={"execution_result": {...}}
+        execution_result = event.data.get("execution_result", {})
         if not execution_result:
-            logger.warning("No execution_result found in payload")
+            logger.warning("No execution_result found in TRADE_EXECUTED event data")
             return
         
         logger.info(f"Calling portfolio_agent.run with execution_result: symbol={execution_result.get('symbol')} action={execution_result.get('action')}")
@@ -329,6 +326,13 @@ class MainOrchestratorAgent(Agent):
         logger.info("Portfolio update attempt completed")
         
         # Let the learning agent process the full execution report
+        # Build a minimal execution_report for learning
+        execution_report = AgentReport(
+            agent_id="execution_agent",
+            status="success",
+            message="Trade executed",
+            payload={"execution_result": execution_result}
+        )
         await self.learning_agent.run(execution_report=execution_report)
         
         # Send trade notification via health agent (to Telegram)
@@ -338,9 +342,6 @@ class MainOrchestratorAgent(Agent):
             logger.error(f"Error in health_agent trade notification: {e}", exc_info=True)
         
         logger.info("Trade execution handling complete")
-        
-        # Then let the learning agent process the full execution report
-        await self.learning_agent.run(execution_report=execution_report)
 
     async def handle_learning_complete(self, event: Event):
         logger.info(f"Orchestrator received LEARNING_COMPLETE event: {event.data}")
@@ -630,6 +631,64 @@ async def get_portfolio_state():
         return jsonify({"error": "Portfolio state request timed out."}), 500
     except Exception as e:
         logger.error(f"Error retrieving portfolio state: {e}")
+        if request_id in flask_response_queues:
+            del flask_response_queues[request_id]
+        return jsonify({"error": f"Internal server error: {e}"}), 500
+
+
+@app.route("/portfolio/performance", methods=["GET"])
+async def get_portfolio_performance():
+    """Get portfolio performance metrics (returns, drawdown, Sharpe, etc.)"""
+    orchestrator = get_orchestrator()
+    request_id = f"flask_{id(request)}"
+    flask_response_queues[request_id] = asyncio.Queue()
+    
+    # Request portfolio state first (we'll derive performance from it)
+    response_event = Event(event_type=Events.GET_PORTFOLIO_STATE, data={"chat_id": "flask_request", "request_id": request_id})
+    await orchestrator.event_bus.publish(response_event)
+    
+    try:
+        response_report = await asyncio.wait_for(flask_response_queues[request_id].get(), timeout=30.0)
+        del flask_response_queues[request_id]
+        
+        if response_report.status != "success":
+            return jsonify({"error": response_report.message}), 500
+        
+        portfolio_state = response_report.payload
+        
+        # Extract performance metrics from equity_metrics
+        metrics = portfolio_state.get("equity_metrics", {})
+        total_equity = metrics.get("total_equity", 0.0)
+        total_pnl = metrics.get("total_pnl", 0.0)
+        total_return_pct = metrics.get("total_return_pct", 0.0)
+        current_cash = metrics.get("current_cash", 0.0)
+        
+        # Additional derived metrics
+        # Note: For a more complete performance report, the PortfolioAgent should calculate
+        # annualized return, Sharpe ratio, max drawdown from historical equity curve.
+        # For now, we return basic metrics from the current state.
+        performance = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "total_equity": total_equity,
+            "total_pnl": total_pnl,
+            "total_return_pct": total_return_pct,
+            "current_cash": current_cash,
+            "position_count": portfolio_state.get("overview", {}).get("position_count", 0),
+            "positions": portfolio_state.get("positions", []),
+            # Placeholder for advanced metrics (to be implemented in PortfolioAgent)
+            "annualized_return_pct": None,
+            "sharpe_ratio": None,
+            "max_drawdown_pct": None,
+            "note": "Performance endpoint returns basic metrics. Advanced metrics (annualized return, Sharpe, max drawdown) require historical equity curve analysis."
+        }
+        
+        return jsonify(performance), 200
+        
+    except asyncio.TimeoutError:
+        del flask_response_queues[request_id]
+        return jsonify({"error": "Portfolio performance request timed out."}), 500
+    except Exception as e:
+        logger.error(f"Error retrieving portfolio performance: {e}")
         if request_id in flask_response_queues:
             del flask_response_queues[request_id]
         return jsonify({"error": f"Internal server error: {e}"}), 500

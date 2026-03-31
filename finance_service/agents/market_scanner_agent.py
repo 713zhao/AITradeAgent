@@ -58,12 +58,15 @@ class MarketScannerAgent(Agent):
         themes = self.config.get("finance", "universe/themes", default=[])
         return [t.get("name", "") for t in themes if isinstance(t, dict)]
     
-    async def run(self, include_themes: Optional[List[str]] = None, 
-                  min_liquidity: float = 0.0, 
-                  limit: int = 10) -> Optional[AgentReport]:
+    async def run(self, include_themes: Optional[List[str]] = None,
+                  min_liquidity: float = 0.0,
+                  limit: int = None) -> Optional[AgentReport]:
         """
         Executes the market scanning logic to discover promising stocks.
         """
+        # Use configured default if limit not specified
+        if limit is None:
+            limit = self.config.get("finance", "market_scan/limit", default=1000)
         logger.info(f"Running market scan with themes={include_themes}, min_liquidity={min_liquidity}, limit={limit}")
         
         # 1. Scan and filter by theme (existing logic)

@@ -70,6 +70,7 @@ class Position:
             "symbol": self.symbol,
             "quantity": self.quantity,
             "avg_cost": self.avg_cost,
+            "entry_price": self.avg_cost,  # Alias for UI compatibility
             "current_price": self.current_price,
             "market_value": self.market_value(),
             "cost_basis": self.cost_basis(),

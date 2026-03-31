@@ -197,6 +197,10 @@ scheduler:
   market_scan_interval_minutes: 15
   data_refresh_interval_minutes: 5
 
+# Market scanner settings
+market_scan:
+  limit: 100  # Scan all symbols (universe size ~25)
+
 # ========================
 # BACKTEST STRATEGIES
 # ========================
