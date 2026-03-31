@@ -2,17 +2,32 @@
 
 **Agent ID:** `news_agent`  
 **File:** `finance_service/agents/news_agent.py`  
-**Status:** ⚙️ Placeholder / In Development  
-**Version:** 1.0  
-**Last Updated:** 2026-03-29
+**Status:** ✅ Production-ready  
+**Version:** 2.0  
+**Last Updated:** 2026-03-31
 
 ---
 
 ## Overview
 
-NewsAgent monitors recent news for a given symbol, performs sentiment analysis, and identifies potential catalysts that could impact price movement. It is designed to integrate with external news APIs (e.g., Finnhub, Alpha Vantage, NewsAPI) or proprietary feeds.
+NewsAgent fetches real news articles for a given symbol, runs VADER sentiment analysis, and identifies concrete catalysts (earnings beats, analyst upgrades, product launches, etc.). It is integrated into the main trading pipeline and its output is consumed by StrategyAgent and surfaced in pre-execution Telegram notifications.
 
 **Key Responsibility:** Provide qualitative, text-based signals to complement technical analysis.
+
+---
+
+## Data Sources
+
+| Priority | Provider | Endpoint | Notes |
+|----------|----------|----------|-------|
+| Primary | **Alpha Vantage** | `NEWS_SENTIMENT` | Per-ticker sentiment scores included; falls back if rate-limited or no articles |
+| Fallback | **Finnhub** | `company-news` | 3-day lookback, up to 20 articles |
+
+API keys are read from environment variables with hardcoded fallback values:
+```
+ALPHAVANTAGE_API_KEY   (default: configured in code)
+FINNHUB_API_KEY        (default: configured in code)
+```
 
 ---
 
@@ -20,14 +35,25 @@ NewsAgent monitors recent news for a given symbol, performs sentiment analysis, 
 
 ```
                     ┌─────────────────────────────────────┐
-                    │  NEWS_FETCH_REQUEST (per symbol)    │
+                    │  NewsAgent.run(symbol)              │
                     └──────────────┬──────────────────────┘
                                    │
                     ┌──────────────▼─────────────────────┐
-                    │  NewsAgent.run(symbol)             │
-                    │  - Fetch recent news (last 24-48h)│
-                    │  - Perform sentiment analysis     │
-                    │  - Identify catalysts             │
+                    │  _fetch_news(symbol)               │
+                    │  1. Try Alpha Vantage (48h window) │
+                    │  2. Fallback: Finnhub (3-day)      │
+                    └──────────────┬─────────────────────┘
+                                   │
+                    ┌──────────────▼─────────────────────┐
+                    │  _analyze_sentiment(articles)      │
+                    │  VADER compound score per article  │
+                    │  Merged with AV score if present   │
+                    │  Aggregate: mean of all articles   │
+                    └──────────────┬─────────────────────┘
+                                   │
+                    ┌──────────────▼─────────────────────┐
+                    │  _identify_catalysts(articles)     │
+                    │  Keyword scan across 11 patterns   │
                     └──────────────┬─────────────────────┘
                                    │
                     ┌──────────────▼─────────────────────┐
@@ -35,8 +61,10 @@ NewsAgent monitors recent news for a given symbol, performs sentiment analysis, 
                     │  payload: {                        │
                     │    symbol,                         │
                     │    news_count,                     │
-                    │    sentiment: {symbol: score},     │
-                    │    catalysts: [...]                │
+                    │    sentiment_score,   ← float      │
+                    │    sentiment_label,   ← str        │
+                    │    catalysts,         ← List[str]  │
+                    │    sentiment: {legacy key}         │
                     │  }                                 │
                     └───────────────────────────────────┘
 ```
@@ -49,98 +77,125 @@ NewsAgent monitors recent news for a given symbol, performs sentiment analysis, 
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `symbol` | `str` | Ticker symbol to fetch news for |
+| `symbol` | `str` | Ticker symbol (US: `NVDA`; HK: `0966.HK`) |
 
 Returns `AgentReport` with:
-- `agent_id`: `"news_agent"`
-- `status`: `"success"` (or `"error"` on failure)
-- `message`: summary
+- `status`: `"success"` (errors are caught and degraded gracefully — empty result)
 - `payload`:
-  - `symbol`: symbol
-  - `news_count`: number of articles retrieved
-  - `sentiment`: dict mapping symbol → `{"overall_sentiment": float, "summary": str}`
-  - `catalysts`: list of catalyst dicts `{type, description}`
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `symbol` | `str` | Input symbol |
+| `news_count` | `int` | Number of articles fetched |
+| `sentiment_score` | `float` | Aggregate sentiment −1.0 to +1.0 |
+| `sentiment_label` | `str` | `"bullish"` / `"neutral"` / `"bearish"` |
+| `catalysts` | `List[str]` | Detected catalyst names |
+| `sentiment` | `Dict` | Legacy key for backward compatibility |
 
 ---
 
-## Internal Processing Steps
+## Sentiment Analysis
 
-1. **Fetch News** (`_fetch_news(symbols: List[str])`)
-   - Placeholder implementation; needs real API integration.
-   - Current behavior: returns empty list if no providers configured.
-2. **Sentiment Analysis** (`_analyze_sentiment(news_data)`)
-   - Placeholder; should assign sentiment scores and summaries.
-3. **Catalyst Identification** (`_identify_catalysts(sentiment_results)`)
-   - Placeholder; should produce list of catalysts (e.g., earnings, FDA approval, M&A).
+Library: **VADER** (`vaderSentiment>=3.3.2`) — purely rule-based, no model download required.
+
+**Per-article score:**
+- VADER compound score computed from `headline + summary` text
+- If Alpha Vantage provides its own `ticker_sentiment_score`, it is averaged 50/50 with VADER
+
+**Aggregate:**
+```
+article_scores = [merged_score for each article]
+aggregate = mean(article_scores), clamped to [−1.0, +1.0]
+```
+
+**Labels:**
+| Range | Label |
+|-------|-------|
+| `>= +0.3` | bullish |
+| `<= −0.3` | bearish |
+| otherwise | neutral |
 
 ---
 
-## Configuration (finance.yaml)
+## Catalyst Detection
 
+Keyword scan across 11 patterns:
+
+| Catalyst | Example Keywords |
+|----------|-----------------|
+| earnings beat | "beat", "earnings beat", "surpassed estimates" |
+| earnings miss | "missed earnings", "below estimate" |
+| analyst upgrade | "upgrade", "raised price target", "outperform" |
+| analyst downgrade | "downgrade", "underperform", "sell rating" |
+| merger/acquisition | "acqui", "merger", "takeover", "buyout" |
+| product launch | "launch", "new product", "unveiled" |
+| regulatory approval | "fda approv", "approved by", "regulatory clearance" |
+| guidance raised | "raised guidance", "raised outlook" |
+| guidance lowered | "lowered guidance", "cut guidance" |
+| insider buying | "insider buy", "executive purchase" |
+| short squeeze | "short squeeze", "short interest" |
+
+If no keyword matches, a generic fallback is used based solely on sentiment magnitude.
+
+---
+
+## Configuration
+
+API keys are set via environment variables (`.env`):
+```
+ALPHAVANTAGE_API_KEY=your_key_here
+FINNHUB_API_KEY=your_key_here
+```
+
+Optional `finance.yaml` section (currently read but not yet enforced):
 ```yaml
 finance:
   news:
     enabled: true
-    provider: "finnhub"  # or "alphavantage", "newsapi"
-    api_key: ""          # provider-specific API key
     max_articles: 20
     lookback_hours: 48
-    sentiment_model: "textblob"  # or "vader", custom
 ```
-
-(Configuration keys are not yet implemented in code.)
 
 ---
 
 ## Event Flow Integration
 
 ```
-AnalysisAgent or Orchestrator triggers NEWS_FETCH_REQUEST
+Orchestrator after DATA_FETCH_COMPLETE
     ↓
-NewsAgent.run(symbol)
+NewsAgent.run(symbol)  [runs in parallel with AnalysisAgent]
     ↓
-Publish NEWS_FETCH_COMPLETE event
+Publishes NEWS_FETCH_COMPLETE event
     ↓
-Orchestrator collects news together with DataAgent and AnalysisAgent results
-    ↓
-StrategyAgent may factor news into its decision
+Orchestrator buffers result; triggers StrategyAgent when both
+NEWS_FETCH_COMPLETE + ANALYSIS_COMPLETE are ready for the same symbol
 ```
-
----
-
-## Current Implementation Status
-
-- ✅ Skeleton: `run()` method, event publishing
-- ✅ Placeholder methods `_fetch_news`, `_analyze_sentiment`, `_identify_catalysts`
-- ⚠️ **Needs integration:** Real news API and sentiment engine
-- ⚠️ **Needs config:** Read provider and API key from `YAMLConfigEngine`
-- ⚠️ **Needs testing:** No dedicated tests yet
 
 ---
 
 ## Integration Example
 
 ```python
-# Orchestrator snippet
 news_report = await news_agent.run(symbol="NVDA")
 if news_report.status == "success":
-    sentiment = news_report.payload["sentiment"]["NVDA"]["overall_sentiment"]
-    catalysts = news_report.payload["catalysts"]
-    # These could influence strategy confidence or trigger special handling
+    score = news_report.payload["sentiment_score"]      # e.g. +0.42
+    label = news_report.payload["sentiment_label"]      # "bullish"
+    cats  = news_report.payload["catalysts"]            # ["analyst upgrade"]
 ```
+
+---
+
+## Dependencies
+
+- `vaderSentiment>=3.3.2` — VADER sentiment library
+- `aiohttp>=3.8` — async HTTP (already in requirements.txt)
 
 ---
 
 ## Testing
 
-No test suite yet. Planned: `tests/test_news_agent.py` covering:
-- Fetch with mock API
-- Sentiment analysis correctness
-- Catalyst detection rules
-- Event payload structure
-
----
-
-## Summary
-
-NewsAgent is a **stub** awaiting implementation. It will enrich the pipeline with qualitative data. Priority: integrate a news provider (Finnhub recommended) and a lightweight sentiment library (TextBlob/VADER).
+Test suite: planned at `tests/test_news_agent.py`. Coverage targets:
+- AlphaVantage fetch + fallback to Finnhub
+- VADER sentiment scoring correctness
+- Catalyst keyword matching
+- Graceful handling of API errors / timeouts

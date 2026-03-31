@@ -10,6 +10,7 @@ yfinance>=0.2.28
 # Communication
 python-telegram-bot>=20.0
 requests>=2.28.0
+vaderSentiment>=3.3.2
 
 # Configuration & Environment
 python-dotenv>=0.21.0
