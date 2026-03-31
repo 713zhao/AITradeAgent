@@ -158,7 +158,13 @@ class HealthAgent(Agent):
         
         message = "\n".join(message_lines)
         # Use default chat ID from config if available, else orchestrator may forward
-        await self.telegram_agent.send_message(chat_id=self.config.get("telegram_chat_id", ""), message=message)
+        chat_id = ""
+        try:
+            # config_engine may be a dict-like or YAMLConfigEngine
+            chat_id = self.config_engine.get("telegram", "chat_id", default="") if hasattr(self.config_engine, "get") else self.config_engine.get("telegram_chat_id", "")
+        except Exception:
+            chat_id = ""
+        await self.telegram_agent.send_message(chat_id=chat_id, message=message)
         logger.info(f"Sent health alert via Telegram with {len(alerts)} alerts")
     
     async def send_trade_notification(self, execution_payload: Dict[str, Any]):
@@ -171,14 +177,15 @@ class HealthAgent(Agent):
         symbol = result.get("symbol", "Unknown")
         action = result.get("action", "??")
         quantity = result.get("quantity", 0)
-        price = result.get("filled_price", 0)
+        price = result.get("price", 0)  # Use 'price', not 'filled_price'
         status = result.get("status", "??")
         
         # Get current portfolio info for context
         portfolio_summary = "Portfolio info unavailable"
         if self.portfolio_agent:
             try:
-                portfolio_report = await self.portfolio_agent.get_portfolio_state()
+                # PortfolioAgent has get_detailed_portfolio_state, not get_portfolio_state
+                portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state(chat_id=None)
                 if portfolio_report.status == "success":
                     portfolio = portfolio_report.payload
                     equity = portfolio.get("total_equity", 0)
@@ -195,7 +202,12 @@ class HealthAgent(Agent):
         message += f"• Status: {status}\n"
         message += f"\n{portfolio_summary}"
         
-        await self.telegram_agent.send_message(chat_id=self.config.get("telegram_chat_id", ""), message=message)
+        chat_id = ""
+        try:
+            chat_id = self.config_engine.get("telegram", "chat_id", default="") if hasattr(self.config_engine, "get") else self.config_engine.get("telegram_chat_id", "")
+        except Exception:
+            chat_id = ""
+        await self.telegram_agent.send_message(chat_id=chat_id, message=message)
         logger.info(f"Sent trade notification for {symbol} {action}")
     
     async def send_daily_summary(self):
