@@ -369,6 +369,38 @@ class MainOrchestratorAgent(Agent):
                 Event(event_type=Events.MARKET_SCANNED, data={"payload": result.payload, "agent_id": result.agent_id, "status": result.status, "message": result.message})
             )
             logger.info("Published MARKET_SCANNED event")
+            
+            # Send Telegram scan summary if requested (e.g., pre-market scan)
+            if event.data.get("send_telegram_report"):
+                try:
+                    symbols = result.payload.get("symbols", [])
+                    count = len(symbols)
+                    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                    market_label = event.data.get("market", "Overall")
+                    message = f"📊 Pre-Market Scan Report\n"
+                    message += f"Time: {now_str} UTC\n"
+                    message += f"Market: {market_label}\n"
+                    message += f"Candidates: {count}\n"
+                    if count > 0:
+                        shown = symbols[:10]
+                        message += "Symbols: " + ", ".join(shown)
+                        if count > 10:
+                            message += f" (+{count-10} more)"
+                    else:
+                        message += "No candidates found."
+                    # Get chat_id from config
+                    chat_id = ""
+                    try:
+                        if hasattr(self.config, "get"):
+                            chat_id = self.config.get("telegram", "chat_id", default="")
+                        else:
+                            chat_id = self.config.get("telegram_chat_id", "")
+                    except Exception:
+                        chat_id = ""
+                    await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+                    logger.info(f"Sent scan Telegram report: {count} candidates")
+                except Exception as e:
+                    logger.error(f"Error sending scan Telegram report: {e}", exc_info=True)
         except Exception as e:
             logger.error(f"<<< HANDLER ERROR: Error in handle_market_scan_trigger: {e}", exc_info=True)
             raise

@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Dict, Any, Callable, Awaitable, Optional
 
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -54,6 +54,9 @@ class SchedulerAgent(Agent):
                 self._trigger_daily_report,
                 timedelta(days=1)
             )
+            # Pre-market scans (30min before market open)
+            await self._schedule_daily_at("pre_market_scan_hk", "01:00", self._trigger_pre_market_scan_hk)
+            await self._schedule_daily_at("pre_market_scan_us", "13:00", self._trigger_pre_market_scan_us)
             
             logger.info("SchedulerAgent tasks initiated.")
             return AgentReport(agent_id=self.agent_id, status="success", message="SchedulerAgent started.")
@@ -102,6 +105,55 @@ class SchedulerAgent(Agent):
         """Trigger daily summary report after market close."""
         await self.event_bus.publish(Event(event_type=Events.DAILY_REPORT_TRIGGER, data={}))
         logger.info("Published DAILY_REPORT_TRIGGER event.")
+
+    async def _schedule_daily_at(self, task_name: str, time_utc_str: str, coro: Callable[..., Awaitable[None]]):
+        """Schedule a coroutine to run daily at a specific UTC time (HH:MM)."""
+        # Compute initial delay until next occurrence of the target time
+        now = datetime.utcnow()
+        hour, minute = map(int, time_utc_str.split(':'))
+        target_time = time(hour, minute)
+        target_dt = datetime.combine(now.date(), target_time)
+        if target_dt <= now:
+            target_dt += timedelta(days=1)
+        initial_delay = (target_dt - now).total_seconds()
+        
+        async def task_wrapper():
+            # Wait initial delay
+            await asyncio.sleep(initial_delay)
+            while True:
+                try:
+                    await coro()
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Error in daily task {task_name}: {e}", exc_info=True)
+                # Repeat every 24 hours after completion
+                await asyncio.sleep(24 * 3600)
+        
+        # Cancel existing if present
+        if task_name in self.scheduled_tasks and not self.scheduled_tasks[task_name].done():
+            self.scheduled_tasks[task_name].cancel()
+        
+        self.scheduled_tasks[task_name] = asyncio.create_task(task_wrapper())
+        logger.info(f"Scheduled daily task {task_name} at {time_utc_str} UTC (first run in {initial_delay/3600:.1f} hours)")
+
+    async def _trigger_pre_market_scan_hk(self):
+        """Trigger pre-market scan for Hong Kong (30min before 09:30 HKT)."""
+        await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
+            "interval": "pre_market",
+            "send_telegram_report": True,
+            "market": "HK"
+        }))
+        logger.info("Published MARKET_SCAN_TRIGGER for HK pre-market")
+
+    async def _trigger_pre_market_scan_us(self):
+        """Trigger pre-market scan for US (30min before 09:30 local time)."""
+        await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
+            "interval": "pre_market",
+            "send_telegram_report": True,
+            "market": "US"
+        }))
+        logger.info("Published MARKET_SCAN_TRIGGER for US pre-market")
 
     async def stop(self):
         """Stops all scheduled tasks."""
