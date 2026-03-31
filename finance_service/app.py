@@ -174,9 +174,10 @@ class MainOrchestratorAgent:
         logger.info("Received MARKET_SCAN_TRIGGER")
         # Check market hours: if both US and HK closed, skip
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
+        # TEMPORARY: Force scan now to generate trades (09:48 SG, HK open)
         if not (is_us_market_open() or is_hk_market_open()):
-            logger.info("Markets closed (US and HK). Skipping scan.")
-            return
+            logger.warning("Markets closed but forcing scan for immediate trade generation")
+            # return
         # Trigger scanner with DataAgent for proper ranking
         report = await self.market_scanner_agent.run(data_agent=self.data_agent)
         if report.status == "success" or report.status == "opportunity":
