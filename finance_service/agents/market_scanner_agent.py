@@ -1,6 +1,8 @@
 """Market Scanner - 3-Tier scanning: Discovery (daily), Price Monitor (15min), Exit Monitor (5min)"""
+import json
 import logging
 import asyncio
+import os
 from dataclasses import asdict
 from datetime import datetime
 from typing import List, Dict, Optional, Set, Tuple, Any
@@ -38,6 +40,11 @@ class MarketScannerAgent(Agent):
         self._watchlist: List[Dict[str, Any]] = []  # [{symbol, theme, rating, rank}, ...]
         self._watchlist_symbols: List[str] = []      # flat list for quick access
         self._last_discovery: Optional[str] = None    # ISO timestamp of last discovery
+        # Persist watchlist so it survives restarts
+        self._watchlist_path = os.path.join(
+            os.path.dirname(__file__), "..", "storage", "watchlist.json"
+        )
+        self._load_watchlist()
         logger.info(f"MarketScannerAgent initialized (whitelist_enabled={self._whitelist_enabled})")
 
     # ─── Public accessors ───────────────────────────────────────────
@@ -68,6 +75,41 @@ class MarketScannerAgent(Agent):
     def get_watchlist_symbols(self) -> List[str]:
         """Return flat symbol list from watchlist."""
         return list(self._watchlist_symbols)
+
+    def _load_watchlist(self) -> None:
+        """Load persisted watchlist from disk (called on init)."""
+        try:
+            path = os.path.abspath(self._watchlist_path)
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    data = json.load(f)
+                self._watchlist = data.get("watchlist", [])
+                self._watchlist_symbols = [r["symbol"] for r in self._watchlist]
+                self._last_discovery = data.get("last_discovery")
+                logger.info(
+                    f"Loaded persisted watchlist: {len(self._watchlist)} symbols "
+                    f"(last discovery: {self._last_discovery})"
+                )
+        except Exception as e:
+            logger.warning(f"Could not load persisted watchlist: {e}")
+
+    def _save_watchlist(self) -> None:
+        """Persist current watchlist to disk after each discovery scan."""
+        try:
+            path = os.path.abspath(self._watchlist_path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "last_discovery": self._last_discovery,
+                        "watchlist": self._watchlist,
+                    },
+                    f,
+                    indent=2,
+                )
+            logger.info(f"Watchlist persisted: {len(self._watchlist)} symbols → {path}")
+        except Exception as e:
+            logger.warning(f"Could not persist watchlist: {e}")
 
     # ─── Tier 1: Discovery Scan (daily) ─────────────────────────────
 
@@ -126,10 +168,11 @@ class MarketScannerAgent(Agent):
             # Sort all by rating descending
             all_rated.sort(key=lambda x: x["rating"], reverse=True)
 
-            # Update internal watchlist
+            # Update internal watchlist and persist to disk
             self._watchlist = all_rated
             self._watchlist_symbols = [r["symbol"] for r in all_rated]
             self._last_discovery = datetime.utcnow().isoformat()
+            self._save_watchlist()
 
             # Build flat symbol list for backward compatibility
             flat_symbols = self._watchlist_symbols

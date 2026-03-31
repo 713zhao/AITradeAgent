@@ -59,11 +59,17 @@ class PortfolioAgent(Agent):
     async def handle_trade_executed(self, trade_info: Dict[str, Any]) -> AgentReport:
         """Handles TRADE_EXECUTED event to update portfolio positions and trades."""
         logger.info(f"[PORTFOLIO DEBUG] handle_trade_executed called with trade_info: {trade_info}")
-        # Accept both 'action' and 'side' for compatibility
+        # Unwrap AgentReport wrapper: {agent_id, status, payload: {execution_result: {...}}}
+        if "agent_id" in trade_info and "payload" in trade_info:
+            trade_info = trade_info["payload"].get("execution_result", trade_info["payload"])
+        # Unwrap bare execution_result nesting: {execution_result: {...}}
+        elif "execution_result" in trade_info:
+            trade_info = trade_info["execution_result"]
+        # Accept both 'action'/'side' and 'price'/'filled_price' for compatibility
         symbol = trade_info.get("symbol")
         side = trade_info.get("side") or trade_info.get("action")
         quantity = trade_info.get("quantity")
-        price = trade_info.get("price")
+        price = trade_info.get("price") or trade_info.get("filled_price")
         trade_id = trade_info.get("trade_id") or f"exec_{int(datetime.utcnow().timestamp()*1000)}"
 
         logger.info(f"[PORTFOLIO DEBUG] Parsed: symbol={symbol}, side={side}, quantity={quantity}, price={price}, trade_id={trade_id}")
