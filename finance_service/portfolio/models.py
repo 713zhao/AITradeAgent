@@ -301,6 +301,7 @@ class Portfolio:
             "position_count": self.position_count(),
             "trade_count": self.trade_count(),
             "win_rate": self.win_rate(),
+            "status": "active" if self.position_count() > 0 else "inactive",
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "metadata": self.metadata,
