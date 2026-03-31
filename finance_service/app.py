@@ -600,6 +600,18 @@ def create_app():
         }
         return jsonify(_sanitize_floats({"status": "success", "data": data}))
 
+    @app.route("/portfolio/performance")
+    async def portfolio_performance():
+        """Return portfolio performance metrics (alias for /api/dashboard/performance)."""
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+        report = await _orchestrator.portfolio_agent.get_detailed_portfolio_state()
+        if report.status != "success":
+            return jsonify({"error": report.message}), 500
+        metrics = report.payload.get("equity_metrics", {})
+        return jsonify(_sanitize_floats({"status": "success", "data": metrics}))
+
     return app
 
 # Create the Quart app instance at module level for the launcher to use
