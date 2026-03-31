@@ -1,7 +1,7 @@
 # AITradeAgent - Current Production Architecture
 
-**Version:** 2.0  
-**Last Updated:** 2026-03-30  
+**Version:** 2.1  
+**Last Updated:** 2026-03-31  
 **Scope:** Active agents wired into `app.py` orchestrator  
 **Status:** Production-ready, fully operational
 
@@ -15,6 +15,16 @@
 - **Tier 2 (15 min):** Lightweight price refresh for watchlist + held positions
 - **Tier 3 (5 min):** ExitAgent monitors held positions (reactive + strategic)
 **Interface:** Telegram bot for commands and notifications
+
+**Recent Resolutions (2026-03-30/31):**
+- ✅ Position corruption: added `entry_price` alias to Position model
+- ✅ IndicatorsSnapshot compatibility: added `.get()` method for dict-like access
+- ✅ Market scan rankings: real 0-1 composite scores (was uniform 0.5)
+- ✅ Event bus timeout: increased to 300s for long scans
+- ✅ Portfolio performance endpoint: `/portfolio/performance` now available
+- ✅ Telegram routing: fixed config override bug
+- ✅ Equity NaN issue: guarded against invalid prices
+- ✅ Auto-execute: enabled at confidence 0.8 (was 1.0)
 
 ---
 
@@ -329,24 +339,84 @@ User interface via Telegram bot.
 ```yaml
 finance:
   execution:
-    broker: paper              # Currently set to paper trading
+    broker: paper              # Paper trading (simulated)
 
   risk:
-    max_position_pct: 0.10    # 10% max per symbol
+    max_position_pct: 0.01    # 1% max per symbol (Kelly-inspired)
     max_total_exposure_pct: 0.80  # 80% max total
+    max_daily_loss_pct: 0.02  # Halt if daily loss >2%
     max_drawdown_pct: 0.15    # Halt at 15% drawdown
+    default_risk_budget_pct: 0.01
 
   strategy:
+    type: sma20_trend          # Current active strategy
     auto_execute:
-      enabled: false          # Requires Telegram approval
-    confidence_threshold: 0.70  # Minimum 70% confidence
+      enabled: true            # Auto-execute approved trades
+      confidence_threshold: 0.8  # Minimum 0.8 confidence (0-1 scale)
+      require_approval: false  # No manual approval needed
+    indicators:
+      rsi:
+        enabled: true
+        period: 14
+        oversold: 40
+        overbought: 65
+      macd:
+        enabled: true
+        fast_period: 12
+        slow_period: 26
+        signal_period: 9
+      sma:
+        enabled: true
+        periods: [10, 20, 50]
+      atr:
+        enabled: true
+        period: 14
+    rules:
+      rsi_entry_oversold: true
+      rsi_entry_oversold_threshold: 40
+      macd_crossover: true
+      price_above_sma10: true
+      rsi_exit_overbought: true
+      rsi_exit_overbought_threshold: 65
+      macd_signal_exit: true
+      stop_loss_enabled: true
+      take_profit_enabled: true
+
+  universe:
+    themes:
+      - name: AI
+        symbols: [NVDA, PLTR, UPST, AVGO, MSTR, AI, SYM, PATH, BBAI, SOUN, GFAI, AITX, PRCT, LQDA, EXAI, HIMS, GRAB, IONQ, RGTI, QUBT]
+      - name: Semiconductor
+        symbols: [TSM, QCOM, AMD, ASML, ASR, INTC, MU, MRVL, ADI, NXPI, KLAC, LRCX, AMAT, ON, SWKS, ARM, MCHP, TXN, GFS, WOLF]
+      - name: Cloud
+        symbols: [CRWD, DDOG, NET, MDB, SNOW, ZS, PANW, FTNT, S, OKTA, TEAM, HUBS, VEEV, BILL, MNDY, NOW, WDAY, ADBE, CRM, SHOP]
+      - name: MegaCap
+        symbols: [MSFT, GOOGL, AAPL, AMZN, META, TSLA, BRK-B, LLY, V, UNH, JPM, XOM, JNJ, WMT, MA, PG, COST, HD, NFLX, ORCL]
+      - name: Hong Kong
+        symbols: [0700.HK, 9988.HK, 0941.HK, 1398.HK, 0388.HK, 2318.HK, 0005.HK, 1299.HK, 0027.HK, 0003.HK, 9618.HK, 9999.HK, 3690.HK, 1810.HK, 0966.HK, 0175.HK, 2382.HK, 0883.HK, 0002.HK, 0001.HK]
+    all_symbols: [auto-generated list of 100]
+    whitelist:
+      enabled: false
+      symbols: []
+
+  data:
+    default_interval: 1d
+    default_lookback_days: 120
+    cache_ttl_minutes: 5
+    cache_enabled: true
+    batch_size: 20
+    batch_delay_sec: 1.0
 
   scanner:
-    discovery_top_n_per_theme: 10   # Keep top 10 per theme after ranking
+    discovery_top_n_per_theme: 10   # Top 10 per theme after ranking
     price_monitor_top_n: 50         # Max symbols for price monitoring
     price_monitor_interval_minutes: 15
     discovery_interval: daily
-```
+
+  performance:
+    max_workers: 4
+    api_timeout_sec: 30
+    api_retries: 3
 
 ---
 
@@ -396,26 +466,49 @@ End of Day (Market Close):
 
 ---
 
-## Comparison: Current vs. Proposed
+## Feature Status (as of 2026-03-31)
 
 | Feature | Status |
 |---------|--------|
 | Active agents | 13 (all wired) |
 | Symbol universe | 100 symbols across 5 themes |
 | Scanning | 3-tier: discovery (daily) + price monitor (15min) + exit (5min) |
-| Ranking | 5-factor composite scoring per theme |
+| Ranking | 5-factor composite scoring (0-1) with real data |
 | Exit management | Reactive (stops/profits) + strategic (re-analysis) |
-| Risk checks | 5 policies |
+| Risk checks | Portfolio exposure, position size, drawdown, duplicates |
 | Data providers | Yahoo Finance (yfinance) |
+| Auto-execution | Enabled (confidence ≥ 0.8) |
+| Position model | `entry_price` alias (compatible with broker-style code) |
+| IndicatorsSnapshot | Dict-like `.get()` for compatibility |
+| Event bus timeout | 300s for long-running scans |
+| API endpoints | `/health`, `/portfolio/state`, `/portfolio/performance`, `/api/dashboard/*` |
+| Telegram routing | Fixed (uses .env fallback) |
+
+---
+
+## Recent Critical Fixes (2026-03-30/31)
+
+| Fix | Description |
+|-----|-------------|
+| Position corruption | Added `entry_price` property alias to Position class; `to_dict()` now includes `entry_price`. Resolved NaN equity caused by missing entry price. |
+| IndicatorsSnapshot compatibility | Added `.get()` method to support dict-like access; fixed ExitAgent AttributeError. |
+| Market scan rankings | Fixed `handle_market_scan_trigger` to pass `data_agent`; rankings now computed (0-1) instead of uniform 0.5. |
+| Event bus timeout | Increased from 60s to 300s to allow full universe scans to complete. |
+| Missing performance endpoint | Added `/portfolio/performance` route (alias to `/api/dashboard/performance`). |
+| Telegram config override | Orchestrator no longer overrides Telegram settings with empty YAML values; falls back to .env. |
+| Equity NaN guard | `Position.market_value()` guards against invalid `current_price`; price updates validated. |
+| Auto-execute threshold | Changed from 1.0 → 0.8 to allow more trades while maintaining confidence filter. |
+
+All systems verified healthy and operational.
 
 ---
 
 ## How to Use This Document
 
 - **For operations:** Follow the "Daily Workflow" section
-- **For troubleshooting:** Check "Known Limitations"
-- **For development:** See AGENT_ARCHITECTURE.md for full system design including proposed enhancements
-- **For roadmap:** See NEXT_STEPS.md for planned additions (ExitAgent wiring, RankingAgent, etc.)
+- **For troubleshooting:** Check agent-specific docs in `/docs`
+- **For development:** See `AGENT_ARCHITECTURE.md` for full system design including proposed enhancements
+- **For status:** Run `curl http://localhost:8801/health` and `/portfolio/state`
 
 ---
 

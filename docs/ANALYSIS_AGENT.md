@@ -172,8 +172,18 @@ python -m pytest tests/test_analysis_agent.py -v
 - AnalysisAgent is stateless; it operates purely on the provided DataFrame.
 - It expects DataFrame index to be datetime and columns to include `open`, `high`, `low`, `close`, `volume` (case insensitive).
 - The `IndicatorsSnapshot` is the core data structure consumed by all strategy implementations.
+  - As of 2026-03-31, `IndicatorsSnapshot` supports `.get(key, default=None)` for dict-like access, allowing compatibility with code expecting plain dicts (e.g., ExitAgent).
 - Future: Add additional indicators (e.g., ADX, Parabolic SAR) as needed.
 
 ---
+
+## Recent Fixes (2026-03-31)
+
+| Fix | Description |
+|-----|-------------|
+| IndicatorsSnapshot.get() | Added `get()` method to `IndicatorsSnapshot` model. Enables dict-like access (`indicators.get('rsi')`) to return indicator numeric values. This fixed AttributeError crashes in ExitAgent's strategic degradation checks. |
+
+---
+
 
 **Summary:** AnalysisAgent is a pure function from OHLCV → indicators. It is a critical, well-tested component used by every strategy.

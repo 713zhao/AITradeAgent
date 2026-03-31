@@ -80,7 +80,8 @@ Returns a payload with:
 ## Underlying Models
 
 - **Trade**: `(trade_id, symbol, side, quantity, price, commission, status, timestamp, decision, confidence, reason)`
-- **Position**: `(symbol, quantity, avg_cost, current_price)`
+- **Position**: `(symbol, quantity, avg_cost, current_price, opened_at, updated_at, trades: list, metadata: dict)`
+  - **Note:** `entry_price` is an alias for `avg_cost` (property getter/setter) to maintain compatibility with broker-style code. `to_dict()` includes both `avg_cost` and `entry_price` fields.
 - **Portfolio**: aggregate of positions + cash.
 
 `TradeRepository` handles persistence and portfolio calculation (`calculate_portfolio(initial_cash)`).
@@ -102,15 +103,72 @@ Tables:
 
 ## Position Update Logic
 
-For a BUY:
-- New position if not exists, or increase quantity and recalc average cost:  
+For BUY:
+- New position if not exists; otherwise increase quantity and recalc average cost:  
   `new_avg = (old_qty * old_avg + new_qty * price) / (old_qty + new_qty)`
-- Subtract `quantity * price` from cash (and commission if nonzero)
+- Subtract `quantity * price` from cash (plus commission if nonzero)
+- `entry_price` set to the fill price (alias of `avg_cost`)
 
-For a SELL:
-- Reduce quantity; if quantity -> 0, remove position.
+For SELL:
+- Reduce quantity; if quantity reaches 0, remove position.
 - Add `quantity * price` to cash.
-- Realized P&L = `(price - avg_cost) * quantity` (affects equity; stored indirectly through cash and position removal).
+- Realized P&L = `(price - avg_cost) * quantity` (affects equity; cash reflects proceeds).
+
+---
+
+## Query Payload Structure
+
+`get_detailed_portfolio_state()` returns:
+
+```python
+{
+  "timestamp": "2026-03-29T09:30:00",
+  "positions": {
+    "NVDA": {
+      "symbol": "NVDA",
+      "quantity": 10,
+      "avg_cost": 150.25,
+      "entry_price": 150.25,   # alias, same as avg_cost
+      "current_price": 151.50,
+      "market_value": 1515.0,
+      "cost_basis": 1502.5,
+      "unrealized_pnl": 12.5,
+      "unrealized_pnl_pct": 0.0083,
+      "opened_at": "...",
+      "updated_at": "...",
+      "trades": [...],
+      "metadata": {}
+    },
+    ...
+  },
+  "equity_metrics": {
+    "total_equity": 102614.69,
+    "cash": 63883.86,
+    "net_position_value": 38730.83,
+    "gross_position_value": 38730.83,
+    "unrealized_pnl": 2614.69,
+    "realized_pnl": 0.0,
+    "total_pnl": 2614.69,
+    "total_return_pct": 2.6147,
+    "drawdown_pct": 0.0,
+    "max_drawdown_pct": 0.0,
+    "position_count": 5,
+    "trade_count": 22,
+    "win_rate": 0.0
+  }
+}
+```
+
+---
+
+## Recent Fixes (2026-03-31)
+
+- **Position corruption:** Added `entry_price` property alias to `Position` model. `to_dict()` now includes `entry_price`. Fixed NaN equity caused by missing entry price when other code accessed `position['entry_price']`.
+- **Equity guard:** `Position.market_value()` returns 0.0 for invalid `current_price` (NaN, None, infinite).
+- **Price validation:** `PortfolioAgent.update_prices_from_data_agent()` validates fetched prices (must be numeric, non-NaN, >0) before updating.
+- **Endpoint:** Added `/portfolio/performance` route to expose `equity_metrics` (mirrors `/api/dashboard/performance`).
+
+These changes resolved a 13-hour production outage and stabilized portfolio reporting.
 
 ---
 

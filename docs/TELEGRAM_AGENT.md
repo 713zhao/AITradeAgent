@@ -157,4 +157,13 @@ python -m pytest tests/test_telegram_agent.py -v
 
 ---
 
+## Recent Fixes (2026-03-31)
+
+| Fix | Description |
+|-----|-------------|
+| Config override bug | Orchestrator was passing empty strings for `telegram_bot_token` and `telegram_chat_id` from YAML config to TelegramAgent, overriding valid values from `.env`. Fixed: only include these keys in the simple_config if YAML provides non-empty values. TelegramAgent now correctly falls back to `.env` settings. |
+| Routing parameter | Message sending now uses `target` parameter for Telegram channel instead of `chatId` to ensure delivery to the correct chat (8383381149). |
+
+---
+
 **Summary:** TelegramAgent is the user-facing interface. It centralizes all outbound notifications and provides simple text commands. It is fully asynchronous and integrates cleanly with the EventBus.

@@ -239,6 +239,18 @@ SchedulerAgent (every 15 min)
 
 ---
 
+## Recent Fixes (2026-03-31)
+
+| Fix | Description |
+|-----|-------------|
+| Ranking now uses real data | Previously `run()` was called without `data_agent`, causing all ratings to default to 0.5. Fixed orchestrator to pass `data_agent=self.data_agent`. Watchlist now shows differentiated 0-1 composite scores. |
+| Event bus timeout increased | Timeout for `MARKET_SCAN_TRIGGER` raised from 60s to 300s to allow full 100-symbol scan to complete without giving up. |
+| Concurrent scanning improvement | Data fetches run in parallel across symbols; ranking is sequential but now uses cached data when available, reducing total runtime. |
+
+**Note:** For scans triggered outside market hours, the orchestrator still enforces market hours check (skips if both US and HK closed). This can be temporarily disabled for debugging.
+
+---
+
 ## Testing
 
 ```bash

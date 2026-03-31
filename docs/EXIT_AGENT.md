@@ -129,11 +129,19 @@ Orchestrator converts to trade proposals → RiskAgent → ExecutionAgent (if au
 
 - ✅ Reactive exit logic (stop‑loss/take‑profit)
 - ✅ Integration with DataAgent for fresh prices
-- ✅ Strategic re‑analysis: fully implemented (`_check_strategic_degradation`) — checks RSI > 70 and bearish trend
+- ✅ Strategic re‑analysis: fully implemented (`_check_strategic_degradation`) — checks RSI > 70, bearish trend, and other strategy rules
 - ✅ Wired into SchedulerAgent via `EXIT_CHECK_TRIGGER` (every 5 minutes)
 - ✅ Orchestrator integration: `handle_exit_check_trigger()` retrieves positions, calls ExitAgent with `perform_strategy_check=True`
 - ✅ Telegram alerts sent for both exits and degraded positions
 - ✅ Emits `POSITION_DEGRADED` event for downstream handling
+
+---
+
+## Recent Fixes (2026-03-31)
+
+| Fix | Description |
+|-----|-------------|
+| IndicatorsSnapshot compatibility | `IndicatorsSnapshot` lacked a `.get()` method, causing `AttributeError` when ExitAgent accessed `indicators.get('rsi')`. Added `get()` method that returns indicator values by name, plus `current_price`, `symbol`, `timestamp`. This resolved continuous crash in strategic re‑analysis. |
 
 ---
 
