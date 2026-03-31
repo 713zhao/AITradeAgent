@@ -247,6 +247,20 @@ class MainOrchestratorAgent:
             proposal = proposals[0]  # best proposal
             risk_report = await self.risk_agent.run(proposal)
             if risk_report.payload.get("decision") == "APPROVED":
+                # Send pre-execution Telegram notification before placing the trade
+                if self.telegram_agent and self.telegram_agent.enabled:
+                    try:
+                        await self.telegram_agent.send_pre_execution_notification(
+                            symbol=proposal.get("symbol", "?"),
+                            action=proposal.get("action", "BUY"),
+                            quantity=proposal.get("quantity") or 1.0,
+                            target_price=proposal.get("target_price"),
+                            stop_loss_price=proposal.get("stop_loss_price"),
+                            confidence=proposal.get("confidence", 0.0),
+                            rationale=proposal.get("rationale"),
+                        )
+                    except Exception as _tg_err:
+                        logger.warning(f"Pre-execution Telegram notification failed: {_tg_err}")
                 exec_report = await self.execution_agent.run(risk_report)
                 if exec_report.status == "success":
                     # Handled by event, but we also publish

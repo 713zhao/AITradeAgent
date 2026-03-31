@@ -102,6 +102,61 @@ class TelegramAgent(Agent):
         await self.event_bus.publish(Event(event_type=Events.GET_PORTFOLIO_STATE, data={"chat_id": chat_id}))
         await self.send_message(chat_id, "Fetching portfolio state...")
 
+    async def send_pre_execution_notification(
+        self,
+        symbol: str,
+        action: str,
+        quantity: float,
+        target_price,
+        stop_loss_price,
+        confidence: float,
+        rationale,
+        chat_id=None,
+    ):
+        """Send a Telegram notification before a trade is executed."""
+        if not self.enabled or not self.bot:
+            return
+        target_chat_id = chat_id if chat_id else self.chat_id
+        if not target_chat_id:
+            return
+
+        action_emoji = "🟢 BUY" if action == "BUY" else "🔴 SELL"
+        # Build Yahoo Finance link (HK symbols like 0966.HK → 0966-HK)
+        yf_symbol = symbol.replace(".", "-") if "." in symbol else symbol
+        link = f"https://finance.yahoo.com/quote/{yf_symbol}"
+
+        price_str = f"${target_price:.4f}" if target_price else "market"
+        stop_str = f"${stop_loss_price:.4f}" if stop_loss_price else "N/A"
+        conf_str = f"{confidence * 100:.1f}%"
+        reasons = "\n".join(f"  • {r}" for r in rationale) if rationale else "  • N/A"
+
+        message = (
+            f"⚡ *Trade About to Execute*\n"
+            f"\n"
+            f"*Symbol:* [{symbol}]({link})\n"
+            f"*Action:* {action_emoji}\n"
+            f"*Quantity:* {quantity:.4f} shares\n"
+            f"*Target Price:* {price_str}\n"
+            f"*Stop Loss:* {stop_str}\n"
+            f"*Confidence:* {conf_str}\n"
+            f"\n"
+            f"*Reason to Buy:*\n{reasons}"
+        )
+
+        try:
+            kwargs = {
+                "chat_id": target_chat_id,
+                "text": message,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True,
+            }
+            if self.thread_id is not None:
+                kwargs["message_thread_id"] = self.thread_id
+            await self.bot.send_message(**kwargs)
+            logger.info(f"Pre-execution notification sent for {symbol} {action}")
+        except TelegramError as e:
+            logger.error(f"Failed to send pre-execution notification: {e}")
+
     async def send_scheduled_report(self, report_data: Dict[str, Any], chat_id: Optional[str] = None):
         if not self.enabled or not self.bot:
             return
