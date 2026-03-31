@@ -1,6 +1,10 @@
 import logging
 import os
+import sqlite3
+import json
 import asyncio
+import threading
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 
@@ -14,24 +18,98 @@ from finance_service.core.event_bus import Event, Events, get_event_bus
 
 logger = logging.getLogger(__name__)
 
-# ── API Keys (read from env; fall back to hardcoded values) ──────────────────
-_AV_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "2WFWVYZA0PE0AIWK")
-_FH_KEY = os.getenv("FINNHUB_API_KEY", "d75t6k9r01qm4b7s4jm0d75t6k9r01qm4b7s4jmg")
+# ── API Keys (env → hardcoded fallback) ──────────────────────────────────────
+_AV_KEY  = os.getenv("ALPHAVANTAGE_API_KEY", "2WFWVYZA0PE0AIWK")
+_FH_KEY  = os.getenv("FINNHUB_API_KEY", "d75t6k9r01qm4b7s4jm0d75t6k9r01qm4b7s4jmg")
 
-# Timeout for HTTP calls (seconds)
+# News cache TTL: fetch at most once per hour per symbol
+_NEWS_CACHE_TTL_MINUTES = 60
+
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 
+# ── Simple SQLite news cache ──────────────────────────────────────────────────
+
+class _NewsCache:
+    """
+    Lightweight SQLite cache for news payloads.
+    Stores the full serialised payload per symbol with a TTL.
+    Thread-safe; the same DB file as other storage is NOT used to keep
+    concerns separate (news_cache.sqlite lives in finance_service/storage/).
+    """
+
+    def __init__(self, db_path: str, ttl_minutes: int = _NEWS_CACHE_TTL_MINUTES):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.ttl_minutes = ttl_minutes
+        self._lock = threading.Lock()
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS news_cache (
+                    symbol      TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    cached_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.commit()
+
+    def get(self, symbol: str) -> Optional[Dict]:
+        """Return cached payload if still fresh, else None."""
+        cutoff = datetime.utcnow() - timedelta(minutes=self.ttl_minutes)
+        with self._lock:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                row = conn.execute(
+                    "SELECT payload_json, cached_at FROM news_cache WHERE symbol = ?",
+                    (symbol,)
+                ).fetchone()
+        if not row:
+            return None
+        cached_at = datetime.fromisoformat(row[1])
+        if cached_at < cutoff:
+            return None
+        age_min = int((datetime.utcnow() - cached_at).total_seconds() / 60)
+        logger.info(f"[NewsCache] HIT for {symbol} (age: {age_min} min)")
+        return json.loads(row[0])
+
+    def set(self, symbol: str, payload: Dict) -> None:
+        with self._lock:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute("""
+                    INSERT INTO news_cache (symbol, payload_json, cached_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET
+                        payload_json = excluded.payload_json,
+                        cached_at    = excluded.cached_at
+                """, (symbol, json.dumps(payload), datetime.utcnow().isoformat()))
+                conn.commit()
+        logger.info(f"[NewsCache] Stored {symbol} ({payload.get('news_count',0)} articles)")
+
+
+# ── NewsAgent ─────────────────────────────────────────────────────────────────
+
 class NewsAgent(Agent):
     """
-    News Agent - Fetches real news from Alpha Vantage (primary) with Finnhub
-    fallback, performs VADER sentiment analysis, and identifies catalysts.
+    News Agent — fetches real news via three free sources (priority order):
+      1. Alpha Vantage NEWS_SENTIMENT  (quota: 25 req/day on free tier)
+      2. Finnhub company-news          (free tier, generous rate limit)
+      3. Yahoo Finance via yfinance    (no key, no quota)
+
+    Results are cached per-symbol for 60 minutes to avoid exhausting API
+    quotas during bulk scans (50 symbols × multiple pipeline runs).
+    Sentiment is computed with VADER; catalysts are detected via keywords.
     """
 
     def __init__(self, config_engine: YAMLConfigEngine):
         self.config = config_engine
         self.event_bus = get_event_bus()
         self._vader = SentimentIntensityAnalyzer()
+        _cache_path = os.path.join(
+            os.path.dirname(__file__), "..", "storage", "news_cache.sqlite"
+        )
+        self._cache = _NewsCache(os.path.abspath(_cache_path))
         logger.info("NewsAgent initialized")
 
     @property
@@ -49,10 +127,25 @@ class NewsAgent(Agent):
             logger.info("NewsAgent run: No symbol provided.")
             return None
 
-        logger.info(f"NewsAgent: Fetching news for {symbol}")
+        # ── Cache check ──────────────────────────────────────────────────────
+        cached = self._cache.get(symbol)
+        if cached is not None:
+            report = AgentReport(
+                agent_id=self.agent_id,
+                status="success",
+                message=f"News (cached) for {symbol}: {cached.get('news_count',0)} articles",
+                payload=cached,
+            )
+            await self.event_bus.publish(Event(
+                event_type=Events.NEWS_FETCH_COMPLETE,
+                data=asdict(report),
+            ))
+            return report
+
+        logger.info(f"NewsAgent: Fetching fresh news for {symbol}")
 
         articles = await self._fetch_news(symbol)
-        sentiment_score, sentiment_label, article_sentiments = self._analyze_sentiment(articles)
+        sentiment_score, sentiment_label = self._analyze_sentiment(articles)
         catalysts = self._identify_catalysts(articles, sentiment_score)
 
         payload = {
@@ -61,7 +154,7 @@ class NewsAgent(Agent):
             "sentiment_score": sentiment_score,
             "sentiment_label": sentiment_label,
             "catalysts": catalysts,
-            # Keep legacy key for backward compatibility
+            # Legacy key consumed by StrategyAgent and Telegram notification
             "sentiment": {
                 symbol: {
                     "overall_sentiment": sentiment_score,
@@ -69,6 +162,9 @@ class NewsAgent(Agent):
                 }
             },
         }
+
+        # ── Store in cache ───────────────────────────────────────────────────
+        self._cache.set(symbol, payload)
 
         message = (
             f"News analysis complete for {symbol}: {len(articles)} articles, "
@@ -89,27 +185,35 @@ class NewsAgent(Agent):
         ))
         return report
 
-    # ─── Fetch (Alpha Vantage primary, Finnhub fallback) ──────────────────────
+    # ─── Fetch pipeline ───────────────────────────────────────────────────────
 
     async def _fetch_news(self, symbol: str) -> List[Dict[str, Any]]:
-        """Fetch recent news articles. Try Alpha Vantage first, then Finnhub."""
+        """Try sources in priority order; return first non-empty result."""
+        # 1. Alpha Vantage
         articles = await self._fetch_alphavantage(symbol)
         if articles:
-            logger.info(f"[NewsAgent] Alpha Vantage: {len(articles)} articles for {symbol}")
+            logger.info(f"[NewsAgent] AlphaVantage: {len(articles)} articles for {symbol}")
             return articles
 
-        logger.warning(f"[NewsAgent] Alpha Vantage returned 0 articles for {symbol}; trying Finnhub")
+        logger.debug(f"[NewsAgent] AV empty for {symbol}; trying Finnhub")
+
+        # 2. Finnhub
         articles = await self._fetch_finnhub(symbol)
-        logger.info(f"[NewsAgent] Finnhub: {len(articles)} articles for {symbol}")
+        if articles:
+            logger.info(f"[NewsAgent] Finnhub: {len(articles)} articles for {symbol}")
+            return articles
+
+        logger.debug(f"[NewsAgent] Finnhub empty for {symbol}; trying Yahoo Finance")
+
+        # 3. Yahoo Finance (no API key, no quota — always available)
+        articles = await self._fetch_yahoo(symbol)
+        if articles:
+            logger.info(f"[NewsAgent] Yahoo Finance: {len(articles)} articles for {symbol}")
         return articles
 
+    # ── Source 1: Alpha Vantage ───────────────────────────────────────────────
+
     async def _fetch_alphavantage(self, symbol: str) -> List[Dict[str, Any]]:
-        """
-        Alpha Vantage NEWS_SENTIMENT endpoint.
-        Returns up to 20 articles from the last 48 h.
-        Docs: https://www.alphavantage.co/documentation/#news-sentiment
-        """
-        # Strip exchange suffix for AV (e.g. 0966.HK → just skip; AV doesnt cover HK well)
         av_ticker = symbol.split(".")[0] if "." in symbol else symbol
         url = (
             "https://www.alphavantage.co/query"
@@ -126,7 +230,6 @@ class NewsAgent(Agent):
                         return []
                     data = await resp.json(content_type=None)
 
-            # Detect API rate limit or premium-only response
             if "Information" in data or "Note" in data:
                 msg = data.get("Information") or data.get("Note", "")
                 logger.warning(f"[AV] API limitation for {symbol}: {msg[:120]}")
@@ -139,15 +242,15 @@ class NewsAgent(Agent):
             cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
             articles = []
             for item in feed:
-                # AV timestamp format: "20260331T130000"
                 try:
-                    ts = datetime.strptime(item["time_published"], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+                    ts = datetime.strptime(
+                        item["time_published"], "%Y%m%dT%H%M%S"
+                    ).replace(tzinfo=timezone.utc)
                     if ts < cutoff:
                         continue
                 except Exception:
                     pass
 
-                # AV provides its own sentiment per ticker
                 av_score = None
                 for ts_obj in item.get("ticker_sentiment", []):
                     if ts_obj.get("ticker", "").upper() == av_ticker.upper():
@@ -168,20 +271,17 @@ class NewsAgent(Agent):
             return articles
 
         except asyncio.TimeoutError:
-            logger.warning(f"[AV] Timeout fetching news for {symbol}")
+            logger.warning(f"[AV] Timeout for {symbol}")
             return []
         except Exception as e:
-            logger.warning(f"[AV] Error fetching news for {symbol}: {e}")
+            logger.warning(f"[AV] Error for {symbol}: {e}")
             return []
 
+    # ── Source 2: Finnhub ─────────────────────────────────────────────────────
+
     async def _fetch_finnhub(self, symbol: str) -> List[Dict[str, Any]]:
-        """
-        Finnhub company-news endpoint.
-        Returns up to 20 articles from the last 3 days.
-        Docs: https://finnhub.io/docs/api/company-news
-        """
         fh_ticker = symbol.split(".")[0] if "." in symbol else symbol
-        date_to = datetime.utcnow().strftime("%Y-%m-%d")
+        date_to   = datetime.utcnow().strftime("%Y-%m-%d")
         date_from = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
         url = (
             "https://finnhub.io/api/v1/company-news"
@@ -201,68 +301,94 @@ class NewsAgent(Agent):
             if not isinstance(items, list):
                 return []
 
-            articles = []
-            for item in items[:20]:
-                articles.append({
+            return [
+                {
                     "headline": item.get("headline", ""),
                     "summary": item.get("summary", ""),
                     "source": item.get("source", ""),
                     "url": item.get("url", ""),
-                    "timestamp": datetime.utcfromtimestamp(item.get("datetime", 0)).isoformat(),
+                    "timestamp": datetime.utcfromtimestamp(
+                        item.get("datetime", 0)
+                    ).isoformat(),
                     "av_sentiment_score": None,
-                })
-            return articles
+                }
+                for item in items[:20]
+            ]
 
         except asyncio.TimeoutError:
-            logger.warning(f"[FH] Timeout fetching news for {symbol}")
+            logger.warning(f"[FH] Timeout for {symbol}")
             return []
         except Exception as e:
-            logger.warning(f"[FH] Error fetching news for {symbol}: {e}")
+            logger.warning(f"[FH] Error for {symbol}: {e}")
             return []
+
+    # ── Source 3: Yahoo Finance (yfinance, no key) ────────────────────────────
+
+    async def _fetch_yahoo(self, symbol: str) -> List[Dict[str, Any]]:
+        """
+        Uses yfinance Ticker.news — no API key, no daily quota.
+        Runs the blocking yfinance call in a thread pool to avoid blocking
+        the async event loop.
+        """
+        def _blocking_fetch():
+            try:
+                import yfinance as yf
+                ticker = yf.Ticker(symbol)
+                return ticker.news or []
+            except Exception as e:
+                logger.warning(f"[YF] Error for {symbol}: {e}")
+                return []
+
+        try:
+            loop = asyncio.get_event_loop()
+            raw_items = await loop.run_in_executor(None, _blocking_fetch)
+        except Exception as e:
+            logger.warning(f"[YF] Executor error for {symbol}: {e}")
+            return []
+
+        articles = []
+        for item in raw_items[:20]:
+            content = item.get("content", {})
+            headline = content.get("title") or item.get("title", "")
+            summary  = content.get("summary") or content.get("description", "")
+            source   = (content.get("provider") or {}).get("displayName", "") \
+                       if isinstance(content.get("provider"), dict) \
+                       else str(content.get("provider", ""))
+            pub_date = content.get("pubDate", "")
+            url_obj  = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
+            url      = url_obj.get("url", "") if isinstance(url_obj, dict) else str(url_obj)
+
+            if not headline:
+                continue
+            articles.append({
+                "headline": headline,
+                "summary": summary,
+                "source": source,
+                "url": url,
+                "timestamp": pub_date,
+                "av_sentiment_score": None,
+            })
+        return articles
 
     # ─── Sentiment ────────────────────────────────────────────────────────────
 
     def _analyze_sentiment(
         self, articles: List[Dict[str, Any]]
     ) -> tuple:
-        """
-        Run VADER on each headline+summary. If Alpha Vantage scores are present
-        for an article they are averaged in (50/50 weight) for extra accuracy.
-        Returns (aggregate_score, label, per_article_scores).
-        """
         if not articles:
-            return 0.0, "neutral", []
+            return 0.0, "neutral"
 
         scores = []
-        article_sentiments = []
         for art in articles:
             text = f"{art.get('headline', '')}. {art.get('summary', '')}".strip()
-            vader_score = self._vader.polarity_scores(text)["compound"]  # –1 to +1
-
+            vader_score = self._vader.polarity_scores(text)["compound"]
             av_score = art.get("av_sentiment_score")
-            if av_score is not None:
-                # AV uses 0-based scale: >0.15=bullish, <-0.15=bearish; already on ~same scale
-                merged = (vader_score + av_score) / 2.0
-            else:
-                merged = vader_score
-
+            merged = (vader_score + av_score) / 2.0 if av_score is not None else vader_score
             scores.append(merged)
-            article_sentiments.append({
-                "headline": art.get("headline", ""),
-                "score": round(merged, 4),
-            })
 
-        aggregate = sum(scores) / len(scores)
-        aggregate = max(-1.0, min(1.0, aggregate))
-
-        if aggregate >= 0.3:
-            label = "bullish"
-        elif aggregate <= -0.3:
-            label = "bearish"
-        else:
-            label = "neutral"
-
-        return round(aggregate, 4), label, article_sentiments
+        aggregate = max(-1.0, min(1.0, sum(scores) / len(scores)))
+        label = "bullish" if aggregate >= 0.3 else ("bearish" if aggregate <= -0.3 else "neutral")
+        return round(aggregate, 4), label
 
     # ─── Catalyst Detection ───────────────────────────────────────────────────
 
@@ -283,20 +409,13 @@ class NewsAgent(Agent):
     def _identify_catalysts(
         self, articles: List[Dict[str, Any]], sentiment_score: float
     ) -> List[str]:
-        """
-        Scan headlines and summaries for keyword patterns to identify catalysts.
-        Returns deduplicated list of catalyst names.
-        """
         found: set = set()
         for art in articles:
-            text = (
-                f"{art.get('headline', '')} {art.get('summary', '')}"
-            ).lower()
+            text = f"{art.get('headline', '')} {art.get('summary', '')}".lower()
             for catalyst_name, keywords in self._CATALYST_PATTERNS:
                 if any(kw in text for kw in keywords):
                     found.add(catalyst_name)
 
-        # Generic fallback based purely on sentiment strength
         if not found:
             if sentiment_score >= 0.5:
                 found.add("strong positive sentiment")
