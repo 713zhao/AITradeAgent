@@ -21,9 +21,11 @@ class TestTelegramAgentInitialization:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
+            
+            mock_app = MagicMock()
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
             
@@ -40,9 +42,11 @@ class TestTelegramAgentInitialization:
             "telegram_message_thread_id": "789",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
+            
+            mock_app = MagicMock()
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
             
@@ -57,9 +61,11 @@ class TestTelegramAgentInitialization:
             "telegram_message_thread_id": "999",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
+            
+            mock_app = MagicMock()
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
             
@@ -74,9 +80,11 @@ class TestTelegramAgentInitialization:
             "telegram_message_thread_id": "",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
+            
+            mock_app = MagicMock()
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
             
@@ -96,7 +104,7 @@ class TestTelegramAgentInitialization:
             
             # Should be disabled when bot token is missing
             assert agent.enabled is False
-            assert agent.updater is None
+            assert agent.application is None
     
     def test_agent_disabled_on_telegram_error(self):
         """Test agent is disabled when Telegram Bot initialization fails"""
@@ -105,11 +113,10 @@ class TestTelegramAgentInitialization:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
-            mock_bot.side_effect = TelegramError("Authentication failed")
+            MockApp.builder.return_value.token.return_value.build.side_effect = TelegramError("Authentication failed")
             
             agent = TelegramAgent(config)
             # Agent should still initialize but be marked as disabled
@@ -122,9 +129,11 @@ class TestTelegramAgentInitialization:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
+            
+            mock_app = MagicMock()
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
             
@@ -143,15 +152,15 @@ class TestTelegramAgentSendMessage:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             await agent.send_message("12345", "Test message")
             
@@ -170,15 +179,15 @@ class TestTelegramAgentSendMessage:
             "telegram_message_thread_id": "789",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             await agent.send_message("12345", "Test message to topic")
             
@@ -197,15 +206,15 @@ class TestTelegramAgentSendMessage:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             await agent.send_message("12345", "**Bold** message", parse_mode="Markdown")
             
@@ -220,16 +229,16 @@ class TestTelegramAgentSendMessage:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
             mock_bot_instance.send_message.side_effect = TelegramError("Chat not found")
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             # Should not raise exception
             await agent.send_message("99999", "Message to invalid chat")
@@ -265,15 +274,15 @@ class TestTelegramAgentScheduledReport:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             report_data = {
                 "portfolio_value": "$10,000",
@@ -298,15 +307,15 @@ class TestTelegramAgentScheduledReport:
             "telegram_message_thread_id": "789",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             report_data = {
                 "portfolio_value": "$10,000",
@@ -329,15 +338,15 @@ class TestTelegramAgentScheduledReport:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             report_data = {"test": "data"}
             
@@ -351,18 +360,19 @@ class TestTelegramAgentScheduledReport:
         """Test send_scheduled_report fails gracefully without chat_id"""
         config = {
             "telegram_bot_token": "test_token_123",
+            "telegram_chat_id": "12345",  # provided to allow init, overridden below
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
-            agent.chat_id = None  # Ensure no default chat_id
+            agent.chat_id = None  # Override after init for test
             
             report_data = {"test": "data"}
             
@@ -379,16 +389,16 @@ class TestTelegramAgentScheduledReport:
             "telegram_chat_id": "12345",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
             mock_bot_instance.send_message.side_effect = TelegramError("Message too long")
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             report_data = {"test": "data"}
             
@@ -429,15 +439,15 @@ class TestTelegramAgentIntegration:
             "telegram_message_thread_id": "789",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             agent = TelegramAgent(config)
-            agent.bot_instance = mock_bot_instance
             
             messages = [
                 "Trade executed: BUY 100 AAPL",
@@ -474,15 +484,15 @@ class TestTelegramE2ETradingFlow:
             "telegram_message_thread_id": "789",  # Topic for trade notifications
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             telegram_agent = TelegramAgent(config)
-            telegram_agent.bot_instance = mock_bot_instance
             
             # Simulate buy signal triggered - trade execution notification
             notification = """🟢 **TRADE EXECUTED - BUY SIGNAL**
@@ -543,15 +553,15 @@ class TestTelegramE2ETradingFlow:
             "telegram_message_thread_id": "789",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             telegram_agent = TelegramAgent(config)
-            telegram_agent.bot_instance = mock_bot_instance
             
             # Multiple buy signals on different stocks
             buy_signals = [
@@ -606,15 +616,15 @@ class TestTelegramE2ETradingFlow:
             "telegram_message_thread_id": "789",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             telegram_agent = TelegramAgent(config)
-            telegram_agent.bot_instance = mock_bot_instance
             
             # Risk check failure alert
             risk_alert = """⚠️ **RISK CHECK FAILED - MANUAL REVIEW REQUIRED**
@@ -660,15 +670,15 @@ class TestTelegramE2ETradingFlow:
             "telegram_message_thread_id": "789",
         }
         
-        with patch('finance_service.agents.telegram_agent.Bot') as mock_bot, \
-             patch('finance_service.agents.telegram_agent.Updater') as mock_updater, \
+        with patch('finance_service.agents.telegram_agent.Application') as MockApp, \
              patch('finance_service.agents.telegram_agent.get_event_bus') as mock_event_bus:
             
             mock_bot_instance = AsyncMock()
-            mock_bot.return_value = mock_bot_instance
+            mock_app = MagicMock()
+            mock_app.bot = mock_bot_instance
+            MockApp.builder.return_value.token.return_value.build.return_value = mock_app
             
             telegram_agent = TelegramAgent(config)
-            telegram_agent.bot_instance = mock_bot_instance
             
             # Daily summary
             daily_report = {
