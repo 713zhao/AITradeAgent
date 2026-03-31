@@ -143,27 +143,56 @@ class PortfolioAgent(Agent):
 
 
     async def update_prices_from_data_agent(self):
-        """Fetch latest prices for all positions using data_agent and update repository."""
+        """Fetch latest prices for all positions using data_agent with cache and 30-day lookback."""
         if not self.data_agent:
             return
-        import pandas as pd
-        for symbol in list(self.repository.positions.keys()):
+        
+        symbols = list(self.repository.positions.keys())
+        if not symbols:
+            return
+        
+        logger.info(f"Updating prices for {len(symbols)} positions (sequential, cache=yes, 30d lookback)")
+        
+        # 30-day lookback to ensure enough data rows while reducing payload
+        from datetime import datetime, timedelta
+        end_dt = datetime.now().date()
+        start_dt = end_dt - timedelta(days=30)
+        start_str = start_dt.strftime("%Y-%m-%d")
+        end_str = end_dt.strftime("%Y-%m-%d")
+        
+        updated_count = 0
+        for symbol in symbols:
             try:
-                quote_report = await self.data_agent.run(symbol=symbol, interval="1d", emit_events=False, use_cache=False)
-                if quote_report.status == "success" and "dataframe" in quote_report.payload:
-                    df_dict = quote_report.payload["dataframe"]
-                    df = pd.DataFrame.from_dict(df_dict)
-                    if not df.empty:
-                        latest_price = df.iloc[-1]['close']
-                        # Only update if price is valid (non-NaN, positive)
-                        if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
-                            self.repository.update_position(symbol, current_price=latest_price)
-                            logger.debug(f"Updated {symbol} current price to {latest_price}")
-                        else:
-                            logger.warning(f"Invalid price fetched for {symbol}: {latest_price}. Skipping update.")
+                report = await self.data_agent.run(
+                    symbol=symbol,
+                    interval="1d",
+                    emit_events=False,
+                    use_cache=True,
+                    start_date=start_str,
+                    end_date=end_str
+                )
+                if report.status == "success" and "dataframe" in report.payload:
+                    df_dict = report.payload["dataframe"]
+                    try:
+                        import pandas as pd
+                        df = pd.DataFrame.from_dict(df_dict)
+                        if not df.empty:
+                            latest_price = df.iloc[-1]['close']
+                            if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
+                                self.repository.update_position(symbol, current_price=latest_price)
+                                updated_count += 1
+                                logger.debug(f"Updated {symbol} current price to {latest_price}")
+                            else:
+                                logger.warning(f"Invalid price fetched for {symbol}: {latest_price}")
+                    except Exception as e:
+                        logger.warning(f"Failed to process price data for {symbol}: {e}")
+                else:
+                    logger.warning(f"Failed to fetch price for {symbol}: {report.message if report else 'no report'}")
             except Exception as e:
-                logger.warning(f"Failed to fetch price for {symbol}: {e}")
+                logger.warning(f"Error fetching {symbol}: {e}")
                 continue
+        
+        logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions")
 
     async def get_detailed_portfolio_state(self, chat_id: Optional[str] = None) -> AgentReport:
         """Retrieves detailed portfolio state and can publish it or return in a report."""

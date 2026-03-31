@@ -52,29 +52,24 @@ async def main():
         raise
 
 def main_entry():
-    """Entry point with auto-restart."""
+    """Entry point - runs service once; external supervisor handles restarts."""
     logger.info("🚀 AiTradeAgent Finance Service")
     logger.info("📊 Market data: yfinance")
     logger.info("💰 Mode: PAPER")
     logger.info("🔌 Port: 8801")
     logger.info("🌐 Server: Hypercorn (ASGI)")
-    logger.info("🔁 Auto-restart: enabled")
+    logger.info("🔁 Auto-restart: disabled (use systemd/supervisor)")
     
-    restart_delay = 5
-    while True:
-        try:
-            asyncio.run(main())
-        except KeyboardInterrupt:
-            logger.info("🛑 Service stopped by user")
-            sys.exit(0)
-        except SystemExit:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Service crashed: {type(e).__name__}: {e}. Restarting in {restart_delay}s...", exc_info=True)
-            time.sleep(restart_delay)
-        except BaseException as e:
-            logger.error(f"❌ Unhandled BaseException: {type(e).__name__}: {e}. Restarting in {restart_delay}s...", exc_info=True)
-            time.sleep(restart_delay)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("🛑 Service stopped by user")
+        sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception as e:
+        logger.exception(f"❌ Service crashed: {type(e).__name__}: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main_entry()
