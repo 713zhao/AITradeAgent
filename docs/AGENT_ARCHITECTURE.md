@@ -1,0 +1,897 @@
+# AITradeAgent - Full System Architecture
+
+**Version:** 3.0  
+**Last Updated:** 2026-03-30  
+**Source:** `finance_service/agents/` + `finance_service/app.py`
+
+---
+
+## System Overview
+
+AITradeAgent is an **autonomous multi-agent trading research system** built around an event-driven architecture. A central `MainOrchestratorAgent` wires together 13 specialized agents, each with a single responsibility. Agents communicate via an async **Event Bus** — no agent directly calls another; they publish and subscribe to named events.
+
+The system continuously scans markets, analyzes candidates, generates trade proposals, enforces risk rules, executes orders, monitors positions, and reports everything to Telegram.
+
+---
+
+## High-Level Architecture
+
+```
+                         ┌──────────────────────────────┐
+                         │   Telegram / User Interface  │
+                         │  /status  /portfolio  alerts │
+                         └──────────┬───────────────────┘
+                                    │
+                         ┌──────────▼───────────────────┐
+                         │    MainOrchestratorAgent      │
+                         │  (app.py - event coordinator) │
+                         │  Subscribes to all events;    │
+                         │  routes between agents        │
+                         └──────────┬───────────────────┘
+                                    │
+        ┌───────────────────────────┼───────────────────────────┐
+        │                           │                           │
+┌───────▼───────┐        ┌──────────▼────────┐      ┌──────────▼──────────┐
+│SchedulerAgent │        │ Trading Pipeline  │      │  Monitoring Loop    │
+│(clock/trigger)│        │ (main workflow)   │      │(continuous exit/    │
+└───────┬───────┘        └──────────┬────────┘      │ reanalysis checks) │
+        │                           │                └──────────┬──────────┘
+   Emits:                    See pipeline below              │
+   • MARKET_SCAN             (per symbol discovery)  Emits: EXIT_CHECK_TRIGGER
+   • DATA_REFRESH            & strategy analysis    (every 5 min)
+   • DAILY_REPORT                   │                       │
+   • SCHEDULE                       │          ┌────────────▼────────┐
+                                    │          │    ExitAgent         │
+                                    │          │  • Monitor exits     │
+                    ┌───────────────┼──────────┤  • Re-analyze held   │
+                    │               │          │    positions         │
+                    ▼               │          │  • Emit signals      │
+    ┌───────────────────────┐       │          └────────────┬────────┘
+    │ MarketScannerAgent     │       │                       │
+    │ Emits: MARKET_SCANNED  │       │         ┌─────────────┴─────────┐
+    └───────────┬────────────┘       │         │(if check fails)       │
+                │ (per symbol)       │         │                       │
+    ┌───────────▼────────────┐       │    ┌────▼──────────────────┐
+    │    DataAgent            │       │    │ POSITION_DEGRADED     │
+    │ Emits: DATA_FETCH_      │       │    │ (sent back through    │
+    │       COMPLETE          │       │    │  orchestrator for     │
+    └──────────┬──────────────┘       │    │  strategy recheck)    │
+                                      │    └───────────────────────┘
+              ┌──────────────┬────────┴─────────────┐
+              │ (parallel)   │ (parallel)           │
+    ┌─────────▼──────┐   ┌───▼──────────┐   ┌─────▼────────────────┐
+    │  NewsAgent      │   │AnalysisAgent │   │ [Parallel support   │
+    │ Emits: NEWS_    │   │ Emits:       │   │  agents]            │
+    │ FETCH_COMPLETE  │   │ANALYSIS_     │   │ HealthAgent         │
+    └────────┬────────┘   │COMPLETE      │   │ TelegramAgent       │
+             │            └───┬──────────┘   │ PortfolioAgent      │
+             │                │              │ LearningAgent       │
+             └────────┬───────┘              └─────────────────────┘
+                      │(both ready)
+         ┌────────────▼──────────────┐
+         │   StrategyAgent            │
+         │  Emits: TRADE_PROPOSAL_    │
+         │         GENERATED          │
+         └────────────┬───────────────┘
+                      │
+         ┌────────────▼──────────────┐
+         │     RiskAgent              │
+         │  Emits: RISK_CHECK_        │
+         │         COMPLETE           │
+         └────────────┬───────────────┘
+                      │
+         ┌────────────▼──────────────┐
+         │   ExecutionAgent           │
+         │  Emits: TRADE_EXECUTED     │
+         └────────────┬───────────────┘
+                      │
+         ┌────────────▼──────────────┐
+         │   PortfolioAgent           │
+         │   Updates holdings         │
+         └────────────────────────────┘
+```
+
+---
+
+## Agent Inventory
+
+| # | Agent | `agent_id` | File | Trigger |
+|---|-------|-----------|------|---------|
+| 1 | MainOrchestratorAgent | `main_orchestrator_agent` | `app.py` | Always running |
+| 2 | SchedulerAgent | `scheduler_agent` | `scheduler_agent.py` | Time-based loop |
+| 3 | MarketScannerAgent | `market_scanner_agent` | `market_scanner_agent.py` | `MARKET_SCAN_TRIGGER` |
+| 4 | DataAgent | `data_agent` | `data_agent.py` | Per-symbol after scan |
+| 5 | NewsAgent | `news_agent` | `news_agent.py` | Per-symbol after data |
+| 6 | AnalysisAgent | `analysis_agent` | `analysis_agent.py` | Per-symbol after data |
+| 7 | StrategyAgent | `strategy_agent` | `strategy_agent.py` | When news + analysis both ready |
+| 8 | RiskAgent | `risk_agent` | `risk_agent.py` | `TRADE_PROPOSAL_GENERATED` |
+| 9 | ExecutionAgent | `execution_agent` | `execution_agent.py` | `RISK_CHECK_COMPLETE` |
+| 10 | PortfolioAgent | `portfolio_agent` | `portfolio_agent.py` | `TRADE_EXECUTED` |
+| 11 | LearningAgent | `learning_agent` | `learning_agent.py` | `TRADE_EXECUTED` |
+| 12 | HealthAgent | `health_agent` | `health_agent.py` | `TRADE_EXECUTED`, `SCHEDULE`, `DAILY_REPORT_TRIGGER` |
+| 13 | ExitAgent | `exit_agent` | `exit_agent.py` | ✅ Every 5 min via `EXIT_CHECK_TRIGGER` |
+| — | TelegramAgent | `telegram_agent` | `telegram_agent.py` | User commands + broadcast messages |
+
+---
+
+## Event Bus — All Events
+
+```
+# Scheduling / Triggers
+MARKET_SCAN_TRIGGER       ← SchedulerAgent: start Tier 1 discovery scan (daily)
+PRICE_MONITOR_TRIGGER     ← SchedulerAgent: start Tier 2 price refresh (every 15 min)
+DATA_REFRESH_TRIGGER      ← SchedulerAgent: refresh prices for watched symbols
+DAILY_REPORT_TRIGGER      ← SchedulerAgent: send daily summary to Telegram
+HEALTH_CHECK_TRIGGER      ← SchedulerAgent: run health check
+SCHEDULE                  ← SchedulerAgent: generic periodic tick
+
+# Scan
+MARKET_SCANNED            ← MarketScannerAgent: Tier 1 discovery complete (rated symbols)
+PRICE_REFRESH_COMPLETE    ← MarketScannerAgent: Tier 2 price data refreshed
+
+# Data
+DATA_FETCH_STARTED        ← DataAgent: fetch in progress
+DATA_FETCH_COMPLETE       ← DataAgent: OHLCV + fundamentals ready
+DATA_READY                ← DataAgent: alias (may be removed)
+
+# News
+NEWS_FETCH_COMPLETE       ← NewsAgent: sentiment data ready
+
+# Analysis
+ANALYSIS_STARTED          ← AnalysisAgent: computing indicators
+ANALYSIS_COMPLETE         ← AnalysisAgent: RSI, MACD, MAs, ATR ready
+ANALYSIS_FAILED           ← AnalysisAgent: error
+
+# Strategy
+TRADE_PROPOSAL_GENERATED  ← StrategyAgent: BUY/SELL proposals ready
+
+# Risk
+RISK_CHECK_COMPLETE       ← RiskAgent: validated, may proceed to execution
+RISK_CHECK_FAILED         ← RiskAgent: check failed
+RISK_ALERT                ← RiskAgent: limit breach warning
+APPROVAL_REQUIRED         ← RiskAgent: requires human approval via Telegram
+TRADE_APPROVED            ← Human approved
+APPROVAL_REJECTED         ← Human rejected
+APPROVAL_TIMEOUT          ← Approval window expired
+
+# Execution
+EXECUTION_STARTED         ← ExecutionAgent: order in flight
+TRADE_EXECUTED            ← ExecutionAgent: order filled
+EXECUTION_FAILED          ← ExecutionAgent: order failed
+
+# Portfolio
+PORTFOLIO_UPDATED         ← PortfolioAgent: holdings updated
+TRADE_OPENED              ← PortfolioAgent: new position opened
+TRADE_CLOSED              ← PortfolioAgent: position closed
+TRADE_STOPPED             ← PortfolioAgent: stop-loss triggered
+
+# Learning
+LEARNING_COMPLETE         ← LearningAgent: performance analysis done
+LEARNING_FEEDBACK         ← LearningAgent: strategy feedback
+
+# Query events (from Telegram commands)
+GET_SYSTEM_STATUS         ← /status command
+GET_PORTFOLIO_STATE       ← /portfolio command
+GET_HEALTH_STATUS         ← health request
+
+# System
+CONFIG_RELOADED           ← Config changed at runtime
+BACKTEST_STARTED          ← Backtest mode initiated
+BACKTEST_COMPLETE         ← Backtest finished
+```
+
+---
+
+## Agent Descriptions
+
+---
+
+### 1. MainOrchestratorAgent
+
+**File:** `finance_service/app.py`  
+**Goal:** Orchestrate the end-to-end trading workflow, from market scanning to trade execution and learning.
+
+The central coordinator. It does not implement business logic — it subscribes to events and routes work to the correct next agent in the pipeline.
+
+**Key behaviors:**
+- After `DATA_FETCH_COMPLETE`, calls `NewsAgent` and `AnalysisAgent` **in parallel**
+- Buffers each result; only triggers `StrategyAgent` once **both** news and analysis are ready for the same symbol (`_try_trigger_strategy_agent`)
+- Handles the `TRADE_EXECUTED` fan-out: updates portfolio, triggers learning, and sends Telegram notification all in parallel
+
+**Event subscriptions:**
+
+| Event | Action |
+|-------|--------|
+| `MARKET_SCAN_TRIGGER` | Runs `MarketScannerAgent.run()` (Tier 1 discovery) |
+| `MARKET_SCANNED` | Starts per-symbol full pipeline (data→news→analysis→strategy→risk→execution) |
+| `PRICE_MONITOR_TRIGGER` | Runs `MarketScannerAgent.refresh_watchlist_prices()` (Tier 2) |
+| `EXIT_CHECK_TRIGGER` | Runs `ExitAgent.run()` on held positions (Tier 3) |
+| `DATA_FETCH_COMPLETE` | Runs `NewsAgent` + `AnalysisAgent` in parallel |
+| `NEWS_FETCH_COMPLETE` | Buffers; triggers `StrategyAgent` when both ready |
+| `ANALYSIS_COMPLETE` | Buffers; triggers `StrategyAgent` when both ready |
+| `TRADE_PROPOSAL_GENERATED` | Runs `RiskAgent` |
+| `RISK_CHECK_COMPLETE` | Runs `ExecutionAgent` (if `auto_execute` enabled) |
+| `APPROVAL_REQUIRED` | Forwards to Telegram for human review |
+| `TRADE_EXECUTED` | Runs `PortfolioAgent` + `LearningAgent` + `HealthAgent` |
+| `DAILY_REPORT_TRIGGER` | Pulls portfolio metrics; sends Telegram report |
+| `GET_SYSTEM_STATUS` | Responds to `/status` Telegram command |
+
+---
+
+### 2. SchedulerAgent
+
+**File:** `finance_service/agents/scheduler_agent.py`  
+**Goal:** Automate the execution of periodic tasks, such as market scanning, data fetching, and report generation.
+
+**Runs:** Background loop — active from system startup, never stops.
+
+**Emits (on schedule):**
+
+| Event | Frequency | Purpose |
+|-------|-----------|---------|
+| `MARKET_SCAN_TRIGGER` | Daily (24h) | Tier 1: Full discovery scan |
+| `PRICE_MONITOR_TRIGGER` | Every 15 min | Tier 2: Lightweight price refresh for watchlist |
+| `EXIT_CHECK_TRIGGER` | Every 5 min | Tier 3: Position exit monitoring |
+| `DATA_REFRESH_TRIGGER` | Every 30 min | General data warming |
+| `DAILY_REPORT_TRIGGER` | Daily (EOD) | Send daily Telegram summary |
+| `SCHEDULE` | Every 4 hours | Health checks |
+
+**Dependencies:** None — fires first, nothing upstream.
+
+---
+
+### 3. MarketScannerAgent (3-Tier Architecture)
+
+**File:** `finance_service/agents/market_scanner_agent.py`  
+**Goal:** Discover promising stocks and maintain real-time watchlist prices via 3-tier scanning.
+
+**Tier 1 — Discovery (daily):** `MARKET_SCAN_TRIGGER` → `run()`
+- Scans 100 symbols across 5 themes (20 per theme: AI, Semiconductor, Cloud, MegaCap, Hong Kong)
+- Filters by liquidity, ranks by 5-factor composite score
+- Selects top 10 per theme → builds watchlist with ratings
+- Publishes `MARKET_SCANNED` with `rated_symbols` payload
+
+**Tier 2 — Price Monitor (every 15 min):** `PRICE_MONITOR_TRIGGER` → `refresh_watchlist_prices()`
+- Lightweight quote fetch for watchlist + held positions
+- Publishes `PRICE_REFRESH_COMPLETE`
+
+**Output Event:** `MARKET_SCANNED` (Tier 1), `PRICE_REFRESH_COMPLETE` (Tier 2)
+```python
+{
+    "agent_id": "market_scanner_agent",
+    "status": "opportunity",
+    "message": "Tier 1 discovery: 50 symbols across 5 themes",
+    "payload": {
+        "symbols": ["NVDA", "TSM", "MSFT", ...],
+        "rated_symbols": [
+            {"symbol": "NVDA", "theme": "ai_ml", "rating": 0.85, "rank": 1},
+            ...
+        ],
+        "themes_scanned": ["ai_ml", "semiconductor", "cloud_saas", "mega_cap", "hong_kong"],
+        "top_n_per_theme": 10,
+        "discovery_timestamp": "2026-03-30T09:00:00"
+    }
+}
+```
+
+See [MARKET_SCANNER_AGENT.md](MARKET_SCANNER_AGENT.md) for full specification.
+
+---
+
+### 4. DataAgent
+
+**File:** `finance_service/agents/data_agent.py`  
+**Goal:** Maintain reliable and up-to-date market data, including OHLCV and fundamental data.
+
+**Trigger:** Called per-symbol by orchestrator after `MARKET_SCANNED`.  
+Also triggered by `DATA_REFRESH_TRIGGER` for hourly refreshes.
+
+**Inputs:**
+- `symbol` — ticker (e.g., `NVDA`, `700.HK`)
+- `interval` — `1d`, `1h`, etc.
+- `start_date` / `end_date` — defaults to 365-day lookback (ensures SMA200 has enough data)
+- `use_cache` — avoids redundant API calls
+- `emit_events` — controls event publishing (set to `False` for simple quote lookups)
+
+**Processing:**
+- Fetches OHLCV data from configured provider (OpenBB / Yahoo Finance / IBKR)
+- Normalizes data into consistent column format
+- Fetches fundamental data (P/E, market cap, etc.)
+- Caches results with configurable TTL
+
+**Output Event:** `DATA_FETCH_COMPLETE`
+```python
+{
+    "agent_id": "data_agent",
+    "status": "success",
+    "payload": {
+        "symbol": "NVDA",
+        "dataframe": { ... },        # OHLCV as dict of records
+        "fundamentals": { ... },     # P/E, market cap, sector, etc.
+        "interval": "1d",
+        "rows": 252
+    }
+}
+```
+
+---
+
+### 5. NewsAgent
+
+**File:** `finance_service/agents/news_agent.py`  
+**Goal:** Monitor news and sentiment for specified symbols to identify catalysts.
+
+**Trigger:** Called per-symbol by orchestrator after `DATA_FETCH_COMPLETE` (in parallel with `AnalysisAgent`).
+
+**Inputs:**
+- `symbol` — ticker to fetch news for
+
+**Processing:**
+- Fetches recent news articles for the symbol
+- Runs sentiment analysis (bullish / bearish / neutral)
+- Identifies key catalysts (earnings beats, analyst upgrades, product launches, etc.)
+
+**Output Event:** `NEWS_FETCH_COMPLETE`
+```python
+{
+    "agent_id": "news_agent",
+    "status": "success",
+    "payload": {
+        "symbol": "NVDA",
+        "sentiment": "bullish",
+        "sentiment_score": 0.72,
+        "articles": [ ... ],
+        "catalysts": ["analyst upgrade", "earnings beat"]
+    }
+}
+```
+
+---
+
+### 6. AnalysisAgent
+
+**File:** `finance_service/agents/analysis_agent.py`  
+**Goal:** Transform raw market data into actionable technical analysis signals.
+
+**Trigger:** Called per-symbol by orchestrator after `DATA_FETCH_COMPLETE` (in parallel with `NewsAgent`).
+
+**Inputs:**
+- `data_payload` — full payload from `DataAgent` (OHLCV dataframe + fundamentals)
+- `symbol` — ticker
+
+**Processing:**
+Computes technical indicators from OHLCV data:
+
+| Indicator | Description |
+|-----------|-------------|
+| RSI | Relative Strength Index (default period 14) |
+| MACD | Signal line + histogram |
+| SMA 20 / 50 / 200 | Simple Moving Averages |
+| ATR | Average True Range (volatility) |
+| Bollinger Bands | Upper / middle / lower bands |
+| Trend | Directional signal (bullish / bearish / neutral) |
+
+**Output Event:** `ANALYSIS_COMPLETE`
+```python
+{
+    "agent_id": "analysis_agent",
+    "status": "success",
+    "payload": {
+        "indicators_snapshot": {
+            "symbol": "NVDA",
+            "rsi": 32.4,
+            "macd": 1.24,
+            "macd_signal": 0.87,
+            "sma_20": 135.20,
+            "sma_50": 152.10,
+            "sma_200": 140.30,
+            "atr": 4.82,
+            "bb_upper": 148.20,
+            "bb_lower": 122.40,
+            "trend": "bullish"
+        }
+    }
+}
+```
+
+---
+
+### 7. StrategyAgent
+
+**File:** `finance_service/agents/strategy_agent.py`  
+**Goal:** Generate actionable trade proposals by analyzing market indicators and news sentiment.
+
+**Trigger:** Called by orchestrator once **both** `NEWS_FETCH_COMPLETE` and `ANALYSIS_COMPLETE` are buffered for the same symbol.
+
+**Inputs:**
+- `indicators_report` — `AgentReport` from `AnalysisAgent`
+- `news_report` — `AgentReport` from `NewsAgent`
+
+**Processing:**
+- Evaluates rule-based strategy (`Rule`/`RuleStrategy`) against indicator values
+- Combines technical signals with news sentiment score
+- Queries `PortfolioAgent` to check if symbol is already held (avoids duplicate buys)
+- Calculates confidence score, entry price, stop-loss, and take-profit targets
+- Generates `BUY` / `SELL` / `HOLD` proposals
+
+**Output Event:** `TRADE_PROPOSAL_GENERATED`
+```python
+{
+    "agent_id": "strategy_agent",
+    "status": "success",
+    "payload": {
+        "proposals": [
+            {
+                "symbol": "NVDA",
+                "action": "BUY",
+                "confidence": 0.86,
+                "entry_price": 128.50,
+                "stop_loss": 122.07,
+                "take_profit": 138.78,
+                "reason": "RSI oversold (32) + bullish news sentiment (0.72)"
+            }
+        ]
+    }
+}
+```
+
+---
+
+### 8. RiskAgent
+
+**File:** `finance_service/agents/risk_agent.py`  
+**Goal:** Enforce risk management policies and facilitate trade approval workflows.
+
+**Trigger:** `TRADE_PROPOSAL_GENERATED` event.
+
+**Inputs:**
+- `trade_proposal_report` — `AgentReport` from `StrategyAgent`
+
+**Processing:**
+Runs configurable risk checks against limits from `finance.yaml`:
+
+| Check | Description |
+|-------|-------------|
+| Position size | Max allocation per symbol (e.g., 10%) |
+| Portfolio exposure | Max total open positions (e.g., 80%) |
+| Drawdown | Halt if portfolio drawdown exceeds threshold |
+| Duplicate position | Reject if symbol already held |
+| Sector concentration | Limit over-allocation to one sector |
+
+**Output Events:**
+- `RISK_CHECK_COMPLETE` — passes; orchestrator proceeds to execution if `auto_execute` is enabled
+- `APPROVAL_REQUIRED` — requires human Telegram approval before execution
+- `RISK_ALERT` — limit breach warning
+
+```python
+{
+    "agent_id": "risk_agent",
+    "status": "success",
+    "payload": {
+        "all_passed": True,
+        "any_approval_required": False,
+        "results": [
+            {
+                "symbol": "NVDA",
+                "approved": True,
+                "max_shares": 18,
+                "checks_passed": ["position_size", "exposure", "drawdown"]
+            }
+        ]
+    }
+}
+```
+
+---
+
+### 9. ExecutionAgent
+
+**File:** `finance_service/agents/execution_agent.py`  
+**Goal:** Execute approved trade proposals efficiently and optimally in the market.
+
+**Trigger:** `RISK_CHECK_COMPLETE` (when `auto_execute = true`), or after human Telegram approval.
+
+**Inputs:**
+- `approval_report` — `AgentReport` from `RiskAgent` with approved proposals
+
+**Processing:**
+- Submits orders to configured broker (`paper_broker`, `alpaca`, or `ibkr`)
+- Handles order routing and size optimization
+- Captures fill price, quantity, and order ID
+
+**Output Event:** `TRADE_EXECUTED`
+```python
+{
+    "agent_id": "execution_agent",
+    "status": "success",
+    "payload": {
+        "execution_result": {
+            "symbol": "NVDA",
+            "action": "BUY",
+            "quantity": 18,
+            "filled_price": 128.50,
+            "order_id": "ORD-001",
+            "status": "filled"
+        }
+    }
+}
+```
+
+---
+
+### 10. PortfolioAgent
+
+**File:** `finance_service/agents/portfolio_agent.py`  
+**Goal:** Maintain an accurate record of portfolio holdings, execute trades, and provide real-time portfolio metrics.
+
+**Trigger:** `TRADE_EXECUTED` event. Also responds to `GET_PORTFOLIO_STATE` and `ANALYSIS_COMPLETE`.
+
+**Inputs:**
+- `event_type` — `TRADE_EXECUTED`, `GET_PORTFOLIO_STATE`, `ANALYSIS_COMPLETE`
+- `payload` — trade details (symbol, action, quantity, price)
+
+**Processing:**
+- Opens / closes / updates positions
+- Tracks cost basis and unrealized P&L per position
+- Calculates total equity, return %, and daily P&L
+- Serves portfolio snapshots on request
+
+**Output Event:** `PORTFOLIO_UPDATED`
+```python
+{
+    "agent_id": "portfolio_agent",
+    "status": "success",
+    "payload": {
+        "overview": {
+            "total_equity": 101540.00,
+            "cash": 23000.00,
+            "position_count": 6,
+            "total_pnl": 1540.00,
+            "total_return_pct": 1.54
+        },
+        "positions": [
+            {
+                "symbol": "NVDA",
+                "quantity": 18,
+                "entry_price": 128.50,
+                "current_price": 135.20,
+                "unrealized_pnl": 120.60,
+                "stop_loss_price": 122.07,
+                "take_profit_price": 138.78
+            }
+        ]
+    }
+}
+```
+
+---
+
+### 11. LearningAgent
+
+**File:** `finance_service/agents/learning_agent.py`  
+**Goal:** Monitor and analyze trade outcomes and overall portfolio performance to identify learning opportunities.
+
+**Trigger:** `TRADE_EXECUTED` event (runs after every trade).
+
+**Inputs:**
+- `execution_report` — `AgentReport` from `ExecutionAgent`
+
+**Processing:**
+- Logs trade outcome (win/loss, P&L, holding period)
+- Calculates rolling performance metrics (Sharpe, win rate, average R)
+- Detects patterns between winning and losing trades
+- Generates strategy improvement recommendations and flags parameter adjustments
+
+**Output Event:** `LEARNING_COMPLETE`
+```python
+{
+    "agent_id": "learning_agent",
+    "status": "success",
+    "payload": {
+        "win_rate": 0.62,
+        "avg_return_pct": 3.4,
+        "total_trades": 47,
+        "sharpe_ratio": 1.28,
+        "recommendation": "Increase stop-loss buffer for momentum symbols"
+    }
+}
+```
+
+---
+
+### 12. HealthAgent
+
+**File:** `finance_service/agents/health_agent.py`  
+**Goal:** Monitor portfolio performance and system health, raise alerts on anomalies.
+
+**Trigger:** `TRADE_EXECUTED`, `SCHEDULE`, `DAILY_REPORT_TRIGGER`, `GET_SYSTEM_STATUS`.
+
+**Processing:**
+- Computes live portfolio health metrics
+- Checks for anomalies (unusual drawdown, stale data, failed agents)
+- Sends trade confirmation messages to Telegram on `TRADE_EXECUTED`
+- Generates scheduled health summaries
+
+**Telegram message on trade execution:**
+```
+Trade Executed ✅
+
+Symbol: NVDA
+Action: BUY
+Shares: 18
+Price: $128.50
+
+Reason:
+• RSI oversold (32)
+• Bullish MACD crossover
+• Confidence: 0.86
+
+Portfolio equity: $101,540
+```
+
+---
+
+### 13. ExitAgent
+
+**File:** `finance_service/agents/exit_agent.py`  
+**Goal:** Monitor open positions for exit conditions (stops/profits) and strategic degradation.
+
+**Status:** ✅ Fully integrated — triggered every 5 minutes via `EXIT_CHECK_TRIGGER` from SchedulerAgent.
+
+**Inputs:**
+- `positions` — list of open positions from `PortfolioAgent`
+- `perform_strategy_check` — if `True`, runs strategic re-analysis (default when called from orchestrator)
+
+**Processing (Dual-Mode):**
+
+**Mode 1 — Reactive Exits** (`_check_reactive_exits`):
+1. Fetches current price via `DataAgent`
+2. Compares against `stop_loss_price` and `take_profit_price`
+3. If triggered: logs exit and optionally executes sell via `ExecutionAgent`
+
+**Mode 2 — Strategic Re-Analysis** (`_check_strategic_degradation`):
+1. Fetches fresh OHLCV data via `DataAgent`
+2. Runs `AnalysisAgent` to compute current indicators
+3. Checks for degradation: RSI > 70 (overbought) or trend == "bearish"
+4. Emits `POSITION_DEGRADED` event if thesis no longer holds
+
+**Exit/Degradation conditions:**
+
+| Condition | Trigger | Action |
+|-----------|---------|--------|
+| Stop-loss | `current_price ≤ stop_loss_price` | Sell immediately |
+| Take-profit | `current_price ≥ take_profit_price` | Sell to lock gains |
+| RSI Overbought | `RSI > 70` | Flag as degraded, recommend review |
+| Bearish Trend | `trend == "bearish"` | Flag as degraded, recommend review |
+
+**Integration:** Orchestrator `handle_exit_check_trigger()` → retrieves positions from `PortfolioAgent` → calls `ExitAgent.run(positions, perform_strategy_check=True)` → sends Telegram alerts for any exits or degradations.
+
+---
+
+### 14. TelegramAgent
+
+**File:** `finance_service/agents/telegram_agent.py`  
+**Goal:** Provide a Telegram interface for interacting with the trading system and delivering scheduled reports.
+
+**Runs:** Always active — listens for user commands and receives broadcast messages from all other agents.
+
+**User commands:**
+
+| Command | Action |
+|---------|--------|
+| `/start` | Welcome message, confirm bot is connected |
+| `/status` | Publishes `GET_SYSTEM_STATUS` → orchestrator replies with all agent statuses |
+| `/portfolio` | Publishes `GET_PORTFOLIO_STATE` → orchestrator replies with holdings + equity |
+
+**Outbound messages (sent automatically):**
+- Market scan summaries (after `MARKET_SCANNED`)
+- Trade confirmations (via `HealthAgent` on `TRADE_EXECUTED`)
+- Daily P&L report (via `DAILY_REPORT_TRIGGER`)
+- Approval requests (when `APPROVAL_REQUIRED`)
+- System error alerts
+
+---
+
+## Full Event-Driven Workflow (Step-by-Step)
+
+```
+Step 1:  SchedulerAgent
+         └─> Emits: MARKET_SCAN_TRIGGER  (daily at market open)
+
+Step 2:  Orchestrator handles MARKET_SCAN_TRIGGER
+         └─> Checks: is US or HK market open?
+         └─> Calls: MarketScannerAgent.run()
+         └─> MarketScannerAgent emits: MARKET_SCANNED
+             → payload: {symbols: ["NVDA", "PLTR", "AMD", "700.HK", ...]}
+
+Step 3:  Orchestrator handles MARKET_SCANNED
+         └─> For each symbol (if market is open):
+             └─> Calls: DataAgent.run(symbol, 365-day lookback)
+             └─> DataAgent emits: DATA_FETCH_COMPLETE
+                 → payload: {symbol, dataframe, fundamentals}
+
+Step 4:  Orchestrator handles DATA_FETCH_COMPLETE
+         └─> In PARALLEL:
+             ├─> Calls: NewsAgent.run(symbol)
+             │   └─> NewsAgent emits: NEWS_FETCH_COMPLETE
+             │       → payload: {sentiment, sentiment_score, catalysts}
+             └─> Calls: AnalysisAgent.run(data_payload, symbol)
+                 └─> AnalysisAgent emits: ANALYSIS_COMPLETE
+                     → payload: {indicators_snapshot: {rsi, macd, sma_20/50/200, ...}}
+
+Step 5:  Orchestrator buffers reports per symbol
+         └─> When BOTH NEWS_FETCH_COMPLETE and ANALYSIS_COMPLETE
+             are available for the same symbol:
+             └─> Calls: StrategyAgent.run(indicators_report, news_report)
+             └─> StrategyAgent emits: TRADE_PROPOSAL_GENERATED
+                 → payload: {proposals: [{symbol, action, confidence, target, stop}]}
+
+Step 6:  Orchestrator handles TRADE_PROPOSAL_GENERATED
+         └─> Calls: RiskAgent.run(trade_proposal_report)
+         └─> RiskAgent emits: RISK_CHECK_COMPLETE  or  APPROVAL_REQUIRED
+
+Step 7a: [auto_execute = true + RISK_CHECK_COMPLETE]
+         └─> Calls: ExecutionAgent.run(approval_report)
+         └─> ExecutionAgent emits: TRADE_EXECUTED
+             → payload: {symbol, action, quantity, filled_price, order_id}
+
+Step 7b: [APPROVAL_REQUIRED]
+         └─> TelegramAgent sends approval request to user
+         └─> User sends approval → TRADE_APPROVED → same as Step 7a
+
+Step 8:  Orchestrator handles TRADE_EXECUTED
+         └─> In PARALLEL:
+             ├─> Calls: PortfolioAgent.run(TRADE_EXECUTED, execution_result)
+             │   └─> Updates holdings, equity, P&L
+             ├─> Calls: LearningAgent.run(execution_report)
+             │   └─> Logs outcome, updates win rate, recommends adjustments
+             └─> Calls: HealthAgent.run(TRADE_EXECUTED, execution_result)
+                 └─> Sends trade confirmation message to Telegram
+
+Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
+         └─> Orchestrator calls PortfolioAgent for metrics
+         └─> TelegramAgent sends daily P&L summary report
+```
+
+---
+
+## Scheduling Summary
+
+| Agent | Frequency | Trigger |
+|-------|-----------|---------|
+| SchedulerAgent | Continuous background loop | Self |
+| MarketScannerAgent (Tier 1) | Daily | `MARKET_SCAN_TRIGGER` (discovery) |
+| MarketScannerAgent (Tier 2) | Every 15 min | `PRICE_MONITOR_TRIGGER` (price refresh) |
+| DataAgent | Per-symbol after each scan | `MARKET_SCANNED` / `DATA_REFRESH_TRIGGER` |
+| NewsAgent | Per-symbol after data fetch | `DATA_FETCH_COMPLETE` |
+| AnalysisAgent | Per-symbol after data fetch | `DATA_FETCH_COMPLETE` |
+| StrategyAgent | Per-symbol when news + analysis both ready | Internal buffer |
+| RiskAgent | Per proposal | `TRADE_PROPOSAL_GENERATED` |
+| ExecutionAgent | Per approved trade | `RISK_CHECK_COMPLETE` |
+| PortfolioAgent | Per trade | `TRADE_EXECUTED` |
+| LearningAgent | Per trade | `TRADE_EXECUTED` |
+| HealthAgent | Per trade + daily schedule | `TRADE_EXECUTED` / `SCHEDULE` |
+| ExitAgent | ✅ Every 5 minutes | `EXIT_CHECK_TRIGGER` (reactive + strategic) |
+| TelegramAgent | Always on | User commands + incoming messages |
+
+---
+
+## Configuration Reference
+
+**`finance.yaml` — key sections:**
+
+```yaml
+finance:
+  risk:
+    max_position_pct: 0.10       # Max 10% of portfolio per symbol
+    max_total_exposure_pct: 0.80 # Max 80% in open positions
+    max_drawdown_pct: 0.15       # Halt if portfolio drops 15%
+    stop_loss_pct: 0.05          # Stop-loss 5% below entry
+    take_profit_pct: 0.08        # Take-profit 8% above entry
+
+  strategy:
+    auto_execute:
+      enabled: false             # false = require Telegram approval
+    confidence_threshold: 0.70   # Minimum confidence to generate proposal
+
+  execution:
+    broker: paper                # paper | alpaca | ibkr
+
+  scanner:
+    discovery_top_n_per_theme: 10
+    price_monitor_top_n: 50
+    price_monitor_interval_minutes: 15
+    discovery_interval: daily
+```
+
+---
+
+---
+
+## REST API Endpoints
+
+The Finance Service exposes the following HTTP endpoints on `http://127.0.0.1:8801`:
+
+| Endpoint | Method | Purpose | Response |
+|----------|--------|---------|----------|
+| `/health` | GET | Service liveness probe | `{"status": "ok"}` |
+| `/portfolio` | GET | Get comprehensive portfolio state (detailed) | Full portfolio snapshot with positions, trades, equity metrics |
+| `/portfolio/state` | GET | Get portfolio state (alias endpoint) | Same as `/portfolio` (fixes dashboard 404 errors) |
+| `/trigger` | GET | Manually trigger system events | `{"status": "queued", "trigger": "..."}` |
+
+### `/health` Example
+```bash
+curl http://127.0.0.1:8801/health
+→ {"status":"ok"}
+```
+
+### `/portfolio/state` Example
+```bash
+curl http://127.0.0.1:8801/portfolio/state
+→ {
+    "overview": {
+        "initial_cash": 100000,
+        "current_cash": 63883.86,
+        "total_equity": 102954.04,
+        "position_count": 5,
+        "trade_count": 22,
+        "total_pnl": 2954.04,
+        "total_return_pct": 2.954
+    },
+    "positions": [
+        {
+            "symbol": "NVDA",
+            "quantity": 18,
+            "avg_cost": 128.50,
+            "current_price": 135.20,
+            "market_value": 2433.60,
+            "unrealized_pnl": 120.60,
+            "unrealized_pnl_pct": 5.21,
+            "opened_at": "2026-03-30T15:56:05.712187"
+        }
+    ],
+    "trades": [...],
+    "equity_metrics": {
+        "realized_pnl": 0.0,
+        "unrealized_pnl": 2954.04,
+        "drawdown_pct": 0.0,
+        "win_rate": 0.0
+    },
+    "last_updated": "2026-03-30T15:56:24.365690"
+}
+```
+
+### `/trigger` Example
+```bash
+# Manually trigger market scan
+curl "http://127.0.0.1:8801/trigger?trigger_type=market-scan"
+→ {"status": "queued", "trigger": "market_scan"}
+```
+
+---
+
+## Proposed Enhancements
+
+See [NEXT_STEPS.md](NEXT_STEPS.md) for the full roadmap. Top items:
+
+| Priority | Enhancement | Benefit |
+|----------|-------------|---------|
+| ~~High~~ | ~~Wire `ExitAgent` into `SchedulerAgent` (every 5 min)~~ | ✅ Done — Tier 3 exit monitoring every 5 min |
+| ~~High~~ | ~~3-tier scanning architecture~~ | ✅ Done — daily discovery + 15-min price monitor + 5-min exits |
+| ~~Medium~~ | ~~Expand symbol universe to 100 symbols~~ | ✅ Done — 20 per theme across 5 themes |
+| Medium | Add `RankingAgent` as separate agent to produce richer output (scores, reasons) | Explainable, reusable ranking independent of scanner |
+
+---
+
+## Advantages of Multi-Agent Architecture
+
+| Benefit | How |
+|---------|-----|
+| **Separation of Concerns** | Each agent has exactly one responsibility |
+| **Event-driven decoupling** | Agents never call each other directly — all via Event Bus |
+| **Parallelism** | News + Analysis run in parallel per symbol; portfolio/learning/health run in parallel after trades |
+| **Testability** | Each agent can be unit tested completely independently |
+| **Scalability** | New agents (e.g., `RankingAgent`, options scanner) add without touching existing code |
+| **Observability** | Every step has a named event — full audit trail |
+| **Configurability** | All thresholds and weights live in `finance.yaml` |
+| **Resilience** | One agent failing does not block the others |

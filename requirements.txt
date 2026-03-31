@@ -30,6 +30,7 @@ apscheduler>=3.10.0
 pytest>=7.0.0
 pytest-cov>=4.0.0
 pytest-mock>=3.10.0
+pytest-asyncio>=0.23.0
 
 # Data visualization (Phase 6: Streamlit UI)
 streamlit>=1.28.0

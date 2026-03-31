@@ -192,7 +192,7 @@ class StrategyAgent(Agent):
     def goal(self) -> str:
         return "Generate actionable trade proposals by analyzing market indicators and news sentiment."
 
-    def __init__(self, config_engine):
+    def __init__(self, config_engine, portfolio_agent=None):
         self.config_engine = config_engine
         self.event_bus = get_event_bus()
         # Load rules from YAML config using correct pattern
@@ -208,7 +208,13 @@ class StrategyAgent(Agent):
             if isinstance(strategies, dict) and strategy_name in strategies:
                 strat_cfg = strategies[strategy_name]
                 self.risk_budget_pct = strat_cfg.get('risk_budget_pct', 1.5)
-        logger.info(f"StrategyAgent: portfolio_value=${self.initial_cash:,.2f}, risk_budget_pct={self.risk_budget_pct}%")
+        # Inject portfolio_agent for position-awareness (FIX 2)
+        self.portfolio_agent = portfolio_agent
+        # Position cooling: track last entry per symbol to avoid stacking
+        self.last_entry_time: Dict[str, datetime] = {}
+        # Cooling period in hours (configurable)
+        self.position_cooling_hours = self.config_engine.get("finance", "strategy/position_cooling_hours", default=24)
+        logger.info(f"StrategyAgent: portfolio_value=${self.initial_cash:,.2f}, risk_budget_pct={self.risk_budget_pct}%, position_cooling_hours={self.position_cooling_hours}")
         logger.info(f"StrategyAgent initialized with {len(rules_config)} rules")
 
     def _load_rules_from_config(self) -> List[Dict]:
@@ -296,9 +302,9 @@ class StrategyAgent(Agent):
         logger.info(f"Loaded {len(rules)} rules from config")
         return rules
 
-    async def run(self, indicators_report: AgentReport, news_report: AgentReport) -> AgentReport:
+    async def run(self, analysis_payload: Dict[str, Any], symbol: str = None) -> AgentReport:
         """
-        Generate trade proposals based on analysis and news.
+        Generate trade proposals based on market analysis and news.
         
         Args:
             indicators_report: AgentReport with indicators_snapshot
@@ -309,7 +315,7 @@ class StrategyAgent(Agent):
         """
         try:
             # Get indicator snapshot from analysis report
-            indicators_snapshot = indicators_report.payload.get("indicators_snapshot")
+            indicators_snapshot = analysis_payload.get("indicators_snapshot")
             if not indicators_snapshot:
                 return AgentReport(
                     agent_id=self.agent_id,
@@ -329,6 +335,42 @@ class StrategyAgent(Agent):
                 current_price = indicators_snapshot.current_price
                 target_price = current_price
                 
+                # --- FIX 2 & 5: Position cooling and position-awareness ---
+                now = datetime.utcnow()
+                # Cooling: skip if we traded this symbol recently
+                last_entry = self.last_entry_time.get(symbol)
+                if last_entry:
+                    cooling_hours = self.position_cooling_hours
+                    if (now - last_entry).total_seconds() < cooling_hours * 3600:
+                        logger.info(f"Position cooling: skipping {symbol} - last entry was {(now-last_entry).total_seconds()/3600:.1f}h ago (minimum {cooling_hours}h)")
+                        return AgentReport(
+                            agent_id=self.agent_id,
+                            status="success",
+                            message=f"Position cooling active for {symbol}",
+                            payload={"proposals": []}
+                        )
+                
+                # Check existing position size if portfolio_agent available
+                existing_qty = 0
+                max_position_size_pct = 10.0  # default from risk policy
+                portfolio_equity = self.initial_cash
+                if self.portfolio_agent:
+                    try:
+                        from finance_service.core.event_bus import Events
+                        portfolio_report = await self.portfolio_agent.run(event_type=Events.GET_PORTFOLIO_STATE, payload={})
+                        if portfolio_report.status == "success":
+                            portfolio_data = portfolio_report.payload
+                            # find existing position
+                            for pos in portfolio_data.get("positions", []):
+                                if pos["symbol"] == symbol:
+                                    existing_qty = pos["quantity"]
+                                    break
+                            portfolio_equity = portfolio_data["equity_metrics"]["total_equity"]
+                            # get max position size from risk config (fallback)
+                            max_position_size_pct = self.config_engine.get("finance", "risk/max_position_size_pct", default=10.0)
+                    except Exception as e:
+                        logger.warning(f"Failed to query portfolio_agent for position cooling: {e}")
+                
                 # Calculate stop loss based on ATR (2x ATR default)
                 atr_indicator = indicators_snapshot.indicators.get('atr')
                 if atr_indicator:
@@ -342,18 +384,37 @@ class StrategyAgent(Agent):
                 if stop_loss_price >= current_price:
                     stop_loss_price = round(current_price * 0.95, 2)  # 5% below as fallback
                 
-                # Position sizing: risk-based
-                # Risk per share = current_price - stop_loss_price
+                # Position sizing: risk-based, respecting existing exposure
                 risk_per_share = current_price - stop_loss_price
                 if risk_per_share <= 0:
                     logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share}. Using default 1 share.")
                     quantity = 1
                 else:
                     # Maximum loss amount we're willing to take for this trade
-                    risk_budget_usd = self.initial_cash * (self.risk_budget_pct / 100.0)
-                    quantity = int(risk_budget_usd / risk_per_share)
-                    # Minimum 1 share, and ensure not too large (max 10% of daily volume? skip for now)
-                    quantity = max(1, quantity)
+                    risk_budget_usd = portfolio_equity * (self.risk_budget_pct / 100.0)
+                    desired_quantity = int(risk_budget_usd / risk_per_share)
+                    desired_quantity = max(1, desired_quantity)
+                    
+                    # --- FIX 2: Adjust quantity to respect max position size ---
+                    # Compute total position after trade
+                    total_qty = existing_qty + desired_quantity
+                    # Max allowed qty based on % of portfolio
+                    max_allowed_value = portfolio_equity * (max_position_size_pct / 100.0)
+                    max_allowed_qty = int(max_allowed_value / current_price)
+                    if total_qty > max_allowed_qty:
+                        quantity = max(0, max_allowed_qty - existing_qty)
+                        if quantity == 0:
+                            logger.info(f"Position size limit: existing {existing_qty} shares, max allowed {max_allowed_qty}. Skipping entry.")
+                            return AgentReport(
+                                agent_id=self.agent_id,
+                                status="success",
+                                message=f"Position size limit reached for {symbol}",
+                                payload={"proposals": []}
+                            )
+                        else:
+                            logger.info(f"Reduced quantity from {desired_quantity} to {quantity} due to position size limit (existing: {existing_qty})")
+                    else:
+                        quantity = desired_quantity
                 
                 proposal = TradeProposal(
                     symbol=symbol,
@@ -368,6 +429,8 @@ class StrategyAgent(Agent):
                 proposal_dict = asdict(proposal)
                 proposal_dict['quantity'] = quantity
                 proposals.append(proposal_dict)
+                # Record entry time for cooling
+                self.last_entry_time[symbol] = now
             
             # Note: Exits are handled by PortfolioAgent when rules trigger; strategy only generates BUY proposals
             

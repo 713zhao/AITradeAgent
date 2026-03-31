@@ -30,13 +30,25 @@ class SchedulerAgent(Agent):
         logger.info("SchedulerAgent starting...")
         try:
             # Schedule tasks with appropriate intervals
-            # Market scan: every 15 minutes during trading hours (simplified: every 15 min)
+            # Tier 1: Discovery scan — daily (runs once then every 24h)
             await self._schedule_task(
-                "market_scan",
-                self._trigger_daily_market_scan,
+                "discovery_scan",
+                self._trigger_discovery_scan,
+                timedelta(hours=24)
+            )
+            # Tier 2: Price monitor — every 15 min for watchlist symbols
+            await self._schedule_task(
+                "price_monitor",
+                self._trigger_price_monitor,
                 timedelta(minutes=15)
             )
-            # Data refresh: every 30 minutes
+            # Tier 3: Exit check — every 5 min (continuous position monitoring)
+            await self._schedule_task(
+                "exit_check",
+                self._trigger_exit_check,
+                timedelta(minutes=5)
+            )
+            # Data refresh: every 30 minutes (general data warming)
             await self._schedule_task(
                 "data_refresh",
                 self._trigger_hourly_data_refresh,
@@ -89,9 +101,20 @@ class SchedulerAgent(Agent):
         self.scheduled_tasks[task_name] = asyncio.create_task(task_wrapper())
         logger.info(f"Task {task_name} scheduled to run every {interval}.")
 
-    async def _trigger_daily_market_scan(self):
-        await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={"interval": "daily"}))
-        logger.info("Published MARKET_SCAN_TRIGGER event (daily).")
+    async def _trigger_discovery_scan(self):
+        """Tier 1: Full discovery scan — rank universe, build watchlist."""
+        await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={"interval": "daily", "mode": "discovery"}))
+        logger.info("Published MARKET_SCAN_TRIGGER event (Tier 1: daily discovery).")
+
+    async def _trigger_price_monitor(self):
+        """Tier 2: Lightweight price refresh for watchlist symbols."""
+        await self.event_bus.publish(Event(event_type=Events.PRICE_MONITOR_TRIGGER, data={"interval": "15min", "mode": "price_monitor"}))
+        logger.info("Published PRICE_MONITOR_TRIGGER event (Tier 2: every 15 min).")
+
+    async def _trigger_exit_check(self):
+        """Trigger continuous position monitoring for exits and degradation."""
+        await self.event_bus.publish(Event(event_type=Events.EXIT_CHECK_TRIGGER, data={"interval": "5min"}))
+        logger.info("Published EXIT_CHECK_TRIGGER event (every 5 min).")
 
     async def _trigger_hourly_data_refresh(self):
         await self.event_bus.publish(Event(event_type=Events.DATA_REFRESH_TRIGGER, data={"interval": "hourly"}))

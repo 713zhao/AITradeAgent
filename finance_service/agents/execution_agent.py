@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
+from dataclasses import asdict
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
@@ -26,37 +27,33 @@ class ExecutionAgent(Agent):
     async def run(self, approval_report: AgentReport) -> Optional[AgentReport]:
         """
         Receives an approved trade proposal and executes it.
-        Supports payload with either 'trade_proposal' (single) or 'trade_proposals' (array).
+        The approval_report.payload contains:
+        - trade_proposals: list of proposals (usually single item)
+        - risk_assessments: list of assessments (matching proposals)
+        - all_passed: bool
+        - any_approval_required: bool
         """
         logger.info("ExecutionAgent run: Executing approved trade proposal.")
 
         try:
-            # Extract trade proposal(s) from payload
-            payload_data = approval_report.payload
-            
-            if "trade_proposals" in payload_data:
-                proposals_data = payload_data["trade_proposals"]
-                if not isinstance(proposals_data, list):
-                    proposals_data = [proposals_data]
-                # For now, execute first proposal only (batch execution can be added later)
-                proposal_data = proposals_data[0]
-                logger.info(f"Found {len(proposals_data)} proposals, executing first one for {proposal_data.get('symbol')}")
-            elif "trade_proposal" in payload_data:
-                proposal_data = payload_data["trade_proposal"]
-            else:
-                raise ValueError(f"Neither 'trade_proposal' nor 'trade_proposals' found in approval_report payload. Keys: {list(payload_data.keys())}")
-            
-            trade_proposal = TradeProposal(**proposal_data)
-            # Assuming approval_report.payload also contains risk_assessment
-            risk_assessment = approval_report.payload.get("risk_assessment", {})
+            # Extract the first trade proposal (single-proposal flow)
+            trade_proposals = approval_report.payload.get("trade_proposals", [])
+            if not trade_proposals:
+                raise ValueError("No trade_proposals found in approval_report.payload")
+            trade_proposal_data = trade_proposals[0]
+            trade_proposal = TradeProposal(**trade_proposal_data)
+
+            # Extract risk assessment if needed
+            risk_assessments = approval_report.payload.get("risk_assessments", [])
+            risk_assessment = risk_assessments[0] if risk_assessments else {}
 
             # Mock execution result
             execution_result = {
                 "trade_id": f"trade_{trade_proposal.symbol}_{datetime.utcnow().timestamp()}",
                 "symbol": trade_proposal.symbol,
                 "action": trade_proposal.action,
-                "quantity": 1.0,  # TODO: use actual position sizing
-                "price": trade_proposal.target_price,  # PortfolioAgent expects 'price'
+                "quantity": trade_proposal.quantity or 1.0,
+                "filled_price": trade_proposal.target_price,  # mock: fill at target
                 "status": "FILLED",
                 "timestamp": datetime.utcnow().isoformat()
             }
@@ -64,19 +61,22 @@ class ExecutionAgent(Agent):
             message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
             payload = {"execution_result": execution_result}
 
-            await self.event_bus.publish(Event(
-                event_type=Events.TRADE_EXECUTED,
-                data=payload
-            ))
-
-            return AgentReport(
+            # Publish execution event as an AgentReport
+            report = AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
                 payload=payload
             )
+            event_data = asdict(report)
+            logger.info(f"[EXECUTION DEBUG] Publishing TRADE_EXECUTED event with data keys: {list(event_data.keys())}")
+            await self.event_bus.publish(Event(
+                event_type=Events.TRADE_EXECUTED,
+                data=event_data
+            ))
+            return report
         except Exception as e:
-            logger.error(f"Error in ExecutionAgent run: {e}", exc_info=True)
+            logger.error(f"Error in ExecutionAgent run: {e}")
             return AgentReport(
                 agent_id=self.agent_id,
                 status="error",

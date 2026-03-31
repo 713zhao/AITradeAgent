@@ -31,6 +31,7 @@ class Position:
         symbol: Trading symbol (e.g., 'AAPL')
         quantity: Number of shares held (positive = long, negative = short)
         avg_cost: Average cost per share (purchase price or short price)
+        entry_price: Alias for avg_cost (for compatibility with broker/code expecting entry_price)
         current_price: Current market price (updated real-time)
         opened_at: Timestamp when position opened
         updated_at: Last update timestamp
@@ -46,8 +47,21 @@ class Position:
     trades: List[str] = field(default_factory=list)  # Trade IDs
     metadata: Dict[str, Any] = field(default_factory=dict)
     
+    @property
+    def entry_price(self) -> float:
+        """Alias for avg_cost to maintain compatibility with broker-style code."""
+        return self.avg_cost
+    
+    @entry_price.setter
+    def entry_price(self, value: float):
+        """Allow setting entry_price as alias for avg_cost."""
+        self.avg_cost = value
+    
     def market_value(self) -> float:
         """Current market value of position."""
+        # Guard against NaN or infinite current_price
+        if self.current_price is None or not isinstance(self.current_price, (int, float)) or self.current_price != self.current_price or self.current_price in (float('inf'), float('-inf')):
+            return 0.0
         return self.quantity * self.current_price
     
     def cost_basis(self) -> float:
@@ -70,7 +84,7 @@ class Position:
             "symbol": self.symbol,
             "quantity": self.quantity,
             "avg_cost": self.avg_cost,
-            "entry_price": self.avg_cost,  # Alias for UI compatibility
+            "entry_price": self.avg_cost,  # alias for compatibility
             "current_price": self.current_price,
             "market_value": self.market_value(),
             "cost_basis": self.cost_basis(),
@@ -301,7 +315,6 @@ class Portfolio:
             "position_count": self.position_count(),
             "trade_count": self.trade_count(),
             "win_rate": self.win_rate(),
-            "status": "active" if self.position_count() > 0 else "inactive",
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "metadata": self.metadata,

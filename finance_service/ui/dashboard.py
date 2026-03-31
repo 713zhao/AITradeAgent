@@ -25,7 +25,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-API_BASE_URL = "http://localhost:8801"
+# Use localhost by default, but allow override for network access
+import os
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8801")
 REFRESH_INTERVAL = 10  # seconds
 
 # Custom styling

@@ -40,6 +40,7 @@ class PydanticConfig(BaseSettings):
     APPROVAL_TIMEOUT: int = Field(300, ge=0, description="Approval timeout in seconds")
     TELEGRAM_BOT_TOKEN: str = Field("", description="Telegram bot token")
     TELEGRAM_CHAT_ID: str = Field("", description="Telegram chat ID for notifications")
+    TELEGRAM_MESSAGE_THREAD_ID: Optional[int] = Field(None, description="Telegram message thread ID for topics")
     SLACK_BOT_TOKEN: str = Field("", description="Slack bot token")
     SLACK_CHANNEL: str = Field("", description="Slack channel for notifications")
 
@@ -67,6 +68,14 @@ class PydanticConfig(BaseSettings):
             items = [s.strip() for s in v.split(",") if s.strip()]
             return items if items else None
         return v
+
+    @field_validator("TELEGRAM_MESSAGE_THREAD_ID", mode="before")
+    @classmethod
+    def parse_thread_id(cls, v) -> Optional[int]:
+        """Parse thread ID, treating empty strings as None."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return int(v)
 
     def get_whitelist_symbols(self) -> Optional[List[str]]:
         """Get whitelist as a list, or None if no whitelist."""

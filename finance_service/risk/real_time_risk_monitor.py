@@ -59,16 +59,16 @@ class RealTimeRiskMonitor:
         """Add or update a position in the portfolio"""
         self.portfolio[position.symbol] = {
             'symbol': position.symbol,
-            'size': position.position_size,
-            'entry_price': position.entry_price,
+            'size': position.quantity,
+            'entry_price': position.avg_cost,
             'current_price': position.current_price,
-            'broker': position.broker,
+            'broker': getattr(position, 'broker', 'paper'),
             'timestamp': position.timestamp or datetime.now(timezone.utc),
-            'value': position.position_size * position.current_price,
-            'unrealized_pnl': (position.current_price - position.entry_price) * position.position_size,
+            'value': position.quantity * position.current_price,
+            'unrealized_pnl': (position.current_price - position.avg_cost) * position.quantity,
         }
         self.position_history.append(position)
-        self.logger.debug(f"Added position: {position.symbol} ({position.position_size})")
+        self.logger.debug(f"Added position: {position.symbol} ({position.quantity})")
     
     def remove_position(self, symbol: str) -> None:
         """Remove a position from the portfolio"""
@@ -107,8 +107,8 @@ class RealTimeRiskMonitor:
         # Simple historical VaR calculation
         returns = []
         for pos in self.position_history:
-            if pos.entry_price > 0:
-                ret = (pos.current_price - pos.entry_price) / pos.entry_price
+            if pos.avg_cost > 0:
+                ret = (pos.current_price - pos.avg_cost) / pos.avg_cost
                 returns.append(ret)
         
         if not returns or len(returns) < 2:

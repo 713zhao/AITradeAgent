@@ -133,7 +133,11 @@ Assessment:
         f.write(latest_summary)
 
 def send_telegram(message: str):
-    """Send notification via OpenClaw CLI."""
+    """Send notification via OpenClaw CLI. Skips weekends."""
+    # Weekend skip: Saturday=5, Sunday=6
+    if datetime.now().weekday() in (5, 6):
+        print("Weekend detected (Sat/Sun). Skipping Telegram notification.")
+        return False
     try:
         import subprocess
         # Use openclaw CLI to send message to Telegram

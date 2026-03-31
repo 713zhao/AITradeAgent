@@ -1,10 +1,9 @@
+"""Telegram Agent - Handles Telegram commands and sends reports (PTB v22 compatible)."""
 import logging
-import json
 from typing import Dict, Any, Optional
-import asyncio
 from telegram import Bot
 from telegram.error import TelegramError
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
@@ -13,7 +12,7 @@ from finance_service.core.config import Config
 logger = logging.getLogger(__name__)
 
 class TelegramAgent(Agent):
-    """Telegram Agent - Handles Telegram commands and sends reports."""
+    """Telegram Agent - Provides Telegram interface and scheduled reports."""
 
     @property
     def agent_id(self) -> str:
@@ -28,51 +27,58 @@ class TelegramAgent(Agent):
         self.event_bus = get_event_bus()
         self.bot_token = config.get("telegram_bot_token", Config.TELEGRAM_BOT_TOKEN)
         self.chat_id = config.get("telegram_chat_id", Config.TELEGRAM_CHAT_ID)
-        
+
+        raw_thread_id = config.get("telegram_message_thread_id", Config.TELEGRAM_MESSAGE_THREAD_ID)
+        self.thread_id = int(str(raw_thread_id).strip()) if raw_thread_id is not None and str(raw_thread_id).strip() != "" else None
+
         if not self.bot_token or not self.chat_id:
             logger.warning("Telegram Agent not fully configured (missing token or chat ID). Disabling.")
             self.enabled = False
-            self.updater = None
+            self.application = None
+            self.bot = None
         else:
             self.enabled = True
             try:
-                self.bot_instance = Bot(token=self.bot_token)
-                self.updater = Updater(self.bot_token, use_context=True)
-                self.dispatcher = self.updater.dispatcher
+                # Build Application
+                self.application = Application.builder().token(self.bot_token).build()
+                self.bot = self.application.bot
 
                 # Register command handlers
-                self.dispatcher.add_handler(CommandHandler("start", self._start_command))
-                self.dispatcher.add_handler(CommandHandler("status", self._status_command))
-                self.dispatcher.add_handler(CommandHandler("portfolio", self._portfolio_command))
-                # Add more command handlers as needed
+                self.application.add_handler(CommandHandler("start", self._start_command))
+                self.application.add_handler(CommandHandler("status", self._status_command))
+                self.application.add_handler(CommandHandler("portfolio", self._portfolio_command))
+                # Add more handlers as needed
 
-            except TelegramError as e:
+            except Exception as e:
                 logger.error(f"Failed to initialize Telegram Bot: {e}")
                 self.enabled = False
-                self.updater = None
+                self.application = None
+                self.bot = None
 
     async def run(self):
-        if not self.enabled:
-            logger.info("Telegram Agent is disabled due to missing configuration.")
+        if not self.enabled or not self.application:
+            logger.info("Telegram Agent is disabled or not properly initialized.")
             return
         logger.info(f"{self.agent_id} starting polling.")
-        # Run the updater in a separate thread to not block the asyncio event loop
-        # The handlers themselves should be async or dispatch to async tasks
-        self.updater.start_polling()
-        self.updater.idle() # This blocks the thread. In a real async app, this needs careful handling.
-        # For now, we will rely on start_polling running in a separate thread.
+        # Run polling (blocking until stopped)
+        await self.application.run_polling()
         logger.info(f"{self.agent_id} polling stopped.")
 
     async def send_message(self, chat_id: str, message: str, parse_mode: Optional[str] = None):
-        if not self.enabled:
+        if not self.enabled or not self.bot:
             return
         try:
-            await self.bot_instance.send_message(chat_id=chat_id, text=message, parse_mode=parse_mode)
+            kwargs = {"chat_id": chat_id, "text": message}
+            if parse_mode:
+                kwargs["parse_mode"] = parse_mode
+            if self.thread_id is not None:
+                kwargs["message_thread_id"] = self.thread_id
+            await self.bot.send_message(**kwargs)
             logger.info(f"Message sent to chat ID: {chat_id}")
         except TelegramError as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
 
-    async def _start_command(self, update: Any, context: CallbackContext):
+    async def _start_command(self, update: Any, context: ContextTypes.DEFAULT_TYPE):
         if not self.enabled:
             return
         chat_id = update.effective_chat.id
@@ -80,7 +86,7 @@ class TelegramAgent(Agent):
         logger.info(f"Telegram Agent received /start command from {user} ({chat_id})")
         await self.send_message(chat_id, f"Hello {user}! I am your AI Trade Agent. How can I assist you?", parse_mode="HTML")
 
-    async def _status_command(self, update: Any, context: CallbackContext):
+    async def _status_command(self, update: Any, context: ContextTypes.DEFAULT_TYPE):
         if not self.enabled:
             return
         chat_id = update.effective_chat.id
@@ -88,7 +94,7 @@ class TelegramAgent(Agent):
         await self.event_bus.publish(Event(event_type=Events.GET_SYSTEM_STATUS, data={"chat_id": chat_id}))
         await self.send_message(chat_id, "Fetching system status...")
 
-    async def _portfolio_command(self, update: Any, context: CallbackContext):
+    async def _portfolio_command(self, update: Any, context: ContextTypes.DEFAULT_TYPE):
         if not self.enabled:
             return
         chat_id = update.effective_chat.id
@@ -97,7 +103,7 @@ class TelegramAgent(Agent):
         await self.send_message(chat_id, "Fetching portfolio state...")
 
     async def send_scheduled_report(self, report_data: Dict[str, Any], chat_id: Optional[str] = None):
-        if not self.enabled:
+        if not self.enabled or not self.bot:
             return
         target_chat_id = chat_id if chat_id else self.chat_id
         if not target_chat_id:
@@ -107,9 +113,12 @@ class TelegramAgent(Agent):
         message_text = f"**Daily Report**\n\n"
         for key, value in report_data.items():
             message_text += f"**{key}:** {value}\n"
-        
+
         try:
-            await self.bot_instance.send_message(chat_id=target_chat_id, text=message_text, parse_mode="Markdown")
+            kwargs = {"chat_id": target_chat_id, "text": message_text, "parse_mode": "Markdown"}
+            if self.thread_id is not None:
+                kwargs["message_thread_id"] = self.thread_id
+            await self.bot.send_message(**kwargs)
             logger.info(f"Scheduled report sent to chat ID: {target_chat_id}")
         except TelegramError as e:
             logger.error(f"Failed to send scheduled report to {target_chat_id}: {e}")

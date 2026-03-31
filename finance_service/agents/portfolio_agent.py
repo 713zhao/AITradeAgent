@@ -50,6 +50,8 @@ class PortfolioAgent(Agent):
         elif event_type == Events.GET_PORTFOLIO_STATE:
             chat_id = payload.get("chat_id") # For direct response via TelegramAgent
             return await self.get_detailed_portfolio_state(chat_id)
+        elif event_type == Events.ANALYSIS_COMPLETE:
+            return await self.handle_analysis_complete(payload)
         # Add other event types the PortfolioAgent might react to
         else:
             return AgentReport(agent_id=self.agent_id, status="success", message="PortfolioAgent is running.")
@@ -63,17 +65,29 @@ class PortfolioAgent(Agent):
         quantity = trade_info.get("quantity")
         price = trade_info.get("price")
         trade_id = trade_info.get("trade_id") or f"exec_{int(datetime.utcnow().timestamp()*1000)}"
-        
+
         logger.info(f"[PORTFOLIO DEBUG] Parsed: symbol={symbol}, side={side}, quantity={quantity}, price={price}, trade_id={trade_id}")
-        
+
         if not all([symbol, side, quantity, price]):
             msg = f"Missing required trade fields: {trade_info}"
             logger.error(msg)
             return AgentReport(agent_id=self.agent_id, status="error", message=msg)
-        
+
         try:
             side = side.upper()
             if side == "BUY":
+                # --- FIX 1: Cash sufficiency check ---
+                trade_value = quantity * price
+                # Get current available cash from repository (track running cash balance)
+                # Since repository doesn't track cash separately, we compute from portfolio formula
+                # available_cash = initial_cash - spent_on_long_positions
+                current_portfolio = self.repository.calculate_portfolio(self.initial_cash)
+                available_cash = current_portfolio.current_cash
+                if trade_value > available_cash:
+                    msg = f"Insufficient cash for BUY: need ${trade_value:,.2f}, available ${available_cash:,.2f}"
+                    logger.error(msg)
+                    return AgentReport(agent_id=self.agent_id, status="error", message=msg)
+
                 logger.info(f"[PORTFOLIO DEBUG] Creating BUY trade for {symbol}")
                 trade = self.repository.create_trade(
                     task_id=trade_id,
@@ -122,27 +136,37 @@ class PortfolioAgent(Agent):
             return AgentReport(agent_id=self.agent_id, status="error", message=f"Error processing trade: {e}")
 
 
+    async def update_prices_from_data_agent(self):
+        """Fetch latest prices for all positions using data_agent and update repository."""
+        if not self.data_agent:
+            return
+        import pandas as pd
+        for symbol in list(self.repository.positions.keys()):
+            try:
+                quote_report = await self.data_agent.run(symbol=symbol, interval="1d", emit_events=False, use_cache=False)
+                if quote_report.status == "success" and "dataframe" in quote_report.payload:
+                    df_dict = quote_report.payload["dataframe"]
+                    df = pd.DataFrame.from_dict(df_dict)
+                    if not df.empty:
+                        latest_price = df.iloc[-1]['close']
+                        # Only update if price is valid (non-NaN, positive)
+                        if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
+                            self.repository.update_position(symbol, current_price=latest_price)
+                            logger.debug(f"Updated {symbol} current price to {latest_price}")
+                        else:
+                            logger.warning(f"Invalid price fetched for {symbol}: {latest_price}. Skipping update.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch price for {symbol}: {e}")
+                continue
+
     async def get_detailed_portfolio_state(self, chat_id: Optional[str] = None) -> AgentReport:
         """Retrieves detailed portfolio state and can publish it or return in a report."""
         logger.info("PortfolioAgent generating detailed portfolio state.")
+        # Refresh timestamp to indicate state generation time
+        self.updated_at = datetime.utcnow()
         
-        # Fetch live prices for all positions if data_agent is available
-        if self.data_agent:
-            import pandas as pd
-            for symbol in list(self.repository.positions.keys()):
-                try:
-                    # Fetch latest daily data
-                    quote_report = await self.data_agent.run(symbol=symbol, interval="1d", emit_events=False, use_cache=False)
-                    if quote_report.status == "success" and "dataframe" in quote_report.payload:
-                        df_dict = quote_report.payload["dataframe"]
-                        df = pd.DataFrame.from_dict(df_dict)
-                        if not df.empty:
-                            latest_price = df.iloc[-1]['close']
-                            self.repository.update_position(symbol, current_price=latest_price)
-                            logger.debug(f"Updated {symbol} current price to {latest_price}")
-                except Exception as e:
-                    logger.warning(f"Failed to fetch price for {symbol}: {e}")
-                    continue
+        # Fetch live prices for all positions
+        await self.update_prices_from_data_agent()
         
         portfolio = self.repository.calculate_portfolio(self.initial_cash)
         positions_data = [pos.to_dict() for pos in self.repository.get_positions()]
@@ -165,6 +189,17 @@ class PortfolioAgent(Agent):
             pass # Orchestrator will handle the response via handle_get_portfolio_state
 
         return AgentReport(agent_id=self.agent_id, status="success", message="Portfolio state retrieved", payload=portfolio_state)
+
+    async def handle_analysis_complete(self, payload: Dict[str, Any]) -> AgentReport:
+        """
+        Handles ANALYSIS_COMPLETE event by updating position prices from latest data
+        and refreshing the portfolio state timestamp.
+        """
+        logger.info("PortfolioAgent received ANALYSIS_COMPLETE event – updating prices.")
+        await self.update_prices_from_data_agent()
+        self.updated_at = datetime.utcnow()
+        # Optionally, we could persist state here if needed: self.repository.save_state()
+        return AgentReport(agent_id=self.agent_id, status="success", message="Portfolio prices updated from analysis")
 
     # The following methods are adapted from PortfolioManager, made async if they involve I/O
 

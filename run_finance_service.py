@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """
-PicotradeAgent Finance Service Launcher
-Forces yfinance provider and starts the Flask service with Hypercorn (ASGI)
+AiTradeAgent Finance Service Launcher
+Runs Quart ASGI app via Hypercorn with orchestrator initialization.
 """
 import os
 import sys
 import asyncio
-import subprocess
-import time
-import signal
 import logging
+import time
 
 # Set environment variables before any imports
 os.environ['OPENBB_USE_YFINANCE'] = 'true'
 os.environ['OPENBB_PROVIDER'] = 'yfinance'
-os.environ['FLASK_ENV'] = 'production'
 os.environ['PYTHONUNBUFFERED'] = '1'
 os.environ['LOG_LEVEL'] = 'INFO'
 
@@ -27,45 +24,57 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def main():
-    """Start the finance service"""
-    logger.info("🚀 Starting PicotradeAgent Finance Service...")
-    logger.info("📊 Market data source: yfinance (free)")
-    logger.info("💰 Trading mode: PAPER (simulated)")
+async def main():
+    """Initialize orchestrator and start ASGI server."""
+    from finance_service.app import startup_orchestrator, create_app
+    from hypercorn.config import Config as HypercornConfig
+    from hypercorn.asyncio import serve
+    
+    logger.info("🔧 Initializing orchestrator...")
+    await startup_orchestrator()
+    logger.info("✅ Orchestrator initialized.")
+    
+    app = create_app()
+    config = HypercornConfig()
+    config.bind = ["0.0.0.0:8801"]
+    config.worker_class = "uvloop"
+    config.workers = 1
+    config.accesslog = "-"
+    config.errorlog = "-"
+    
+    logger.info("🚀 Starting ASGI server on 0.0.0.0:8801 (accessible from network)")
+    try:
+        await serve(app, config)
+    except asyncio.CancelledError:
+        logger.info("🛑 Server stopped")
+    except Exception as e:
+        logger.exception(f"❌ Server crashed: {e}")
+        raise
+
+def main_entry():
+    """Entry point with auto-restart."""
+    logger.info("🚀 AiTradeAgent Finance Service")
+    logger.info("📊 Market data: yfinance")
+    logger.info("💰 Mode: PAPER")
     logger.info("🔌 Port: 8801")
     logger.info("🌐 Server: Hypercorn (ASGI)")
+    logger.info("🔁 Auto-restart: enabled")
     
-    try:
-        # Import the Flask app and run with Hypercorn (ASGI server for async Flask)
-        from finance_service.app import app, startup_orchestrator
-        from hypercorn.asyncio import serve
-        from hypercorn.config import Config
-        
-        async def async_main():
-            # Initialize orchestrator before starting server
-            logger.info("🔧 Initializing orchestrator...")
-            await startup_orchestrator()
-            logger.info("✅ Orchestrator initialized")
-            
-            # Configure Hypercorn
-            hypercorn_config = Config()
-            hypercorn_config.bind = ["0.0.0.0:8801"]
-            hypercorn_config.loglevel = "info"
-            hypercorn_config.accesslog = "-"
-            
-            # Run the async server
-            logger.info("🌐 Starting server on http://0.0.0.0:8801")
-            await serve(app, hypercorn_config)
-        
-        # Run the combined async main
-        asyncio.run(async_main())
-        
-    except KeyboardInterrupt:
-        logger.info("🛑 Service stopped by user")
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"❌ Failed to start service: {e}", exc_info=True)
-        sys.exit(1)
+    restart_delay = 5
+    while True:
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            logger.info("🛑 Service stopped by user")
+            sys.exit(0)
+        except SystemExit:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Service crashed: {type(e).__name__}: {e}. Restarting in {restart_delay}s...", exc_info=True)
+            time.sleep(restart_delay)
+        except BaseException as e:
+            logger.error(f"❌ Unhandled BaseException: {type(e).__name__}: {e}. Restarting in {restart_delay}s...", exc_info=True)
+            time.sleep(restart_delay)
 
 if __name__ == "__main__":
-    main()
+    main_entry()

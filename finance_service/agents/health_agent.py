@@ -11,6 +11,8 @@ from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events
 from finance_service.agents.portfolio_agent import PortfolioAgent
 from finance_service.agents.telegram_agent import TelegramAgent
+from finance_service.core.remediation_helper import RemediationHelper
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,19 @@ class HealthAgent(Agent):
             self.alert_cooldown_hours = 4
         
         self.last_alert_time: Optional[datetime] = None
+        
+        # Initialize remediation helper for auto-recovery
+        try:
+            workspace = Path(__file__).parent.parent.parent.parent
+            venv = workspace / "venv"
+            self.remediation = RemediationHelper(
+                config={},
+                venv_path=str(venv),
+                workspace_path=str(workspace)
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize remediation helper: {e}")
+            self.remediation = None
         
         logger.info("HealthAgent initialized")
     
@@ -85,7 +100,30 @@ class HealthAgent(Agent):
         # Get recent portfolio metrics
         portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
         if portfolio_report.status != "success":
-            return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state: {portfolio_report.message}")
+            logger.warning(f"Portfolio state retrieval failed: {portfolio_report.message}")
+            
+            # Attempt auto-remediation for critical issues
+            if self.remediation and ("500" in str(portfolio_report.message) or "async" in str(portfolio_report.message).lower()):
+                logger.info("Triggering auto-remediation for portfolio error")
+                issue_detail = f"portfolio_error: {portfolio_report.message}"
+                fix_result = await self.remediation.attempt_fix("portfolio_state_error", issue_detail)
+                logger.info(f"Remediation result: {fix_result}")
+                
+                # If remediation succeeded, retry portfolio state fetch
+                if fix_result.success:
+                    logger.info("Remediation succeeded, retrying portfolio state fetch")
+                    import asyncio
+                    await asyncio.sleep(2)  # Wait for service to fully restart
+                    portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
+                    if portfolio_report.status == "success":
+                        logger.info("Portfolio state fetch successful after remediation")
+                    else:
+                        logger.error(f"Portfolio state still failing after remediation: {portfolio_report.message}")
+                        return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state even after remediation: {portfolio_report.message}")
+                else:
+                    return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state and remediation failed: {fix_result.reason}")
+            else:
+                return AgentReport(agent_id=self.agent_id, status="error", message=f"Failed to get portfolio state: {portfolio_report.message}")
         
         metrics = portfolio_report.payload.get("equity_metrics", {})
         drawdown = metrics.get("drawdown_pct", 0)
@@ -142,8 +180,13 @@ class HealthAgent(Agent):
     
     async def send_telegram_alert(self, alerts: list, metrics: Dict[str, Any]):
         """Send alert message via TelegramAgent."""
-        if not self.telegram_agent:
-            logger.warning("TelegramAgent not configured, cannot send alerts")
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured or disabled, cannot send alerts")
+            return
+        
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            logger.warning("TelegramAgent has no chat_id configured, cannot send alerts")
             return
         
         message_lines = ["🦞 AiTradeAgent Health Alert 🦞\n"]
@@ -157,38 +200,36 @@ class HealthAgent(Agent):
         message_lines.append(f"Trades: {metrics.get('trade_count', 0)}")
         
         message = "\n".join(message_lines)
-        # Use default chat ID from config if available, else orchestrator may forward
-        chat_id = ""
-        try:
-            # config_engine may be a dict-like or YAMLConfigEngine
-            chat_id = self.config_engine.get("telegram", "chat_id", default="") if hasattr(self.config_engine, "get") else self.config_engine.get("telegram_chat_id", "")
-        except Exception:
-            chat_id = ""
         await self.telegram_agent.send_message(chat_id=chat_id, message=message)
         logger.info(f"Sent health alert via Telegram with {len(alerts)} alerts")
     
     async def send_trade_notification(self, execution_payload: Dict[str, Any]):
         """Send trade execution notification via Telegram."""
-        if not self.telegram_agent:
-            logger.warning("TelegramAgent not configured, cannot send trade notification")
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured or disabled, cannot send trade notification")
             return
         
-        result = execution_payload.get("execution_result", {})
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            logger.warning("TelegramAgent has no chat_id configured, cannot send trade notification")
+            return
+        
+        # Handle both wrapped (execution_result inside) and unwrapped payloads
+        result = execution_payload.get("execution_result", execution_payload)
         symbol = result.get("symbol", "Unknown")
         action = result.get("action", "??")
         quantity = result.get("quantity", 0)
-        price = result.get("price", 0)  # Use 'price', not 'filled_price'
+        price = result.get("filled_price", result.get("price", 0))
         status = result.get("status", "??")
         
         # Get current portfolio info for context
         portfolio_summary = "Portfolio info unavailable"
         if self.portfolio_agent:
             try:
-                # PortfolioAgent has get_detailed_portfolio_state, not get_portfolio_state
-                portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state(chat_id=None)
+                portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
                 if portfolio_report.status == "success":
                     portfolio = portfolio_report.payload
-                    equity = portfolio.get("total_equity", 0)
+                    equity = portfolio.get("equity_metrics", {}).get("total_equity", 0)
                     positions = len(portfolio.get("positions", {}))
                     portfolio_summary = f"Portfolio: ${equity:,.2f}, {positions} positions"
             except Exception as e:
@@ -202,22 +243,22 @@ class HealthAgent(Agent):
         message += f"• Status: {status}\n"
         message += f"\n{portfolio_summary}"
         
-        chat_id = ""
-        try:
-            chat_id = self.config_engine.get("telegram", "chat_id", default="") if hasattr(self.config_engine, "get") else self.config_engine.get("telegram_chat_id", "")
-        except Exception:
-            chat_id = ""
         await self.telegram_agent.send_message(chat_id=chat_id, message=message)
         logger.info(f"Sent trade notification for {symbol} {action}")
     
     async def send_daily_summary(self):
         """Send daily portfolio summary after market close."""
-        if not self.telegram_agent:
-            logger.warning("TelegramAgent not configured, cannot send daily summary")
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured or disabled, cannot send daily summary")
             return
         
         if not self.portfolio_agent:
             logger.warning("PortfolioAgent not set, cannot send daily summary")
+            return
+        
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            logger.warning("TelegramAgent has no chat_id configured, cannot send daily summary")
             return
         
         try:
@@ -258,7 +299,7 @@ class HealthAgent(Agent):
                     summary_lines.append(f"  {t.get('action')} {t.get('symbol')} x{t.get('quantity')} @ ${t.get('price'):,.2f}")
             
             message = "\n".join(summary_lines)
-            await self.telegram_agent.send_message(chat_id=self.config.get("telegram_chat_id", ""), message=message)
+            await self.telegram_agent.send_message(chat_id=chat_id, message=message)
             logger.info("Sent daily portfolio summary")
             
         except Exception as e:

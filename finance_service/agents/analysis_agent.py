@@ -85,12 +85,12 @@ class AnalysisAgent(Agent):
                 data={"indicators_snapshot": snapshot}
             ))
             
-            # Return an AgentReport with the snapshot directly for immediate callers
+            # Return an AgentReport with the snapshot wrapped in a dict for compatibility with StrategyAgent
             return AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
-                payload=snapshot
+                payload={"indicators_snapshot": snapshot}
             )
         except ValueError as e:
             logger.warning(f"AnalysisAgent failed for {symbol}: {e}")
