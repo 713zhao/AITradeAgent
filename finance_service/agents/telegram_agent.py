@@ -111,9 +111,12 @@ class TelegramAgent(Agent):
         stop_loss_price,
         confidence: float,
         rationale,
+        indicators_snapshot=None,
+        news_sentiment=None,
+        news_catalysts=None,
         chat_id=None,
     ):
-        """Send a Telegram notification before a trade is executed."""
+        """Send a Telegram notification before a trade is executed, with full technical detail."""
         if not self.enabled or not self.bot:
             return
         target_chat_id = chat_id if chat_id else self.chat_id
@@ -121,27 +124,141 @@ class TelegramAgent(Agent):
             return
 
         action_emoji = "🟢 BUY" if action == "BUY" else "🔴 SELL"
-        # Build Yahoo Finance link (HK symbols like 0966.HK → 0966-HK)
         yf_symbol = symbol.replace(".", "-") if "." in symbol else symbol
         link = f"https://finance.yahoo.com/quote/{yf_symbol}"
 
         price_str = f"${target_price:.4f}" if target_price else "market"
-        stop_str = f"${stop_loss_price:.4f}" if stop_loss_price else "N/A"
         conf_str = f"{confidence * 100:.1f}%"
+
+        # Build stop-loss line with ATR context
+        if stop_loss_price and target_price:
+            sl_pct = ((stop_loss_price - target_price) / target_price) * 100
+            stop_str = f"${stop_loss_price:.4f} ({sl_pct:+.1f}%)"
+        elif stop_loss_price:
+            stop_str = f"${stop_loss_price:.4f}"
+        else:
+            stop_str = "N/A"
+
+        # ── Technical Indicators ──────────────────────────────────────────
+        tech_lines = []
+        if indicators_snapshot is not None:
+            snap = indicators_snapshot
+            ind = getattr(snap, "indicators", {})
+            current_price = getattr(snap, "current_price", None) or target_price
+
+            def _v(key):
+                r = ind.get(key)
+                return r.value if r else None
+
+            def _meta(key):
+                r = ind.get(key)
+                return (r.metadata or {}) if r else {}
+
+            def _sig(key):
+                r = ind.get(key)
+                if r is None:
+                    return ""
+                sig = r.signal
+                sig_val = sig.value if hasattr(sig, "value") else str(sig)
+                return sig_val
+
+            # RSI
+            rsi_val = _v("rsi")
+            if rsi_val is not None:
+                rsi_sig = _sig("rsi")
+                rsi_icon = "✅" if rsi_val < 35 else ("⚠️" if rsi_val > 70 else "–")
+                tech_lines.append(f"  • RSI (14): {rsi_val:.1f} — {rsi_sig} {rsi_icon}")
+
+            # MACD
+            macd_val = _v("macd")
+            macd_meta = _meta("macd")
+            if macd_val is not None:
+                signal_line = macd_meta.get("signal_line")
+                histogram = macd_meta.get("histogram")
+                hist_icon = "📈" if histogram and histogram > 0 else ("📉" if histogram else "")
+                hist_str = f" | Hist: {histogram:+.4f} {hist_icon}" if histogram is not None else ""
+                sig_str = f" | Signal: {signal_line:.4f}" if signal_line is not None else ""
+                tech_lines.append(f"  • MACD: {macd_val:.4f}{sig_str}{hist_str}")
+
+            # SMA 20 / 50 / 200
+            for period, key in [(20, "sma_20"), (50, "sma_50"), (200, "sma_200")]:
+                sma_val = _v(key)
+                if sma_val is not None and current_price:
+                    diff_pct = ((current_price - sma_val) / sma_val) * 100
+                    icon = "✅" if diff_pct > 0 else "⚠️"
+                    tech_lines.append(f"  • SMA{period}: ${sma_val:.4f} → Price {diff_pct:+.1f}% {icon}")
+
+            # ATR
+            atr_val = _v("atr")
+            if atr_val is not None and current_price:
+                atr_pct = (atr_val / current_price) * 100
+                stop_atr = stop_loss_price
+                atr_note = f" (stop = {2}×ATR = ${stop_atr:.4f})" if stop_atr else ""
+                tech_lines.append(f"  • ATR (14): ${atr_val:.4f} ({atr_pct:.1f}% of price){atr_note}")
+
+            # Stochastic
+            stoch_val = _v("stoch")
+            stoch_meta = _meta("stoch")
+            if stoch_val is not None:
+                d_pct = stoch_meta.get("d_percent")
+                stoch_icon = "✅" if stoch_val < 20 else ("⚠️" if stoch_val > 80 else "–")
+                d_str = f" / %D: {d_pct:.1f}" if d_pct is not None else ""
+                stoch_sig = _sig("stoch")
+                tech_lines.append(f"  • Stoch %K: {stoch_val:.1f}{d_str} — {stoch_sig} {stoch_icon}")
+
+            # Bollinger Bands
+            bb_meta = _meta("bb")
+            if bb_meta:
+                bb_upper = bb_meta.get("upper")
+                bb_lower = bb_meta.get("lower")
+                if bb_upper and bb_lower and current_price:
+                    bb_width = bb_upper - bb_lower
+                    bb_pos_pct = ((current_price - bb_lower) / bb_width * 100) if bb_width else None
+                    if bb_pos_pct is not None:
+                        pos_str = f"{bb_pos_pct:.0f}% from lower"
+                        bb_icon = "✅" if bb_pos_pct < 20 else ("⚠️" if bb_pos_pct > 80 else "–")
+                        tech_lines.append(f"  • BB: ${bb_lower:.4f}–${bb_upper:.4f} | {pos_str} {bb_icon}")
+
+            # Regime Score
+            regime_val = _v("regime_score")
+            if regime_val is not None:
+                regime_sig = _sig("regime_score")
+                tech_lines.append(f"  • Regime Score: {regime_val:.2f} — {regime_sig}")
+
+        # ── News ─────────────────────────────────────────────────────────
+        news_lines = []
+        if news_sentiment is not None:
+            sent_icon = "📈" if news_sentiment >= 0.3 else ("📉" if news_sentiment <= -0.3 else "➡️")
+            sent_label = "Bullish" if news_sentiment >= 0.3 else ("Bearish" if news_sentiment <= -0.3 else "Neutral")
+            news_lines.append(f"  {sent_icon} Sentiment: {sent_label} ({news_sentiment:+.2f})")
+        if news_catalysts:
+            cats = ", ".join(news_catalysts[:3])
+            news_lines.append(f"  🗞 Catalysts: {cats}")
+
+        # ── Entry Rationale ───────────────────────────────────────────────
         reasons = "\n".join(f"  • {r}" for r in rationale) if rationale else "  • N/A"
 
-        message = (
-            f"⚡ *Trade About to Execute*\n"
-            f"\n"
-            f"*Symbol:* [{symbol}]({link})\n"
-            f"*Action:* {action_emoji}\n"
-            f"*Quantity:* {quantity:.4f} shares\n"
-            f"*Target Price:* {price_str}\n"
-            f"*Stop Loss:* {stop_str}\n"
-            f"*Confidence:* {conf_str}\n"
-            f"\n"
-            f"*Reason to Buy:*\n{reasons}"
-        )
+        # ── Assemble message ─────────────────────────────────────────────
+        lines = [
+            f"⚡ *Trade About to Execute*",
+            "",
+            f"*Symbol:* [{symbol}]({link})",
+            f"*Action:* {action_emoji}",
+            f"*Quantity:* {quantity:.4f} shares",
+            f"*Entry Price:* {price_str}",
+            f"*Stop Loss:* {stop_str}",
+            f"*Confidence:* {conf_str}",
+        ]
+
+        if tech_lines:
+            lines += ["", "📊 *Technical Indicators:*"] + tech_lines
+
+        if news_lines:
+            lines += ["", "📰 *News:*"] + news_lines
+
+        lines += ["", "📋 *Reason to Buy:*", reasons]
+
+        message = "\n".join(lines)
 
         try:
             kwargs = {

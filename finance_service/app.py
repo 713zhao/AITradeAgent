@@ -250,6 +250,9 @@ class MainOrchestratorAgent:
                 # Send pre-execution Telegram notification before placing the trade
                 if self.telegram_agent and self.telegram_agent.enabled:
                     try:
+                        _snap = analysis_report.payload.get("indicators_snapshot") if analysis_report else None
+                        _news_score = news_report.payload.get("sentiment_score") if (news_report and news_report.status == "success") else None
+                        _news_cats = news_report.payload.get("catalysts") if (news_report and news_report.status == "success") else None
                         await self.telegram_agent.send_pre_execution_notification(
                             symbol=proposal.get("symbol", "?"),
                             action=proposal.get("action", "BUY"),
@@ -258,6 +261,9 @@ class MainOrchestratorAgent:
                             stop_loss_price=proposal.get("stop_loss_price"),
                             confidence=proposal.get("confidence", 0.0),
                             rationale=proposal.get("rationale"),
+                            indicators_snapshot=_snap,
+                            news_sentiment=_news_score,
+                            news_catalysts=_news_cats,
                         )
                     except Exception as _tg_err:
                         logger.warning(f"Pre-execution Telegram notification failed: {_tg_err}")

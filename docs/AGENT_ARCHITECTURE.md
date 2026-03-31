@@ -684,6 +684,7 @@ Portfolio equity: $101,540
 | `/portfolio` | Publishes `GET_PORTFOLIO_STATE` → orchestrator replies with holdings + equity |
 
 **Outbound messages (sent automatically):**
+- **Pre-execution alerts** — sent by orchestrator before every approved trade; includes symbol with Yahoo Finance link, quantity, entry price, stop-loss, confidence, all technical indicator values (RSI, MACD, SMA20/50/200, ATR, Stochastic, Bollinger Bands, Regime Score), news sentiment, and entry rationale
 - Market scan summaries (after `MARKET_SCANNED`)
 - Trade confirmations (via `HealthAgent` on `TRADE_EXECUTED`)
 - Daily P&L report (via `DAILY_REPORT_TRIGGER`)
@@ -731,6 +732,8 @@ Step 6:  Orchestrator handles TRADE_PROPOSAL_GENERATED
          └─> RiskAgent emits: RISK_CHECK_COMPLETE  or  APPROVAL_REQUIRED
 
 Step 7a: [auto_execute = true + RISK_CHECK_COMPLETE]
+         └─> TelegramAgent.send_pre_execution_notification() ← symbol, qty, price,
+             stop-loss, confidence, all technical indicators, news sentiment, rationale
          └─> Calls: ExecutionAgent.run(approval_report)
          └─> ExecutionAgent emits: TRADE_EXECUTED
              → payload: {symbol, action, quantity, filled_price, order_id}

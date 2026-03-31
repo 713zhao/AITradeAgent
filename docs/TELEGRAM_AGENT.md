@@ -83,6 +83,60 @@ Handlers publish events to the EventBus; the orchestrator routes replies back to
 - If `self.thread_id` is set (from `TELEGRAM_MESSAGE_THREAD_ID`), includes `message_thread_id` parameter.
 - Logs success or error.
 
+### `send_pre_execution_notification(...)`
+
+Sent by the orchestrator **before** `ExecutionAgent.run()` is called, so the user can see what is about to be traded with full technical context.
+
+**Signature:**
+```python
+await telegram_agent.send_pre_execution_notification(
+    symbol="NVDA",
+    action="BUY",
+    quantity=18.0,
+    target_price=128.50,
+    stop_loss_price=122.07,
+    confidence=0.86,
+    rationale=["Entry rules triggered: [sma20_trend]"],
+    indicators_snapshot=analysis_report.payload["indicators_snapshot"],
+    news_sentiment=0.72,
+    news_catalysts=["analyst upgrade", "earnings beat"],
+)
+```
+
+**Example output:**
+```
+⚡ Trade About to Execute
+
+Symbol: NVDA (link)
+Action: 🟢 BUY
+Quantity: 18.0000 shares
+Entry Price: $128.5000
+Stop Loss: $122.0700 (-5.0%)
+Confidence: 86.0%
+
+📊 Technical Indicators:
+  • RSI (14): 32.4 — oversold ✅
+  • MACD: 1.2400 | Signal: 0.8700 | Hist: +0.3700 📈
+  • SMA20: $125.2000 → Price +2.6% ✅
+  • SMA50: $152.1000 → Price -15.6% ⚠️
+  • SMA200: $140.3000 → Price -8.4% ⚠️
+  • ATR (14): $4.8200 (3.8% of price) (stop = 2×ATR = $122.0700)
+  • Stoch %K: 18.5 / %D: 22.1 — oversold ✅
+  • BB: $122.4000–$148.2000 | 10% from lower ✅
+  • Regime Score: 0.62 — bullish
+
+📰 News:
+  📈 Sentiment: Bullish (+0.72)
+  🗞 Catalysts: analyst upgrade, earnings beat
+
+📋 Reason to Buy:
+  • Entry rules triggered: [sma20_trend]
+```
+
+- `indicators_snapshot` is the `IndicatorsSnapshot` object from `AnalysisAgent` — all fields are optional; the method gracefully skips any missing indicator.
+- `news_sentiment` is the float score from `NewsAgent` payload (`sentiment_score`).
+- `news_catalysts` is the list from `NewsAgent` payload (`catalysts`).
+
 ### `send_scheduled_report(report_data: Dict, chat_id: Optional[str]=None)`
 
 Used by orchestrator for scheduled summaries (daily report). Formats as Markdown.
