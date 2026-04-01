@@ -46,6 +46,14 @@ class MarketScannerAgent(Agent):
             os.path.dirname(__file__), "..", "storage", "watchlist.json"
         )
         self._load_watchlist()
+        # DEBUG: Log config sections and universe
+        all_sections = list(self.config._config.keys()) if hasattr(self.config, '_config') else 'no _config'
+        finance_section = self.config.get("finance", None, default=None)
+        if finance_section:
+            universe_data = finance_section.get("universe") if isinstance(finance_section, dict) else None
+        else:
+            universe_data = None
+        logger.info(f"[INIT DEBUG] config sections: {all_sections}, finance_section keys: {list(finance_section.keys()) if isinstance(finance_section, dict) else 'not dict'}, universe: {universe_data}")
         logger.info(f"MarketScannerAgent initialized (whitelist_enabled={self._whitelist_enabled})")
 
     # ─── Public accessors ───────────────────────────────────────────
@@ -67,6 +75,7 @@ class MarketScannerAgent(Agent):
     def get_available_themes(self) -> List[str]:
         """Get all available theme names."""
         themes = self.config.get("finance", "universe/themes", default=[])
+        logger.info(f"[DBG THEMES] themes={themes}, type={type(themes)}")
         return [t.get("name", "") for t in themes if isinstance(t, dict)]
 
     def get_watchlist(self) -> List[Dict[str, Any]]:
@@ -133,6 +142,9 @@ class MarketScannerAgent(Agent):
         Returns:
             AgentReport with ranked symbols and ratings
         """
+        # DEBUG: Log config values early
+        raw_themes = self.config.get("finance", "universe/themes", default=[])
+        logger.info(f"[RUN DEBUG] raw_themes count: {len(raw_themes) if isinstance(raw_themes, list) else 'not list'}, include_themes={include_themes}")
         top_n = self.config.get("finance", "scanner/discovery_top_n_per_theme", default=limit)
         logger.info(f"[Discovery] Running full scan: themes={include_themes}, top_n={top_n}, min_liq={min_liquidity}")
         flow("MarketScanner", "START", f"full scan: {len(self.get_available_themes())} themes, top_n={top_n}")

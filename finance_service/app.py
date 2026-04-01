@@ -70,8 +70,9 @@ class MainOrchestratorAgent:
         if event_bus is None:
             event_bus = get_event_bus()
         logger.info("Starting orchestrator initialization...")
-        # Initialize YAML config engine (reads config/*.yaml)
-        config_engine = YAMLConfigEngine(config_dir="config")
+        # Initialize YAML config engine (reads config/*.yaml) with absolute path
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_engine = YAMLConfigEngine(config_dir=os.path.join(base_dir, "config"))
         # Build a simple config dict for agents that expect dict (Telegram, Execution, Portfolio, Risk, Scheduler)
         # Populate with values from YAML where needed.
         simple_config: Dict[str, Any] = {

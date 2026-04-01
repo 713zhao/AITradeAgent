@@ -1,9 +1,9 @@
 risk:
-  max_position_size_pct: 1.5
+  max_position_size_pct: 10
   max_exposure_pct: 80
   max_daily_loss_pct: 2.0
   max_drawdown_pct: 15.0
-  default_risk_budget_pct: 1.5
+  default_risk_budget_pct: 10
   stop_loss_default_pct: 1.5
   take_profit_default_pct: 3.0
   max_concurrent_positions: 25
