@@ -4,11 +4,15 @@ from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass, asdict
 import pandas as pd
+import numpy as np
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
 from finance_service.indicators.models import IndicatorsSnapshot, SignalType, IndicatorResult
+# Phase 3: Portfolio risk and position sizing
+from finance_service.risk.position_sizing import PositionSizerFactory, PositionSizingContext
+from finance_service.risk.portfolio_risk import PortfolioRisk
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +210,19 @@ class StrategyAgent(Agent):
         self._current_regime: Optional[Dict[str, Any]] = None
         self._subscribe_to_regime()
         logger.info(f"StrategyAgent initialized with {len(rules_config)} rules, cooling={self.position_cooling_hours}h")
+        
+        # Position Sizer (Phase 3)
+        try:
+            sizing_method = self.config_engine.get("finance", "strategy/position_sizing_method", default="equal_risk")
+            sizer_kwargs = {}
+            if sizing_method == "volatility_adjusted":
+                sizer_kwargs['lookback_days'] = 20
+                sizer_kwargs['target_volatility'] = 0.20
+            self.position_sizer = PositionSizerFactory.create(sizing_method, **sizer_kwargs)
+            logger.info(f"Position sizer: {sizing_method}")
+        except Exception as e:
+            logger.warning(f"Position sizer init failed: {e}. Using equal_risk.")
+            self.position_sizer = PositionSizerFactory.create("equal_risk")
 
     def _subscribe_to_regime(self):
         """Subscribe to regime update events"""
@@ -242,10 +259,6 @@ class StrategyAgent(Agent):
                 return base_confidence  # ignore weak signals
         else:
             return base_confidence
-        # Regime tracking
-        self._current_regime: Optional[Dict[str, Any]] = None
-        self._subscribe_to_regime()
-        logger.info(f"StrategyAgent initialized with {len(rules_config)} rules, cooling={self.position_cooling_hours}h")
 
     def _load_rules_from_config(self) -> List[Dict]:
         """Load trading rules from YAML configuration."""
@@ -414,27 +427,38 @@ class StrategyAgent(Agent):
                 if stop_loss_price >= current_price:
                     stop_loss_price = round(current_price * 0.95, 2)  # 5% below as fallback
                 
-                # Position sizing: risk-based, respecting existing exposure
-                risk_per_share = current_price - stop_loss_price
-                if risk_per_share <= 0:
-                    logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share}. Using default 1 share.")
-                    quantity = 1
-                else:
-                    # Maximum loss amount we're willing to take for this trade
-                    risk_budget_usd = portfolio_equity * (self.risk_budget_pct / 100.0)
-                    desired_quantity = int(risk_budget_usd / risk_per_share)
-                    desired_quantity = max(1, desired_quantity)
-                    
-                    # --- FIX 2: Adjust quantity to respect max position size ---
-                    # Compute total position after trade
-                    total_qty = existing_qty + desired_quantity
-                    # Max allowed qty based on % of portfolio
+                # Position sizing via configured sizer (Phase 3)
+                try:
+                    risk_budget_pct = self.config_engine.get("finance", "strategy/risk_per_trade_pct", 1.0) / 100.0
+                    # Build minimal PortfolioRisk context (no vol/corr for now)
+                    portfolio_risk = PortfolioRisk(
+                        total_equity=portfolio_equity,
+                        total_position_value=0,
+                        cash=0,
+                        positions={},  # sizers currently don't need this
+                        portfolio_volatility_annual=0,
+                        var_95=0,
+                        expected_shortfall_95=0,
+                        sector_exposure={},
+                        max_single_position_pct=0,
+                        herfindahl_index=0,
+                    )
+                    context = PositionSizingContext(
+                        portfolio_risk=portfolio_risk,
+                        signal={'action': 'BUY', 'confidence': confidence, 'price': current_price},
+                        risk_budget_pct=risk_budget_pct,
+                        current_equity=portfolio_equity,
+                        stop_loss_price=stop_loss_price,
+                    )
+                    desired_total_shares = self.position_sizer.calculate(context)
+                    desired_new_shares = max(0, desired_total_shares - existing_qty)
+                    # Apply max position size limit
                     max_allowed_value = portfolio_equity * (max_position_size_pct / 100.0)
-                    max_allowed_qty = int(max_allowed_value / current_price)
-                    if total_qty > max_allowed_qty:
-                        quantity = max(0, max_allowed_qty - existing_qty)
+                    max_allowed_shares = int(max_allowed_value / current_price)
+                    if desired_new_shares > max_allowed_shares:
+                        quantity = max_allowed_shares
                         if quantity == 0:
-                            logger.info(f"Position size limit: existing {existing_qty} shares, max allowed {max_allowed_qty}. Skipping entry.")
+                            logger.info(f"Position size limit: max {max_allowed_shares} shares. Skipping entry.")
                             return AgentReport(
                                 agent_id=self.agent_id,
                                 status="success",
@@ -442,9 +466,13 @@ class StrategyAgent(Agent):
                                 payload={"proposals": []}
                             )
                         else:
-                            logger.info(f"Reduced quantity from {desired_quantity} to {quantity} due to position size limit (existing: {existing_qty})")
+                            logger.info(f"Reduced quantity to {quantity} due to position size limit")
                     else:
-                        quantity = desired_quantity
+                        quantity = desired_new_shares
+                    quantity = max(1, quantity) if quantity > 0 else 0
+                except Exception as e:
+                    logger.error(f"Position sizer error: {e}. Using fallback 1 share.")
+                    quantity = 1
                 
                 proposal = TradeProposal(
                     symbol=symbol,
