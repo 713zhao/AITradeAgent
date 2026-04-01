@@ -116,6 +116,10 @@ class MainOrchestratorAgent:
         self.news_agent = NewsAgent(config_engine)
         # FundamentalsAgent: fetch fundamental metrics (Phase 4)
         self.fundamentals_agent = FundamentalsAgent(config_engine)
+        # OptionsDataAgent: fetch options chains (Phase 5)
+        self.options_data_agent = OptionsDataAgent(config_engine)
+        # OptionsStrategyAgent: generate options-enhanced proposals (Phase 5)
+        self.options_strategy_agent = OptionsStrategyAgent(config_engine)
         # RegimeAgent: optional LLM market regime classifier (Phase 1)
         self.regime_agent = RegimeAgent(config_engine)
         # AnalysisAgent: uses default indicator periods; no config needed
@@ -269,11 +273,42 @@ class MainOrchestratorAgent:
             if strategy_report.status != "success":
                 logger.warning(f"Strategy failed for {symbol}: {strategy_report.message}")
                 continue
-            # Risk
-            proposals = strategy_report.payload.get("proposals", [])
-            if not proposals:
+            
+            # --- Phase 5: Options Strategy Enhancement ---
+            base_proposals = strategy_report.payload.get("proposals", [])
+            final_proposals = base_proposals  # default to base
+            
+            if self.config_engine.get("finance", "options/enabled", default=False) and base_proposals:
+                try:
+                    # Get current portfolio position (if any)
+                    position = None
+                    if self.portfolio_agent:
+                        portfolio_report = await self.portfolio_agent.run(event_type=Events.GET_PORTFOLIO_STATE, payload={})
+                        if portfolio_report.status == "success":
+                            for pos in portfolio_report.payload.get("positions", []):
+                                if pos.get("symbol") == symbol:
+                                    position = pos
+                                    break
+                    # Fetch options chain
+                    options_chain_report = await self.options_data_agent.run({"symbol": symbol})
+                    if options_chain_report.status == "success":
+                        # Generate options-enhanced proposals
+                        options_payload = await self.options_strategy_agent.run({
+                            "base_proposal": base_proposals[0],
+                            "options_chain": options_chain_report.payload["options_chain"],
+                            "portfolio_position": position,
+                        })
+                        if options_payload.status == "success":
+                            options_proposals = options_payload.payload.get("options_proposals", [])
+                            if options_proposals:
+                                final_proposals = options_proposals
+                                logger.info(f"Options strategy generated {len(options_proposals)} proposal(s) for {symbol}")
+                except Exception as e:
+                    logger.warning(f"Options pipeline failed for {symbol}: {e}")
+            
+            if not final_proposals:
                 continue
-            proposal = proposals[0]  # best proposal
+            proposal = final_proposals[0]  # best proposal
             risk_report = await self.risk_agent.run(proposal)
             if risk_report.payload.get("decision") == "APPROVED":
                 # Send pre-execution Telegram notification before placing the trade

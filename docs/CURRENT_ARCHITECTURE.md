@@ -476,7 +476,7 @@ End of Day (Market Close):
 
 | Feature | Status |
 |---------|--------|
-| Active agents | 14 core + RegimeAgent (optional, disabled by default) |
+| Active agents | 15 core + RegimeAgent (optional, disabled by default) |
 | LLM abstraction layer | ✅ Implemented (OpenRouter, OpenAI, Anthropic, Ollama) |
 | Market Regime Classification | ✅ Implemented (LLM + rule-based fallback) |
 | Config management | ✅ Single YAML (`config/config.yaml`) with hot-reload |
@@ -486,14 +486,15 @@ End of Day (Market Close):
 | Backtesting engine | ✅ Vectorized engine with walk-forward analysis |
 | Fundamentals integration | ✅ FundamentalsAgent with OpenBB, composite scores, cached |
 | News analysis | ✅ VADER baseline + optional LLM narrative extraction |
+| Options data & strategies | ✅ OptionsDataAgent (chains, IV), OptionsStrategyAgent (CC, CSP, directional) |
 | Symbol universe | 100 symbols across 5 themes |
 | Scanning | 3-tier: discovery (daily) + price monitor (15min) + exit (5min) |
 | Ranking | 5-factor composite scoring (0-1) with real data |
 | Exit management | Reactive (stops/profits) + strategic (re-analysis) |
 | Risk checks | Portfolio exposure, position size, drawdown, duplicates |
-| Data providers | Yahoo Finance (yfinance) + OpenBB (fundamentals) |
+| Data providers | Yahoo Finance (yfinance) + OpenBB (fundamentals, options) |
 | Auto-execution | Enabled (confidence ≥ 0.8) |
-| Position model | `entry_price` alias (compatible with broker-style code) |
+| Position model | Extended for options (option_type, strike, expiration, Greeks) |
 | IndicatorsSnapshot | Dict-like `.get()` for compatibility |
 | Event bus timeout | 300s for long-running scans |
 | API endpoints | `/health`, `/portfolio/state`, `/portfolio/performance`, `/api/dashboard/*` |
@@ -520,6 +521,7 @@ End of Day (Market Close):
 | 2026-04-01 | Portfolio risk & position sizing (Phase 3) | PortfolioRisk calculator, position sizer factory (EqualRisk, VolatilityAdjusted, EqualWeight) integrated into StrategyAgent. |
 | 2026-04-01 | Backtesting engine (Phase 2) | Vectorized backtest engine, walk-forward analysis, PDF reporting. |
 | 2026-04-01 | Fundamentals integration (Phase 4) | FundamentalsAgent (OpenBB) fetches PE/PB/ROE/growth, computes value/quality/growth scores. NewsAgent supports optional LLM sentiment with narratives. StrategyAgent boosts confidence based on fundamental scores. |
+| 2026-04-01 | Options support (Phase 5) | OptionsDataAgent fetches chains, IV, Greeks. OptionsStrategyAgent generates covered calls, cash-secured puts, directional calls. Position model extended for options. |
 
 ---
 

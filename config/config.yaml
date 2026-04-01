@@ -56,6 +56,14 @@ finance:
   execution:
     broker: "paper"  # paper, alpaca, tiger
     broker_config: {}
+  
+  # Options Trading (Phase 5)
+  options:
+    enabled: false
+    strategies: ["covered_call", "csp"]  # covered_call, csp, directional
+    directional_confidence_threshold: 0.85
+    max_delta_per_contract: 100  # delta limit per option position
+    allow_early_exercise: false  # handle assignment risk
 
   scheduling:
     market_scan_interval_minutes: 15
