@@ -7,7 +7,7 @@ Sends alerts if drawdown exceeds thresholds or system issues detected.
 import logging
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events
 from finance_service.agents.portfolio_agent import PortfolioAgent
@@ -222,8 +222,7 @@ class HealthAgent(Agent):
         lines = [f"🚨 *{title}*"]
         for d in details:
             lines.append(f"  • {d}")
-        message = "
-".join(lines)
+        message = "\n".join(lines)
         try:
             await self.telegram_agent.send_message(chat_id=chat_id, message=message)
             logger.info(f"Sent error alert: {title}")
