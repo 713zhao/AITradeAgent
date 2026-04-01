@@ -24,6 +24,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Configure agent flow debug logger (enabled when AGENT_DEBUG=1)
+from finance_service.core.flow_logger import configure as configure_flow_logger
+configure_flow_logger()
+
 async def main():
     """Initialize orchestrator and start ASGI server."""
     from finance_service.app import startup_orchestrator, create_app

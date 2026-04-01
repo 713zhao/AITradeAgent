@@ -1,6 +1,7 @@
 """Market Scanner - 3-Tier scanning: Discovery (daily), Price Monitor (15min), Exit Monitor (5min)"""
 import json
 import logging
+from finance_service.core.flow_logger import flow
 import asyncio
 import os
 from dataclasses import asdict
@@ -134,6 +135,7 @@ class MarketScannerAgent(Agent):
         """
         top_n = self.config.get("finance", "scanner/discovery_top_n_per_theme", default=limit)
         logger.info(f"[Discovery] Running full scan: themes={include_themes}, top_n={top_n}, min_liq={min_liquidity}")
+        flow("MarketScanner", "START", f"full scan: {len(self.get_available_themes())} themes, top_n={top_n}")
 
         try:
             available_themes = self.get_available_themes()
@@ -189,6 +191,7 @@ class MarketScannerAgent(Agent):
             }
             logger.info(message)
 
+            flow("MarketScanner", "DONE", f"{len(flat_symbols)} symbols found from {len(themes_to_scan)} themes")
             report = AgentReport(
                 agent_id=self.agent_id,
                 status="opportunity",

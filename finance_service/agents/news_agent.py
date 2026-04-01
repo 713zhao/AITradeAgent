@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 import os
 import sqlite3
 import json
@@ -136,12 +137,14 @@ class NewsAgent(Agent):
                 message=f"News (cached) for {symbol}: {cached.get('news_count',0)} articles",
                 payload=cached,
             )
+            flow("NewsAgent", "DONE", f"{symbol} → sentiment={cached.get('sentiment_score',0):+.2f} [{cached.get('sentiment_label','?')}] [CACHE]")
             await self.event_bus.publish(Event(
                 event_type=Events.NEWS_FETCH_COMPLETE,
                 data=asdict(report),
             ))
             return report
 
+        flow("NewsAgent", "START", f"{symbol} [fresh fetch]")
         logger.info(f"NewsAgent: Fetching fresh news for {symbol}")
 
         articles = await self._fetch_news(symbol)
@@ -171,6 +174,7 @@ class NewsAgent(Agent):
             f"sentiment={sentiment_score:+.2f} ({sentiment_label}), "
             f"catalysts={catalysts}"
         )
+        flow("NewsAgent", "DONE", f"{symbol} → sentiment={sentiment_score:+.2f} [{sentiment_label}] {len(articles)} articles [FRESH]")
         logger.info(message)
 
         report = AgentReport(

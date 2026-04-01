@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 from typing import Dict, Any, Optional, List, Tuple, Union, Set
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
@@ -349,6 +350,7 @@ class RiskAgent(Agent):
         Supports both single proposal (dict) and AgentReport payload with "proposal" or "proposals".
         """
         logger.info("RiskAgent run: Evaluating trade proposal(s) for risk.")
+        flow("RiskAgent", "START", "evaluating proposals")
 
         try:
             # Determine payload from input
@@ -439,6 +441,10 @@ class RiskAgent(Agent):
             message = f"Risk assessment complete for {len(results)} proposal(s). Approval Required: {any_approval_required}"
             # Determine decision: auto-execute only if all risk checks passed and no approval required
             decision = "APPROVED" if (all_passed and not any_approval_required) else "REJECTED"
+            _sym = proposals_data[0].get("symbol","?") if proposals_data else "?"
+            _qty = proposals_data[0].get("quantity","?") if proposals_data else "?"
+            _price = proposals_data[0].get("target_price","?") if proposals_data else "?"
+            flow("RiskAgent", "DONE", f"{_sym} → {decision} qty={_qty} @ ${_price}")
             payload_out = {
                 "risk_assessments": [r.to_dict() for r in results],
                 "trade_proposals": [proposal_data for proposal_data in proposals_data],

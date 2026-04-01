@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import asyncio
@@ -62,6 +63,7 @@ class PortfolioAgent(Agent):
 
     async def handle_trade_executed(self, trade_info: Dict[str, Any]) -> AgentReport:
         """Handles TRADE_EXECUTED event to update portfolio positions and trades."""
+        flow("PortfolioAgent", "UPDATE", f"received trade: {trade_info.get('symbol',trade_info.get('execution_result',{}).get('symbol','?')) if isinstance(trade_info,dict) else '?'}")
         logger.info(f"[PORTFOLIO DEBUG] handle_trade_executed called with trade_info: {trade_info}")
         # Unwrap AgentReport wrapper: {agent_id, status, payload: {execution_result: {...}}}
         if "agent_id" in trade_info and "payload" in trade_info:
@@ -139,6 +141,7 @@ class PortfolioAgent(Agent):
             self.repository.update_trade_status(trade.trade_id, TradeStatus.FILLED, filled_quantity=quantity, executed_by="system")
             
             self.updated_at = datetime.utcnow()
+            flow("PortfolioAgent", "DONE", f"{symbol} {side} {quantity} @ ${price}")
             logger.info(f"Portfolio updated after {side} trade: {trade_id}")
             return AgentReport(agent_id=self.agent_id, status="success", message=f"Trade {trade_id} processed", payload=trade.to_dict())
         except Exception as e:
@@ -278,6 +281,7 @@ class PortfolioAgent(Agent):
 
     async def get_detailed_portfolio_state(self, chat_id: Optional[str] = None) -> AgentReport:
         """Retrieves detailed portfolio state and can publish it or return in a report."""
+        flow("PortfolioAgent", "CHECK", "generating portfolio state")
         logger.info("PortfolioAgent generating detailed portfolio state.")
         # Refresh timestamp to indicate state generation time
         self.updated_at = datetime.utcnow()

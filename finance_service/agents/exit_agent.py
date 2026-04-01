@@ -1,5 +1,6 @@
 """Exit Agent - Monitors positions for stop loss, take profit, and strategic re-analysis."""
 import logging
+from finance_service.core.flow_logger import flow
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -53,6 +54,7 @@ class ExitAgent(Agent):
         degraded_positions = []
         
         # Mode 1: Check for reactive exits (stop-loss / take-profit)
+        flow("ExitAgent", "START", f"checking {len(positions)} position(s) for exits")
         logger.info(f"ExitAgent: Checking {len(positions)} position(s) for reactive exits...")
         exits = await self._check_reactive_exits(positions)
         
@@ -71,6 +73,7 @@ class ExitAgent(Agent):
             "timestamp": datetime.utcnow().isoformat()
         }
         
+        flow("ExitAgent", "DONE", message)
         logger.info(message)
         return AgentReport(agent_id=self.agent_id, status="success", message=message, payload=payload)
 

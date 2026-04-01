@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 from datetime import datetime
 from typing import Dict, Any, Optional
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -31,6 +32,7 @@ class ExecutionAgent(Agent):
         - any_approval_required: bool
         """
         logger.info("ExecutionAgent run: Executing approved trade proposal.")
+        flow("ExecutionAgent", "START", "executing approved proposal")
 
         try:
             # Extract the first trade proposal (single-proposal flow)
@@ -55,6 +57,7 @@ class ExecutionAgent(Agent):
                 "timestamp": datetime.utcnow().isoformat()
             }
 
+            flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={trade_proposal.quantity} @ ${trade_proposal.target_price} → {execution_result['status']}")
             message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
             payload = {"execution_result": execution_result}
 

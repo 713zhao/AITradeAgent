@@ -5,6 +5,7 @@ Sends alerts if drawdown exceeds thresholds or system issues detected.
 """
 
 import logging
+from finance_service.core.flow_logger import flow
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
@@ -92,6 +93,7 @@ class HealthAgent(Agent):
     
     async def perform_health_check(self) -> AgentReport:
         """Perform portfolio and system health checks."""
+        flow("HealthAgent", "CHECK", "performing health check")
         logger.info("HealthAgent performing health check")
         
         # Get portfolio agent from orchestrator (injected)
@@ -178,6 +180,7 @@ class HealthAgent(Agent):
             "checked_at": now.isoformat()
         }
         
+        flow("HealthAgent", "DONE", f"status={status} drawdown={drawdown:.1f}% equity=${total_equity:,.0f}")
         return AgentReport(agent_id=self.agent_id, status="success", message="Health check completed", payload=health_status)
     
     async def get_health_status(self) -> Dict[str, Any]:

@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 import pandas as pd
 import numpy as np
 from typing import Dict, Tuple, Optional, Any
@@ -47,6 +48,7 @@ class AnalysisAgent(Agent):
         Calculates all configured indicators for a given symbol using a DataFrame reconstructed from data_payload.
         """
         logger.info(f"AnalysisAgent run: Calculating indicators for {symbol}")
+        flow("AnalysisAgent", "START", f"{symbol}")
         
         try:
             # data_payload is the full Event.data from DATA_FETCH_COMPLETE
@@ -77,6 +79,7 @@ class AnalysisAgent(Agent):
             
             snapshot = self._calculate_all(df, symbol, fundamentals=fundamentals)
             message = f"Indicators calculated for {symbol} at {snapshot.timestamp.isoformat()}"
+            flow("AnalysisAgent", "DONE", f"{symbol} → {len(snapshot.indicators)} indicators")
             
             # Publish ANALYSIS_COMPLETE event with snapshot wrapped in dict (required by EventBus)
             # Use key 'indicators_snapshot' to match StrategyAgent expectations

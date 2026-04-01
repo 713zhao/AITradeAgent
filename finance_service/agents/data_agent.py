@@ -1,6 +1,7 @@
 """Data Manager - Orchestrates data fetching, caching, and universe management"""
 import asyncio
 import logging
+from finance_service.core.flow_logger import flow
 from typing import Dict, List, Optional, Any
 import pandas as pd
 from datetime import datetime, timedelta
@@ -320,6 +321,7 @@ class DataAgent(Agent):
     ) -> Optional[pd.DataFrame]:
         """Fetches and caches data for a single symbol."""
         logger.info(f"[_fetch_data_for_symbol] symbol={symbol}, start_date={start_date}, end_date={end_date}, interval={interval}")
+        flow("DataAgent", "START", f"fetch {symbol} [{interval}]")
         
         # Set default date range: ~400 calendar days to ensure 200+ trading days
         if start_date is None or end_date is None:
@@ -335,6 +337,7 @@ class DataAgent(Agent):
             cached_df = self.cache.retrieve(cache_key)
             if cached_df is not None and not cached_df.empty:
                 logger.debug(f"[Cache Hit] {symbol} data from cache.")
+                flow("DataAgent", "DONE", f"{symbol} → {len(cached_df)} rows [CACHE HIT]")
                 return cached_df
 
         logger.debug(f"[Cache Miss] Fetching {symbol} data from provider.")
@@ -408,6 +411,7 @@ class DataAgent(Agent):
             return df
         else:
             logger.warning(f"No data fetched for {symbol} or DataFrame is empty.")
+            flow("DataAgent", "WARN", f"{symbol} → no data returned")
             return None
 
     async def fetch_universe(

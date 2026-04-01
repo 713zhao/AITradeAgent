@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from enum import Enum
@@ -313,6 +314,7 @@ class StrategyAgent(Agent):
         Returns:
             AgentReport with proposals list in payload
         """
+        flow("StrategyAgent", "START", f"{symbol or '?'}")
         try:
             # Get indicator snapshot from analysis report
             indicators_snapshot = analysis_payload.get("indicators_snapshot")
@@ -435,6 +437,7 @@ class StrategyAgent(Agent):
             # Note: Exits are handled by PortfolioAgent when rules trigger; strategy only generates BUY proposals
             
             if proposals:
+                flow("StrategyAgent", "DONE", f"{symbol} → BUY conf={confidence:.2f} qty={proposals[0].get('quantity','?')} rules={len(entry_rules)}/{len(self.rule_strategy.entry_rules)}")
                 logger.info(f"Strategy generated {len(proposals)} trade proposal(s)")
                 return AgentReport(
                     agent_id=self.agent_id,
@@ -444,6 +447,7 @@ class StrategyAgent(Agent):
                 )
             else:
                 # No proposals generated - this is normal, not an error
+                flow("StrategyAgent", "SKIP", f"{symbol or '?'} → no signal (WAIT)")
                 return AgentReport(
                     agent_id=self.agent_id,
                     status="success",
