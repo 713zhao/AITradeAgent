@@ -1,6 +1,6 @@
 # AITradeAgent - Current Production Architecture
 
-**Version:** 2.1  
+**Version:** 2.1
 **Last Updated:** 2026-03-31 (Architecture as of v2.1)
 **Improvement Plan:** See [IMPROVEMENT_PLAN_2026Q2.md](./IMPROVEMENT_PLAN_2026Q2.md) for Q2 2026 roadmap
 
@@ -8,12 +8,19 @@
 
 ## Quick Summary
 
-**Currently Running:** 13 active agents wired into the orchestrator
+**Currently Running:** 13 active agents + 1 optional (RegimeAgent)  
 **3-Tier Architecture:**
 - **Tier 1 (Daily):** Discovery Scan → 100 symbols → rank → top 10/theme → full pipeline
 - **Tier 2 (15 min):** Lightweight price refresh for watchlist + held positions
 - **Tier 3 (5 min):** ExitAgent monitors held positions (reactive + strategic)
 **Interface:** Telegram bot for commands and notifications
+
+**Recent Enhancements (2026-04-01):**
+- ✅ LLM abstraction layer with provider abstraction (OpenRouter, OpenAI, Anthropic, Ollama)
+- ✅ RegimeAgent (optional) for market regime classification
+- ✅ Config YAML overhaul with hot-reload support
+- ✅ StrategyAgent now adjusts confidence based on regime
+- ✅ All LLM features disabled by default (backward compatible)
 
 **Recent Resolutions (2026-03-30/31):**
 - ✅ Position corruption: added `entry_price` alias to Position model
@@ -43,7 +50,7 @@
 | 10 | PortfolioAgent | ✅ Active | Holdings tracking + P&L calculation |
 | 11 | LearningAgent | ✅ Active | Trade outcome analysis + recommendations |
 | 12 | HealthAgent | ✅ Active | Monitor system health + Telegram messages |
-| — | TelegramAgent | ✅ Active | User interface + notifications |
+| - | TelegramAgent | ✅ Active | User interface + notifications |
 | 13 | ExitAgent | ✅ Active | Reactive exits + strategic re-analysis (every 5 min) |
 
 ---
@@ -101,7 +108,7 @@ Monitoring Loop (Every 5 min):
 ---
 
 ### 1. MainOrchestratorAgent
-**File:** `app.py` (lines ~50–450)  
+**File:** `app.py` (lines ~50-450)
 **Status:** ✅ Fully operational
 
 Central event coordinator. Subscribes to all events and routes work to appropriate agents.
@@ -116,34 +123,34 @@ Central event coordinator. Subscribes to all events and routes work to appropria
 ---
 
 ### 2. SchedulerAgent
-**File:** `scheduler_agent.py`  
+**File:** `scheduler_agent.py`
 **Status:** ✅ Active, background loop
 
 Fires periodic triggers throughout the day.
 
 **Currently emits (3-tier scheduling):**
-- `MARKET_SCAN_TRIGGER` — daily (Tier 1: full discovery scan)
-- `PRICE_MONITOR_TRIGGER` — every 15 min (Tier 2: lightweight price refresh)
-- `EXIT_CHECK_TRIGGER` — every 5 min (Tier 3: exit monitoring)
-- `DATA_REFRESH_TRIGGER` — every 30 min (general data warming)
-- `DAILY_REPORT_TRIGGER` — end-of-day summary
-- `SCHEDULE` — every 4 hours (health check)
+- `MARKET_SCAN_TRIGGER` - daily (Tier 1: full discovery scan)
+- `PRICE_MONITOR_TRIGGER` - every 15 min (Tier 2: lightweight price refresh)
+- `EXIT_CHECK_TRIGGER` - every 5 min (Tier 3: exit monitoring)
+- `DATA_REFRESH_TRIGGER` - every 30 min (general data warming)
+- `DAILY_REPORT_TRIGGER` - end-of-day summary
+- `SCHEDULE` - every 4 hours (health check)
 
 ---
 
 ### 3. MarketScannerAgent (3-Tier Architecture)
-**File:** `market_scanner_agent.py`  
-**Status:** ✅ Operational — 3-tier scanning
+**File:** `market_scanner_agent.py`
+**Status:** ✅ Operational - 3-tier scanning
 
 Discovers and monitors symbols using a 3-tier approach:
 
-**Tier 1 — Discovery (`run()`):**
+**Tier 1 - Discovery (`run()`):**
 - Scans 100 symbols across 5 themes (20/theme: AI, Semiconductor, Cloud, MegaCap, HK)
 - 5-factor composite ranking: Technical 30% + Momentum 20% + Value 20% + Trend 20% + Liquidity 10%
 - Selects top 10 per theme → builds watchlist with ratings
 - Publishes `MARKET_SCANNED` with `rated_symbols` payload
 
-**Tier 2 — Price Monitor (`refresh_watchlist_prices()`):**
+**Tier 2 - Price Monitor (`refresh_watchlist_prices()`):**
 - Lightweight quote fetch for watchlist + held positions
 - Batch processing (20 symbols/batch, 1s delay)
 - Publishes `PRICE_REFRESH_COMPLETE`
@@ -151,7 +158,7 @@ Discovers and monitors symbols using a 3-tier approach:
 ---
 
 ### 4. DataAgent
-**File:** `data_agent.py`  
+**File:** `data_agent.py`
 **Status:** ✅ Operational
 
 Fetches OHLCV + fundamental data per symbol.
@@ -165,7 +172,7 @@ Fetches OHLCV + fundamental data per symbol.
 ---
 
 ### 5. NewsAgent
-**File:** `news_agent.py`  
+**File:** `news_agent.py`
 **Status:** ✅ Operational
 
 Analyzes news sentiment for symbols.
@@ -179,7 +186,7 @@ Analyzes news sentiment for symbols.
 ---
 
 ### 6. AnalysisAgent
-**File:** `analysis_agent.py`  
+**File:** `analysis_agent.py`
 **Status:** ✅ Operational
 
 Computes technical indicators from OHLCV data.
@@ -195,7 +202,7 @@ Computes technical indicators from OHLCV data.
 ---
 
 ### 7. StrategyAgent
-**File:** `strategy_agent.py`  
+**File:** `strategy_agent.py`
 **Status:** ✅ Operational
 
 Generates BUY/SELL/HOLD proposals based on rule-based strategy.
@@ -210,7 +217,7 @@ Generates BUY/SELL/HOLD proposals based on rule-based strategy.
 ---
 
 ### 8. RiskAgent
-**File:** `risk_agent.py`  
+**File:** `risk_agent.py`
 **Status:** ✅ Operational
 
 Enforces risk management policies.
@@ -223,22 +230,22 @@ Enforces risk management policies.
 - Sector concentration limits
 
 **Output:**
-- `RISK_CHECK_COMPLETE` — all checks passed, safe to execute
-- `APPROVAL_REQUIRED` — requires human Telegram approval
-- `RISK_ALERT` — limit breach warning
+- `RISK_CHECK_COMPLETE` - all checks passed, safe to execute
+- `APPROVAL_REQUIRED` - requires human Telegram approval
+- `RISK_ALERT` - limit breach warning
 
 ---
 
 ### 9. ExecutionAgent
-**File:** `execution_agent.py`  
+**File:** `execution_agent.py`
 **Status:** ✅ Operational
 
 Submits orders to configured broker.
 
 **Current brokers supported:**
-- `paper` — simulated paper trading (default for dev/testing)
-- `alpaca` — live equity trading
-- `ibkr` — live trading via Interactive Brokers
+- `paper` - simulated paper trading (default for dev/testing)
+- `alpaca` - live equity trading
+- `ibkr` - live trading via Interactive Brokers
 
 **Current behavior:**
 - Takes approved trade from RiskAgent
@@ -248,7 +255,7 @@ Submits orders to configured broker.
 ---
 
 ### 10. PortfolioAgent
-**File:** `portfolio_agent.py`  
+**File:** `portfolio_agent.py`
 **Status:** ✅ Operational
 
 Maintains portfolio state and metrics.
@@ -263,7 +270,7 @@ Maintains portfolio state and metrics.
 ---
 
 ### 11. LearningAgent
-**File:** `learning_agent.py`  
+**File:** `learning_agent.py`
 **Status:** ✅ Operational
 
 Analyzes trade outcomes to identify patterns.
@@ -282,7 +289,7 @@ Analyzes trade outcomes to identify patterns.
 ---
 
 ### 12. HealthAgent
-**File:** `health_agent.py`  
+**File:** `health_agent.py`
 **Status:** ✅ Operational
 
 Monitors system health and sends Telegram notifications.
@@ -297,7 +304,7 @@ Monitors system health and sends Telegram notifications.
 ---
 
 ### 13. ExitAgent
-**File:** `exit_agent.py`  
+**File:** `exit_agent.py`
 **Status:** ✅ Operational (wired via `EXIT_CHECK_TRIGGER` every 5 min)
 
 Monitors held positions for exit conditions and strategic degradation.
@@ -312,15 +319,15 @@ Monitors held positions for exit conditions and strategic degradation.
 ---
 
 ### 14. TelegramAgent
-**File:** `telegram_agent.py`  
+**File:** `telegram_agent.py`
 **Status:** ✅ Operational, always listening
 
 User interface via Telegram bot.
 
 **Current commands:**
-- `/start` — Welcome message
-- `/status` — Show all agent statuses
-- `/portfolio` — Show current holdings + equity
+- `/start` - Welcome message
+- `/status` - Show all agent statuses
+- `/portfolio` - Show current holdings + equity
 
 **Automatic messages sent by system:**
 - Market scan summaries
@@ -422,7 +429,7 @@ finance:
 ## Daily Workflow
 
 ```
-Morning (Tier 1 — Daily Discovery):
+Morning (Tier 1 - Daily Discovery):
 └─ SchedulerAgent fires MARKET_SCAN_TRIGGER
 └─ MarketScannerAgent.run() scans 100 symbols across 5 themes
    └─ Per-theme: fetch OHLCV → filter liquidity → 5-factor rank → top 10
@@ -432,13 +439,13 @@ Morning (Tier 1 — Daily Discovery):
 └─ PortfolioAgent updates holdings
 └─ HealthAgent sends Telegram notifications
 
-Throughout Day (Tier 2 — Price Monitor, every 15 min):
+Throughout Day (Tier 2 - Price Monitor, every 15 min):
 └─ SchedulerAgent emits PRICE_MONITOR_TRIGGER
 └─ Orchestrator calls scanner.refresh_watchlist_prices()
    └─ Lightweight quote fetch for watchlist + held positions
    └─ Publishes PRICE_REFRESH_COMPLETE
 
-Throughout Day (Tier 3 — Exit Monitor, every 5 min):
+Throughout Day (Tier 3 - Exit Monitor, every 5 min):
 └─ SchedulerAgent emits EXIT_CHECK_TRIGGER
 └─ Orchestrator retrieves positions → ExitAgent.run()
    └─ Reactive: stop-loss / take-profit checks
@@ -457,7 +464,7 @@ End of Day (Market Close):
 
 | Issue | Impact | Status |
 |-------|--------|--------|
-| ~~ExitAgent not wired~~ | ✅ ExitAgent wired — Tier 3 every 5 min | Completed |
+| ~~ExitAgent not wired~~ | ✅ ExitAgent wired - Tier 3 every 5 min | Completed |
 | ~~No ranking/scoring~~ | ✅ 5-factor composite scoring in Tier 1 | Completed |
 | ~~Small symbol universe~~ | ✅ Expanded to 100 symbols (20/theme) | Completed |
 | ~~Full pipeline every 15 min~~ | ✅ Separated into daily discovery + 15-min price monitor | Completed |
@@ -465,11 +472,15 @@ End of Day (Market Close):
 
 ---
 
-## Feature Status (as of 2026-03-31)
+## Feature Status (as of 2026-04-01)
 
 | Feature | Status |
 |---------|--------|
-| Active agents | 13 (all wired) |
+| Active agents | 13 core + RegimeAgent (optional, disabled by default) |
+| LLM abstraction layer | ✅ Implemented (OpenRouter, OpenAI, Anthropic, Ollama) |
+| Market Regime Classification | ✅ Implemented (LLM + rule-based fallback) |
+| Config management | ✅ Single YAML (`config/config.yaml`) with hot-reload |
+| Strategy regime integration | ✅ Confidence adjustment based on regime |
 | Symbol universe | 100 symbols across 5 themes |
 | Scanning | 3-tier: discovery (daily) + price monitor (15min) + exit (5min) |
 | Ranking | 5-factor composite scoring (0-1) with real data |
@@ -485,20 +496,22 @@ End of Day (Market Close):
 
 ---
 
-## Recent Critical Fixes (2026-03-30/31)
+## Recent Critical Fixes & Enhancements
 
-| Fix | Description |
-|-----|-------------|
-| Position corruption | Added `entry_price` property alias to Position class; `to_dict()` now includes `entry_price`. Resolved NaN equity caused by missing entry price. |
-| IndicatorsSnapshot compatibility | Added `.get()` method to support dict-like access; fixed ExitAgent AttributeError. |
-| Market scan rankings | Fixed `handle_market_scan_trigger` to pass `data_agent`; rankings now computed (0-1) instead of uniform 0.5. |
-| Event bus timeout | Increased from 60s to 300s to allow full universe scans to complete. |
-| Missing performance endpoint | Added `/portfolio/performance` route (alias to `/api/dashboard/performance`). |
-| Telegram config override | Orchestrator no longer overrides Telegram settings with empty YAML values; falls back to .env. |
-| Equity NaN guard | `Position.market_value()` guards against invalid `current_price`; price updates validated. |
-| Auto-execute threshold | Changed from 1.0 → 0.8 to allow more trades while maintaining confidence filter. |
-
-All systems verified healthy and operational.
+| Date | Fix / Enhancement | Description |
+|------|-------------------|-------------|
+| 2026-03-30 | Position corruption | Added `entry_price` property alias to Position class; `to_dict()` now includes `entry_price`. Resolved NaN equity caused by missing entry price. |
+| 2026-03-30 | IndicatorsSnapshot compatibility | Added `.get()` method to support dict-like access; fixed ExitAgent AttributeError. |
+| 2026-03-30 | Market scan rankings | Fixed `handle_market_scan_trigger` to pass `data_agent`; rankings now computed (0-1) instead of uniform 0.5. |
+| 2026-03-30 | Event bus timeout | Increased from 60s to 300s to allow full universe scans to complete. |
+| 2026-03-30 | Missing performance endpoint | Added `/portfolio/performance` route (alias to `/api/dashboard/performance`). |
+| 2026-03-30 | Telegram config override | Orchestrator no longer overrides Telegram settings with empty YAML values; falls back to .env. |
+| 2026-03-30 | Equity NaN guard | `Position.market_value()` guards against invalid `current_price`; price updates validated. |
+| 2026-03-30 | Auto-execute threshold | Changed from 1.0 → 0.8 to allow more trades while maintaining confidence filter. |
+| 2026-04-01 | LLM abstraction layer | Added provider-agnostic LLM interface (OpenRouter, OpenAI, Anthropic, Ollama) with 24h caching. |
+| 2026-04-01 | RegimeAgent (Phase 1) | Optional market regime classifier with LLM and rule-based fallback. |
+| 2026-04-01 | Config YAML overhaul | Consolidated configuration into `config/config.yaml` with hot-reload support via watchdog. |
+| 2026-04-01 | Strategy regime integration | StrategyAgent now adjusts confidence based on market regime (boost/penalty). |
 
 ---
 

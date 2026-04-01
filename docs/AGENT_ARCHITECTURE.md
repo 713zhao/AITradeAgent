@@ -103,13 +103,14 @@ The system continuously scans markets, analyzes candidates, generates trade prop
 | 4 | DataAgent | `data_agent` | `data_agent.py` | Per-symbol after scan |
 | 5 | NewsAgent | `news_agent` | `news_agent.py` | Per-symbol after data |
 | 6 | AnalysisAgent | `analysis_agent` | `analysis_agent.py` | Per-symbol after data |
-| 7 | StrategyAgent | `strategy_agent` | `strategy_agent.py` | When news + analysis both ready |
-| 8 | RiskAgent | `risk_agent` | `risk_agent.py` | `TRADE_PROPOSAL_GENERATED` |
-| 9 | ExecutionAgent | `execution_agent` | `execution_agent.py` | `RISK_CHECK_COMPLETE` |
-| 10 | PortfolioAgent | `portfolio_agent` | `portfolio_agent.py` | `TRADE_EXECUTED` |
-| 11 | LearningAgent | `learning_agent` | `learning_agent.py` | `TRADE_EXECUTED` |
-| 12 | HealthAgent | `health_agent` | `health_agent.py` | `TRADE_EXECUTED`, `SCHEDULE`, `DAILY_REPORT_TRIGGER` |
-| 13 | ExitAgent | `exit_agent` | `exit_agent.py` | ✅ Every 5 min via `EXIT_CHECK_TRIGGER` |
+| 7 | RegimeAgent | `regime_agent` | `regime_agent.py` | `ANALYSIS_COMPLETE` (if LLM enabled) |
+| 8 | StrategyAgent | `strategy_agent` | `strategy_agent.py` | When news + analysis both ready |
+| 9 | RiskAgent | `risk_agent` | `risk_agent.py` | `TRADE_PROPOSAL_GENERATED` |
+| 10 | ExecutionAgent | `execution_agent` | `execution_agent.py` | `RISK_CHECK_COMPLETE` |
+| 11 | PortfolioAgent | `portfolio_agent` | `portfolio_agent.py` | `TRADE_EXECUTED` |
+| 12 | LearningAgent | `learning_agent` | `learning_agent.py` | `TRADE_EXECUTED` |
+| 13 | HealthAgent | `health_agent` | `health_agent.py` | `TRADE_EXECUTED`, `SCHEDULE`, `DAILY_REPORT_TRIGGER` |
+| 14 | ExitAgent | `exit_agent` | `exit_agent.py` | ✅ Every 5 min via `EXIT_CHECK_TRIGGER` |
 | — | TelegramAgent | `telegram_agent` | `telegram_agent.py` | User commands + broadcast messages |
 
 ---
@@ -141,6 +142,9 @@ NEWS_FETCH_COMPLETE       ← NewsAgent: sentiment data ready
 ANALYSIS_STARTED          ← AnalysisAgent: computing indicators
 ANALYSIS_COMPLETE         ← AnalysisAgent: RSI, MACD, MAs, ATR ready
 ANALYSIS_FAILED           ← AnalysisAgent: error
+
+# Regime (Phase 1 - LLM Augmentation)
+MARKET_REGIME_UPDATED     ← RegimeAgent: market regime classification (trending, range, vol)
 
 # Strategy
 TRADE_PROPOSAL_GENERATED  ← StrategyAgent: BUY/SELL proposals ready
@@ -396,7 +400,66 @@ Computes technical indicators from OHLCV data:
 
 ---
 
-### 7. StrategyAgent
+### 7. RegimeAgent (Phase 1 - LLM Augmentation)
+
+**File:** `finance_service/agents/regime_agent.py`  
+**Goal:** Classify current market regime (trending, range-bound, high/low volatility) to enable strategy adaptation.
+
+**Trigger:** Event-driven; called after `ANALYSIS_COMPLETE` for each symbol when LLM regime module is enabled via config.
+
+**Inputs:**
+- `symbol` — ticker
+- `ohlcv_data` — DataFrame with OHLCV
+- `indicators` — dict of technical indicators
+
+**Processing:**
+- If LLM module enabled: sends prompt to configured provider (OpenRouter/OpenAI/Anthropic/Ollama) with market data, requests JSON classification
+- If LLM disabled or fails: uses deterministic rules (ATR ratio + SMA trend)
+- Caches response (24h TTL)
+- Publishes `MARKET_REGIME_UPDATED` event
+
+**Regimes:**
+- `trending_bullish` — price > SMA200, SMA50 > SMA200, MACD > 0
+- `trending_bearish` — price < SMA200, SMA50 < SMA200, MACD < 0
+- `range_bound` — low ATR, oscillating near MAs
+- `high_volatility` — ATR > 2× normal
+- `low_volatility` — ATR < 0.5× normal
+- `mixed` — unclear/transitioning
+
+**Output Event:** `MARKET_REGIME_UPDATED`
+```python
+{
+    "agent_id": "regime_agent",
+    "status": "success",
+    "payload": {
+        "regime": {
+            "regime": "trending_bullish",
+            "confidence": 0.87,
+            "description": "Price 7% above SMA200, MACD positive",
+            "timestamp": "2026-04-01T10:30:00Z",
+            "indicators_used": ["rsi", "macd", "atr", "sma_50", "sma_200"]
+        }
+    }
+}
+```
+
+**Configuration (config/config.yaml):**
+```yaml
+llm:
+  enabled: true  # Global LLM switch
+  modules:
+    market_regime:
+      enabled: true
+      model: "anthropic/claude-3.7-sonnet"
+      temperature: 0.2
+      prompt_template: "prompts/regime_classifier.md"
+```
+
+**Integration:** `StrategyAgent` subscribes to this event and adjusts confidence thresholds accordingly (e.g., higher thresholds in trending markets, lower in low volatility).
+
+---
+
+### 7. StrategyAgent (renumbered from 7)
 
 **File:** `finance_service/agents/strategy_agent.py`  
 **Goal:** Generate actionable trade proposals by analyzing market indicators and news sentiment.
