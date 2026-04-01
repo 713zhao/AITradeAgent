@@ -89,6 +89,12 @@ class PortfolioAgent(Agent):
             side = side.upper()
             if side == "BUY":
                 # --- FIX 2: Ensure current_price is set on position ---
+                logger.info(f"[PORTFOLIO DEBUG] Creating BUY trade for {symbol}")
+                trade = self.repository.create_trade(
+                    task_id=trade_id,
+                    symbol=symbol, side="BUY", quantity=quantity, price=price,
+                    decision={}, confidence=1.0, reason="Executed Trade"
+                )
                 position = self.repository.get_position(symbol)
                 if position:
                     new_qty = position.quantity + quantity
