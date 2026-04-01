@@ -36,6 +36,7 @@ class PortfolioAgent(Agent):
         self._price_update_lock = asyncio.Lock()  # Prevent concurrent price updates
         self._last_price_update = datetime(1970, 1, 1)  # Never updated initially
         self._price_update_interval = 300  # seconds (5 minutes); match scheduler frequency
+        self.last_price_fetch_error: Optional[str] = None  # Latest yFinance error, for health checks
         logger.info("PortfolioAgent initialized.")
 
     async def run(self, **kwargs) -> AgentReport:
@@ -216,10 +217,12 @@ class PortfolioAgent(Agent):
 
                     logger.info(f"Fetched {updated_count}/{len(stale_symbols)} stale prices from yFinance")
                 except Exception as e:
+                    self.last_price_fetch_error = f"Batch yFinance fetch failed: {e}"
                     logger.error(f"Batch price fetch failed: {e}", exc_info=True)
                     logger.info("Falling back to individual fetch method")
                     await self._update_prices_individual()
 
+            self.last_price_fetch_error = None  # Clear error on successful run
             self._last_price_update = datetime.utcnow()
 
     async def _update_prices_individual(self):

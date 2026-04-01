@@ -222,11 +222,13 @@ class MainOrchestratorAgent:
         from datetime import datetime, timedelta
         end_date = datetime.now().date()
         start_date = end_date - timedelta(days=365)
+        fetch_errors: list = []
         for symbol in symbols:
             # Data fetch (1d)
             data_report = await self.data_agent.run(symbol=symbol, interval="1d", start_date=start_date, end_date=end_date)
             if data_report.status != "success":
                 logger.warning(f"Data fetch failed for {symbol}: {data_report.message}")
+                fetch_errors.append(f"{symbol}: {data_report.message}")
                 continue
             # News fetch
             news_report = await self.news_agent.run(symbol=symbol)
@@ -271,6 +273,15 @@ class MainOrchestratorAgent:
                 if exec_report.status == "success":
                     await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload))
             # else: require approval, skip for now
+
+        # Send error summary to Telegram if any data fetches failed
+        if fetch_errors and self.health_agent:
+            asyncio.create_task(
+                self.health_agent.send_error_alert(
+                    "Data Fetch Failures",
+                    [f"yFinance fetch failed for {len(fetch_errors)} symbol(s):"] + fetch_errors[:10]
+                )
+            )
 
     async def handle_exit_check(self, event: Event):
         """Tier 3: Check held positions for exit conditions every 5 min."""
