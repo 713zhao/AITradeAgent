@@ -146,7 +146,7 @@ class PortfolioAgent(Agent):
 
 
     async def update_prices_from_data_agent(self):
-        """Fetch latest prices for all positions with limited concurrency (5) and cache, protected by lock."""
+        """Fetch latest prices for all positions in a single batch to avoid rate limiting."""
         if not self.data_agent:
             return
         
@@ -155,58 +155,102 @@ class PortfolioAgent(Agent):
             if not symbols:
                 return
             
-            logger.info(f"Updating prices for {len(symbols)} positions (concurrency=5, cache=yes, 30d lookback)")
+            logger.info(f"Updating prices for {len(symbols)} positions (batch fetch via provider)")
             
-            semaphore = asyncio.Semaphore(2)  # Reduce concurrency to 2 to avoid overwhelming provider
-            from datetime import datetime, timedelta
-            end_dt = datetime.now().date()
-            start_dt = end_dt - timedelta(days=30)
-            start_str = start_dt.strftime("%Y-%m-%d")
-            end_str = end_dt.strftime("%Y-%m-%d")
-            
-            async def fetch_one(symbol: str):
-                async with semaphore:
-                    try:
-                        report = await self.data_agent.run(
-                            symbol=symbol,
-                            interval="1d",
-                            emit_events=False,
-                            use_cache=True,
-                            start_date=start_str,
-                            end_date=end_str
-                        )
-                        return symbol, report
-                    except Exception as e:
-                        logger.warning(f"Error fetching {symbol}: {e}")
-                        return symbol, None
-            
-            tasks = [fetch_one(sym) for sym in symbols]
-            results = await asyncio.gather(*tasks, return_exceptions=False)
-            
-            updated_count = 0
-            for symbol, report in results:
-                if report is None:
-                    continue
-                if report.status == "success" and "dataframe" in report.payload:
-                    df_dict = report.payload["dataframe"]
-                    try:
-                        import pandas as pd
-                        df = pd.DataFrame.from_dict(df_dict)
-                        if not df.empty:
-                            latest_price = df.iloc[-1]['close']
-                            if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
+            try:
+                # Batch fetch all symbols in one provider call to avoid rate limits
+                from datetime import datetime, timedelta
+                end_date = datetime.now().strftime("%Y-%m-%d")
+                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+                
+                results = await asyncio.to_thread(
+                    self.data_agent.provider.fetch_ohlcv,
+                    symbols,
+                    start_date=start_date,
+                    end_date=end_date,
+                    interval="1d"
+                )
+                
+                updated_count = 0
+                for symbol, df in results.items():
+                    if df is not None and not df.empty:
+                        # Cache the data for future single-symbol requests
+                        try:
+                            self.data_agent.cache.store(symbol, df, "1d")
+                        except Exception as e:
+                            logger.debug(f"Cache store failed for {symbol}: {e}")
+                        
+                        # Extract latest close price
+                        try:
+                            latest_price = float(df['Close'].iloc[-1])
+                            if latest_price and latest_price > 0:
                                 self.repository.update_position(symbol, current_price=latest_price)
                                 updated_count += 1
                                 logger.debug(f"Updated {symbol} current price to {latest_price}")
                             else:
                                 logger.warning(f"Invalid price fetched for {symbol}: {latest_price}")
-                    except Exception as e:
-                        logger.warning(f"Failed to process price data for {symbol}: {e}")
-                else:
-                    logger.warning(f"Failed to fetch price for {symbol}: {report.message if report else 'no report'}")
+                        except Exception as e:
+                            logger.warning(f"Failed to extract price from data for {symbol}: {e}")
+                
+                logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions (batch fetch)")
+            except Exception as e:
+                logger.error(f"Batch price fetch failed: {e}", exc_info=True)
+                # Fallback to individual fetches if batch fails entirely
+                logger.info("Falling back to individual fetch method")
+                await self._update_prices_individual()
             
-            logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions")
             self._last_price_update = datetime.utcnow()
+
+    async def _update_prices_individual(self):
+        """Fallback: fetch prices individually with limited concurrency."""
+        symbols = list(self.repository.positions.keys())
+        if not symbols:
+            return
+        
+        semaphore = asyncio.Semaphore(2)
+        from datetime import datetime, timedelta
+        end_dt = datetime.now().date()
+        start_dt = end_dt - timedelta(days=30)
+        start_str = start_dt.strftime("%Y-%m-%d")
+        end_str = end_dt.strftime("%Y-%m-%d")
+        
+        async def fetch_one(symbol: str):
+            async with semaphore:
+                try:
+                    report = await self.data_agent.run(
+                        symbol=symbol,
+                        interval="1d",
+                        emit_events=False,
+                        use_cache=True,
+                        start_date=start_str,
+                        end_date=end_str
+                    )
+                    return symbol, report
+                except Exception as e:
+                    logger.warning(f"Error fetching {symbol}: {e}")
+                    return symbol, None
+        
+        tasks = [fetch_one(sym) for sym in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        
+        updated_count = 0
+        for symbol, report in results:
+            if report is None:
+                continue
+            if report.status == "success" and "dataframe" in report.payload:
+                df_dict = report.payload["dataframe"]
+                try:
+                    import pandas as pd
+                    df = pd.DataFrame.from_dict(df_dict)
+                    if not df.empty:
+                        latest_price = df.iloc[-1]['close']
+                        if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
+                            self.repository.update_position(symbol, current_price=latest_price)
+                            updated_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to process price data for {symbol}: {e}")
+        
+        logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions (individual fallback)")
 
     async def get_detailed_portfolio_state(self, chat_id: Optional[str] = None) -> AgentReport:
         """Retrieves detailed portfolio state and can publish it or return in a report."""

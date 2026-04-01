@@ -154,21 +154,9 @@ class YfinanceProvider:
         
         # If columns is MultiIndex, extract each symbol's sub-frame
         if isinstance(data.columns, pd.MultiIndex):
-            # Determine which level contains tickers
-            # Usually level 0 = fields (Close, High, etc.), level 1 = tickers
-            level0_vals = set(data.columns.get_level_values(0))
-            level1_vals = set(data.columns.get_level_values(1))
-            
-            # Identify ticker level: the level that contains our symbols
-            if any(sym in level1_vals for sym in symbols):
-                ticker_level = 1
-                field_level = 0
-            elif any(sym in level0_vals for sym in symbols):
-                ticker_level = 0
-                field_level = 1
-            else:
-                logger.warning("Could not determine ticker level in MultiIndex")
-                return results
+            # Yfinance standard: level 0 = field (Close, High, Low, Open, Volume), level 1 = ticker
+            ticker_level = 1
+            field_level = 0
             
             for symbol in symbols:
                 try:
