@@ -1,0 +1,43 @@
+# Default Trading Rules
+# This file defines entry and exit conditions using technical indicators.
+
+rules:
+  # === ENTRY RULES ===
+  - name: "rsi_oversold_entry"
+    type: entry
+    indicator: "rsi"
+    condition: "less_than"
+    value: 30
+    enabled: true
+    compare_to_price: false
+
+  - name: "macd_bullish_cross"
+    type: entry
+    indicator: "macd"
+    condition: "greater_than"
+    value: 0
+    enabled: true
+    compare_to_price: false
+
+  - name: "price_above_sma20"
+    type: entry
+    indicator: "sma20"
+    condition: "greater_than"
+    value: 0
+    enabled: true
+    compare_to_price: true  # Compare current price to SMA
+
+  # === EXIT RULES ===
+  - name: "rsi_overbought_exit"
+    type: exit
+    indicator: "rsi"
+    condition: "greater_than"
+    value: 70
+    enabled: true
+
+  - name: "macd_bearish_cross"
+    type: exit
+    indicator: "macd_histogram"
+    condition: "less_than"
+    value: 0
+    enabled: true

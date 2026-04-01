@@ -198,24 +198,54 @@ class StrategyAgent(Agent):
         # Load rules from YAML config using correct pattern
         rules_config = self._load_rules_from_config()
         self.rule_strategy = RuleStrategy(rules_config)
-        # Load portfolio and risk parameters for position sizing
-        self.initial_cash = self.config_engine.get("finance", "portfolio/initial_cash", default=100000.0)
-        # Get active strategy's risk_budget_pct
-        strategy_name = self.config_engine.get("finance", "strategy/type", default=None)
-        self.risk_budget_pct = 1.5  # default
-        if strategy_name:
-            strategies = self.config_engine.get("finance", "strategies", default={})
-            if isinstance(strategies, dict) and strategy_name in strategies:
-                strat_cfg = strategies[strategy_name]
-                self.risk_budget_pct = strat_cfg.get('risk_budget_pct', 1.5)
-        # Inject portfolio_agent for position-awareness (FIX 2)
         self.portfolio_agent = portfolio_agent
-        # Position cooling: track last entry per symbol to avoid stacking
+        # Position cooling
         self.last_entry_time: Dict[str, datetime] = {}
-        # Cooling period in hours (configurable)
         self.position_cooling_hours = self.config_engine.get("finance", "strategy/position_cooling_hours", default=24)
-        logger.info(f"StrategyAgent: portfolio_value=${self.initial_cash:,.2f}, risk_budget_pct={self.risk_budget_pct}%, position_cooling_hours={self.position_cooling_hours}")
-        logger.info(f"StrategyAgent initialized with {len(rules_config)} rules")
+        # Regime tracking
+        self._current_regime: Optional[Dict[str, Any]] = None
+        self._subscribe_to_regime()
+        logger.info(f"StrategyAgent initialized with {len(rules_config)} rules, cooling={self.position_cooling_hours}h")
+
+    def _subscribe_to_regime(self):
+        """Subscribe to regime update events"""
+        async def handle_regime(event_data: Dict):
+            self._current_regime = event_data.get("regime")
+            logger.debug(f"StrategyAgent received regime: {self._current_regime}")
+
+        from finance_service.core.event_bus import get_event_bus, Events
+        event_bus = get_event_bus()
+        event_bus.subscribe(Events.MARKET_REGIME_UPDATED, handle_regime)
+
+    def _adjust_confidence(self, base_confidence: float, symbol: str = None) -> float:
+        """Adjust confidence based on current market regime"""
+        if not self._current_regime:
+            return base_confidence
+
+        regime = self._current_regime.get("regime", "mixed")
+        regime_conf = self._current_regime.get("confidence", 0.5)
+
+        # Regime-specific adjustments
+        if regime in ("trending_bullish", "trending_bearish"):
+            # Strong trends increase confidence in directional moves
+            boost = 0.05 + (regime_conf * 0.05)  # +5-10%
+            return min(base_confidence + boost, 1.0)
+        elif regime == "high_volatility":
+            # High vol decreases confidence (unpredictable)
+            penalty = 0.10
+            return max(base_confidence - penalty, 0.1)
+        elif regime == "low_volatility":
+            # Low vol can mean mean-reversion works well
+            if base_confidence > 0.6:
+                return min(base_confidence + 0.05, 1.0)  # boost high-confidence signals
+            else:
+                return base_confidence  # ignore weak signals
+        else:
+            return base_confidence
+        # Regime tracking
+        self._current_regime: Optional[Dict[str, Any]] = None
+        self._subscribe_to_regime()
+        logger.info(f"StrategyAgent initialized with {len(rules_config)} rules, cooling={self.position_cooling_hours}h")
 
     def _load_rules_from_config(self) -> List[Dict]:
         """Load trading rules from YAML configuration."""
@@ -501,6 +531,9 @@ class StrategyAgent(Agent):
             should_buy, buy_confidence, entry_rules = self.rule_strategy.evaluate_entry(indicators_snapshot)
             should_sell, exit_rules = self.rule_strategy.evaluate_exit(indicators_snapshot)
 
+            # Apply regime-based confidence adjustment
+            adjusted_buy_confidence = self._adjust_confidence(buy_confidence)
+
             # Simple decision logic for now, can be expanded
             if should_buy and not should_sell:
                 # Placeholder for calculating target and stop prices using ATR or other methods
@@ -515,7 +548,7 @@ class StrategyAgent(Agent):
                 proposals.append(asdict(TradeProposal(
                     symbol=symbol,
                     action="BUY",
-                    confidence=buy_confidence,
+                    confidence=adjusted_buy_confidence,  # Use regime-adjusted confidence
                     target_price=target_price,
                     stop_loss_price=stop_loss_price,
                     rationale=entry_rules

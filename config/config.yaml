@@ -1,0 +1,128 @@
+# AITradeAgent Main Configuration
+# This file defines all non-secret application settings.
+# Secrets (API keys) should be stored in .env file.
+
+app:
+  name: "AITradeAgent"
+  log_level: "INFO"
+  environment: "production"
+
+finance:
+  service:
+    port: 8801
+    host: "0.0.0.0"
+  
+  data:
+    default_interval: "1d"
+    default_lookback_days: 365
+    cache_ttl_seconds: 3600
+    provider: "yfinance"  # yfinance, openbb, alpha_vantage
+    fetch_fundamentals: false
+    batch_size: 20
+    batch_delay_sec: 1.0
+
+  portfolio:
+    initial_cash: 100000.0
+    currency: "USD"
+    trade_slippage: 0.0005  # 5 bps
+
+  strategy:
+    type: "baseline_rule"  # baseline_rule, optimized_rule, custom
+    rule_file: "config/rules.yaml"
+    position_sizing_method: "equal_risk"  # equal_risk, volatility_adjusted, equal_weight
+    risk_per_trade_pct: 1.0
+    auto_execute:
+      enabled: false
+      confidence_threshold: 0.8
+
+  risk:
+    policy:
+      max_position_size_pct: 10.0
+      max_exposure_pct: 50.0
+      max_daily_loss_pct: 3.0
+      max_drawdown_pct: 15.0
+      default_risk_budget_pct: 1.0
+      stop_loss_default_pct: 5.0
+      take_profit_default_pct: 10.0
+      max_concurrent_positions: 10
+      min_position_size_usd: 1000.0
+      allow_short_selling: false
+      margin_enabled: false
+      # New: Portfolio-level limits
+      max_sector_exposure_pct: 30.0
+      max_portfolio_volatility_annual: 30.0  # 30% annualized vol
+      max_var_95_usd: 10000.0  # Daily VaR limit
+
+  execution:
+    broker: "paper"  # paper, alpaca, tiger
+    broker_config: {}
+
+  scheduling:
+    market_scan_interval_minutes: 15
+    price_refresh_interval_minutes: 15
+    exit_check_interval_minutes: 5
+    health_check_interval_hours: 4
+    # Backtesting schedule
+    backtest_daily: false
+    backtest_time: "02:00"  # Run daily backtest at 2 AM
+
+  notifications:
+    telegram:
+      enabled: false
+      bot_token_env: "TELEGRAM_BOT_TOKEN"
+      chat_id: ""
+      message_thread_id: null
+    slack:
+      enabled: false
+      webhook_url: ""
+
+  llm:
+    enabled: false  # GLOBAL SWITCH: disable all LLM features by default
+    provider: "openrouter"
+    api_key_env: "OPENROUTER_API_KEY"
+    base_url: "https://openrouter.ai/api/v1"
+    model: "anthropic/claude-3.7-sonnet"
+    temperature: 0.3
+    max_tokens: 2000
+    timeout: 30
+    max_retries: 3
+    cache_ttl_seconds: 86400  # 24h
+    modules:
+      market_regime:
+        enabled: false
+        model: "anthropic/claude-3.7-sonnet"
+        temperature: 0.2
+        prompt_template: "prompts/regime_classifier.md"
+      news_sentiment:
+        enabled: false
+        model: "openai/gpt-4.1-mini"
+        temperature: 0.4
+      anomaly_explanation:
+        enabled: false
+        model: "openrouter/auto"
+      adaptive_tuning:
+        enabled: false
+        schedule: "0 6 * * 1"  # Cron: Mondays 6 AM
+        auto_apply: false
+
+scanner:
+  discovery_top_n_per_theme: 10
+  price_monitor_top_n: 50
+  price_monitor_interval_minutes: 15
+  discovery_interval: daily
+  themes:
+    - name: "Technology"
+      universe: ["AAPL", "MSFT", "NVDA", "AMD", "INTC", "CSCO", "ADBE", "INTU", "CRM", "NOW"]
+    - name: "Semiconductor"
+      universe: ["NVDA", "AMD", "INTC", "AVGO", "QCOM", "TXN", "AMAT", "LRCX", "KLAC", "MRVL"]
+    - name: "Healthcare"
+      universe: ["JNJ", "UNH", "PFE", "MRK", "ABBV", "LLY", "ABT", "TMO", "DHR", "ISRG"]
+    - name: "Finance"
+      universe: ["JPM", "BAC", "WFC", "GS", "MS", "BLK", "C", "USB", "PNC", "TFC"]
+    - name: "Consumer"
+      universe: ["AMZN", "WMT", "HD", "MCD", "SBUX", "NKE", "TGT", "COST", "WBA", "CMCSA"]
+
+performance:
+  max_workers: 4
+  api_timeout_sec: 30
+  api_retries: 3

@@ -114,6 +114,8 @@ class MainOrchestratorAgent:
         self.market_scanner_agent = MarketScannerAgent(config_engine)
         self.data_agent = DataAgent(config_engine)
         self.news_agent = NewsAgent(config_engine)
+        # RegimeAgent: optional LLM market regime classifier (Phase 1)
+        self.regime_agent = RegimeAgent(config_engine)
         # AnalysisAgent: uses default indicator periods; no config needed
         self.analysis_agent = AnalysisAgent()
         # StrategyAgent: needs config_engine and portfolio_agent (injected after)
@@ -164,7 +166,7 @@ class MainOrchestratorAgent:
         await self.event_bus.subscribe(Events.EXIT_CHECK_TRIGGER, self.handle_exit_check)  # Tier 3
         await self.event_bus.subscribe(Events.PRICE_MONITOR_TRIGGER, self.handle_price_monitor)  # Tier 2
 
-        # Start background agents
+        # Start background agents (those with continuous loops)
         asyncio.create_task(self.scheduler_agent.run())
         asyncio.create_task(self.telegram_agent.run())
         logger.info("Orchestrator startup complete. All agents initialized and scheduled.")
@@ -235,6 +237,20 @@ class MainOrchestratorAgent:
             if analysis_report.status != "success":
                 logger.warning(f"Analysis failed for {symbol}: {analysis_report.message}")
                 continue
+            
+            # Regime classification (if enabled)
+            if self.config_engine.get("llm", "modules/market_regime/enabled", default=False):
+                try:
+                    regime_report = await self.regime_agent.run({
+                        "symbol": symbol,
+                        "ohlcv_data": data_report.payload.get("dataframe"),
+                        "indicators": analysis_report.payload.get("indicators_snapshot", {}).get("indicators", {})
+                    })
+                    if regime_report and regime_report.payload:
+                        logger.debug(f"Regime for {symbol}: {regime_report.payload.get('regime', {}).get('regime')}")
+                except Exception as e:
+                    logger.warning(f"RegimeAgent skipped for {symbol}: {e}")
+            
             # Strategy
             strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=symbol)
             if strategy_report.status != "success":
