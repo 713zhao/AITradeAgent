@@ -1,4 +1,5 @@
 """Telegram Agent - Handles Telegram commands and sends reports (PTB v22 compatible)."""
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 from telegram import Bot
@@ -73,8 +74,9 @@ class TelegramAgent(Agent):
             await self.application.updater.start_polling(drop_pending_updates=True)
             await self.application.start()
             logger.info(f"{self.agent_id} polling started successfully.")
-            # Keep running until the application is stopped externally
-            await self.application.updater.idle()
+            # Keep running as long as the updater is polling
+            while self.application.updater.running:
+                await asyncio.sleep(1)
         except Exception as e:
             logger.error(f"{self.agent_id} polling error: {e}")
         finally:
