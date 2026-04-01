@@ -286,14 +286,8 @@ class PortfolioAgent(Agent):
         # Refresh timestamp to indicate state generation time
         self.updated_at = datetime.utcnow()
         
-        # Rate limit price updates: skip if updated recently
-        now = datetime.utcnow()
-        elapsed = (now - self._last_price_update).total_seconds()
-        if elapsed >= self._price_update_interval:
-            logger.debug(f"Price update needed (last: {elapsed:.0f}s ago).")
-            await self.update_prices_from_data_agent()
-        else:
-            logger.debug(f"Skipping price update (last: {elapsed:.0f}s ago < {self._price_update_interval}s).")
+        # NOTE: Price updates are handled asynchronously by the price monitor (MarketScannerAgent).
+        # Do NOT block portfolio state queries fetching live prices.
         
         portfolio = self.repository.calculate_portfolio(self.initial_cash)
         positions_data = [pos.to_dict() for pos in self.repository.get_positions()]
