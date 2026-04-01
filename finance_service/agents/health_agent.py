@@ -5,6 +5,7 @@ Sends alerts if drawdown exceeds thresholds or system issues detected.
 """
 
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -222,16 +223,21 @@ class HealthAgent(Agent):
         price = result.get("filled_price", result.get("price", 0))
         status = result.get("status", "??")
         
-        # Get current portfolio info for context
+        # Get current portfolio info for context (with timeout to avoid blocking)
         portfolio_summary = "Portfolio info unavailable"
         if self.portfolio_agent:
             try:
-                portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
+                portfolio_report = await asyncio.wait_for(
+                    self.portfolio_agent.get_detailed_portfolio_state(),
+                    timeout=2.0
+                )
                 if portfolio_report.status == "success":
                     portfolio = portfolio_report.payload
                     equity = portfolio.get("equity_metrics", {}).get("total_equity", 0)
                     positions = len(portfolio.get("positions", {}))
                     portfolio_summary = f"Portfolio: ${equity:,.2f}, {positions} positions"
+            except asyncio.TimeoutError:
+                logger.warning("Portfolio state fetch timed out in trade notification; proceeding without portfolio context")
             except Exception as e:
                 logger.warning(f"Could not get portfolio state for trade notification: {e}")
         
