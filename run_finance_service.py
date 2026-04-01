@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
-"""
-AiTradeAgent Finance Service Launcher
-Runs Quart ASGI app via Hypercorn with orchestrator initialization.
-"""
 import os
 import sys
 import asyncio
 import logging
-import time
 
-# Set environment variables before any imports
-os.environ['OPENBB_USE_YFINANCE'] = 'true'
-os.environ['OPENBB_PROVIDER'] = 'yfinance'
-os.environ['PYTHONUNBUFFERED'] = '1'
-os.environ['LOG_LEVEL'] = 'INFO'
-
-# Add project root to path
+# Add project root to path BEFORE any imports of finance_service
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 logging.basicConfig(
@@ -24,12 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configure agent flow debug logger (enabled when AGENT_DEBUG=1)
-from finance_service.core.flow_logger import configure as configure_flow_logger
-configure_flow_logger()
-
 async def main():
-    """Initialize orchestrator and start ASGI server."""
     from finance_service.app import startup_orchestrator, create_app
     from hypercorn.config import Config as HypercornConfig
     from hypercorn.asyncio import serve
@@ -40,13 +24,13 @@ async def main():
     
     app = create_app()
     config = HypercornConfig()
-    config.bind = ["0.0.0.0:8801"]
+    config.bind = [os.getenv("BIND", "0.0.0.0:8801")]
     config.worker_class = "uvloop"
     config.workers = 1
     config.accesslog = "-"
     config.errorlog = "-"
     
-    logger.info("🚀 Starting ASGI server on 0.0.0.0:8801 (accessible from network)")
+    logger.info("🚀 Starting ASGI server on %s", config.bind[0])
     try:
         await serve(app, config)
     except asyncio.CancelledError:
@@ -56,7 +40,6 @@ async def main():
         raise
 
 def main_entry():
-    """Entry point - runs service once; external supervisor handles restarts."""
     logger.info("🚀 AiTradeAgent Finance Service")
     logger.info("📊 Market data: yfinance")
     logger.info("💰 Mode: PAPER")

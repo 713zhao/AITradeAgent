@@ -197,12 +197,13 @@ class ExitAgent(Agent):
                 indicators = analysis_report.payload.get("indicators_snapshot", {})
                 
                 # Simple heuristic: RSI < 30 is "buy-worthy" (oversold)
-                # If RSI > 70 now, it's degraded (overbought, should exit)
-                rsi = indicators.get("rsi", 50)
-                trend = indicators.get("trend", "neutral")
-                
-                # Degradation signal: RSI > 70 (overbought) OR bearish trend reversal
-                is_degraded = (rsi > 70) or (trend == "bearish")
+                # Use strategy's exit rules to determine if position should be sold
+                try:
+                    should_sell, exit_rules = self.strategy_agent.rule_strategy.evaluate_exit(indicators)
+                    is_degraded = should_sell
+                except Exception as e:
+                    logger.error(f"Error evaluating exit strategy for {symbol}: {e}")
+                    is_degraded = False
                 
                 if is_degraded:
                     entry_price = pos.get("entry_price", 0)
@@ -215,10 +216,9 @@ class ExitAgent(Agent):
                         "entry_price": entry_price,
                         "current_price": current_price,
                         "pnl": pnl,
-                        "rsi": rsi,
-                        "trend": trend,
-                        "reason": f"Position degraded: RSI {rsi:.1f} (overbought) or trend {trend}",
-                        "recommendation": "Review for strategic exit",
+                        "exit_rules": exit_rules,
+                        "reason": f"Position exit signal: {', '.join(exit_rules) if exit_rules else 'strategy exit'}",
+                        "recommendation": "Strategic exit triggered",
                         "checked_at": datetime.utcnow().isoformat()
                     }
                     degraded.append(degraded_record)

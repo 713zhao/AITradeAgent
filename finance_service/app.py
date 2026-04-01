@@ -333,7 +333,14 @@ class MainOrchestratorAgent:
                 "rationale": [reason],
             }
             try:
-                exec_report = await self.execution_agent.run(approved_trade_proposal=trade_proposal)
+                # Wrap trade_proposal in an AgentReport payload to match ExecutionAgent.run() signature
+                exit_approval_report = AgentReport(
+                    agent_id="exit_agent",
+                    status="success",
+                    message="Exit signal validated",
+                    payload={"trade_proposals": [trade_proposal]}
+                )
+                exec_report = await self.execution_agent.run(exit_approval_report)
                 if exec_report and exec_report.status == "success":
                     await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload))
                     logger.info(f"Strategic exit executed for {symbol}")

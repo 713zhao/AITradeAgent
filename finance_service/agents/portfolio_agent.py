@@ -88,34 +88,16 @@ class PortfolioAgent(Agent):
         try:
             side = side.upper()
             if side == "BUY":
-                # --- FIX 1: Cash sufficiency check ---
-                trade_value = quantity * price
-                # Get current available cash from repository (track running cash balance)
-                # Since repository doesn't track cash separately, we compute from portfolio formula
-                # available_cash = initial_cash - spent_on_long_positions
-                current_portfolio = self.repository.calculate_portfolio(self.initial_cash)
-                available_cash = current_portfolio.current_cash
-                if trade_value > available_cash:
-                    msg = f"Insufficient cash for BUY: need ${trade_value:,.2f}, available ${available_cash:,.2f}"
-                    logger.error(msg)
-                    return AgentReport(agent_id=self.agent_id, status="error", message=msg)
-
-                logger.info(f"[PORTFOLIO DEBUG] Creating BUY trade for {symbol}")
-                trade = self.repository.create_trade(
-                    task_id=trade_id,
-                    symbol=symbol, side="BUY", quantity=quantity, price=price,
-                    decision={}, confidence=1.0, reason="Executed Trade"
-                )
-                logger.info(f"[PORTFOLIO DEBUG] Trade created with trade_id={trade.trade_id}")
+                # --- FIX 2: Ensure current_price is set on position ---
                 position = self.repository.get_position(symbol)
-                logger.info(f"[PORTFOLIO DEBUG] Existing position before update: {position}")
                 if position:
                     new_qty = position.quantity + quantity
                     new_cost = (position.cost_basis() + quantity * price) / new_qty
                     self.repository.update_position(symbol, quantity=new_qty, avg_cost=new_cost, add_trade=trade.trade_id)
                 else:
                     self.repository.create_position(symbol, quantity=quantity, avg_cost=price, trades=[trade.trade_id])
-                logger.info(f"[PORTFOLIO DEBUG] Position after update: {self.repository.get_position(symbol)}")
+                # Set current_price to execution price (overwrites default 0.0 on new positions, updates existing)
+                self.repository.update_position(symbol, current_price=price)
             elif side == "SELL":
                 logger.info(f"[PORTFOLIO DEBUG] Creating SELL trade for {symbol}")
                 trade = self.repository.create_trade(
@@ -130,7 +112,10 @@ class PortfolioAgent(Agent):
                         self.repository.close_position(symbol)
                     else:
                         self.repository.update_position(symbol, quantity=new_qty, add_trade=trade.trade_id)
+                        # Also update current_price to latest (execution price) for transparency
+                        self.repository.update_position(symbol, current_price=price)
                 else:
+                    # Short sale
                     self.repository.create_position(symbol, quantity=-quantity, avg_cost=price, trades=[trade.trade_id])
             else:
                 msg = f"Unknown trade side: {side}"
