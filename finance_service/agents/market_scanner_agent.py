@@ -4,7 +4,7 @@ import logging
 import asyncio
 import os
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Set, Tuple, Any
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -248,10 +248,63 @@ class MarketScannerAgent(Agent):
             )
 
         prices: List[Dict[str, Any]] = []
-        for symbol in symbols_to_check:
-            price_data = await self._fetch_quick_quote(symbol, data_agent)
-            if price_data:
-                prices.append(price_data)
+        if data_agent:
+            try:
+                # Batch fetch all symbols in one go to avoid rate limiting (was 401 errors)
+                end_date = datetime.now().strftime("%Y-%m-%d")
+                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+                logger.info(f"[PriceMonitor] Batch fetching {len(symbols_to_check)} symbols via provider (start={start_date}, end={end_date})")
+                
+                # Call provider.fetch_ohlcv directly (uses batching and delays)
+                results = await asyncio.to_thread(
+                    data_agent.provider.fetch_ohlcv,
+                    symbols_to_check,
+                    start_date=start_date,
+                    end_date=end_date,
+                    interval="1d"
+                )
+                
+                # Extract latest prices and optionally store in cache
+                for symbol, df in results.items():
+                    if df is not None and not df.empty:
+                        # Cache the fetched data for future single-symbol requests
+                        try:
+                            data_agent.cache.store(symbol, df, "1d")
+                        except Exception as e:
+                            logger.debug(f"Cache store failed for {symbol}: {e}")
+                        
+                        # Extract latest close price, volume, and change
+                        if len(df) >= 2 and 'Close' in df.columns:
+                            latest_close = float(df['Close'].iloc[-1])
+                            prev_close = float(df['Close'].iloc[-2])
+                            volume = int(df['Volume'].iloc[-1]) if 'Volume' in df.columns else None
+                            change_pct = ((latest_close - prev_close) / prev_close) * 100 if prev_close and prev_close != 0 else None
+                        elif not df.empty and 'Close' in df.columns:
+                            latest_close = float(df['Close'].iloc[-1])
+                            volume = int(df['Volume'].iloc[-1]) if 'Volume' in df.columns else None
+                            change_pct = None
+                        else:
+                            continue
+                        
+                        prices.append({
+                            "symbol": symbol,
+                            "price": latest_close,
+                            "volume": volume,
+                            "change_pct": change_pct,
+                            "timestamp": datetime.utcnow().isoformat(),
+                        })
+                logger.info(f"[PriceMonitor] Batch fetch produced {len(prices)}/{len(symbols_to_check)} valid price updates")
+            except Exception as e:
+                logger.error(f"[PriceMonitor] Batch fetch failed: {e}", exc_info=True)
+                # Fallback to individual fetches if batch fails entirely
+                logger.info("[PriceMonitor] Falling back to individual fetch method")
+                prices = []
+                for symbol in symbols_to_check:
+                    price_data = await self._fetch_quick_quote(symbol, data_agent)
+                    if price_data:
+                        prices.append(price_data)
+        else:
+            logger.warning("[PriceMonitor] No DataAgent provided; cannot fetch prices")
 
         message = f"Price refresh: {len(prices)} of {len(symbols_to_check)} symbols updated."
         payload = {
