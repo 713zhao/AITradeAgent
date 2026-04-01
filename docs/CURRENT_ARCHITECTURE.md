@@ -476,7 +476,7 @@ End of Day (Market Close):
 
 | Feature | Status |
 |---------|--------|
-| Active agents | 15 core + RegimeAgent (optional, disabled by default) |
+| Active agents | 16 core + RegimeAgent (optional, disabled by default) |
 | LLM abstraction layer | ✅ Implemented (OpenRouter, OpenAI, Anthropic, Ollama) |
 | Market Regime Classification | ✅ Implemented (LLM + rule-based fallback) |
 | Config management | ✅ Single YAML (`config/config.yaml`) with hot-reload |
@@ -487,8 +487,9 @@ End of Day (Market Close):
 | Fundamentals integration | ✅ FundamentalsAgent with OpenBB, composite scores, cached |
 | News analysis | ✅ VADER baseline + optional LLM narrative extraction |
 | Options data & strategies | ✅ OptionsDataAgent (chains, IV), OptionsStrategyAgent (CC, CSP, directional) |
+| ML Pipeline | ✅ Feature store, LearningAgent (LightGBM, SHAP, Optuna). Manual training; auto-inference optional |
 | Symbol universe | 100 symbols across 5 themes |
-| Scanning | 3-tier: discovery (daily) + price monitor (15min) + exit (5min) |
+| Scanning | 3-tier: discovery (daily) + price refresh (15min) + exit (5min) |
 | Ranking | 5-factor composite scoring (0-1) with real data |
 | Exit management | Reactive (stops/profits) + strategic (re-analysis) |
 | Risk checks | Portfolio exposure, position size, drawdown, duplicates |
@@ -522,6 +523,7 @@ End of Day (Market Close):
 | 2026-04-01 | Backtesting engine (Phase 2) | Vectorized backtest engine, walk-forward analysis, PDF reporting. |
 | 2026-04-01 | Fundamentals integration (Phase 4) | FundamentalsAgent (OpenBB) fetches PE/PB/ROE/growth, computes value/quality/growth scores. NewsAgent supports optional LLM sentiment with narratives. StrategyAgent boosts confidence based on fundamental scores. |
 | 2026-04-01 | Options support (Phase 5) | OptionsDataAgent fetches chains, IV, Greeks. OptionsStrategyAgent generates covered calls, cash-secured puts, directional calls. Position model extended for options. |
+| 2026-04-01 | ML Pipeline (Phase 6) | FeatureStore (SQLite), LearningAgent with LightGBM (classification/regression), SHAP explanations, Optuna hyperparameter tuning. |
 
 ---
 

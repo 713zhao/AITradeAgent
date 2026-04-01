@@ -134,6 +134,8 @@ class MainOrchestratorAgent:
         self.portfolio_agent = PortfolioAgent(simple_config, data_agent=self.data_agent)
         # HealthAgent: uses config_engine
         self.health_agent = HealthAgent(config_engine)
+        # LearningAgent: ML model training and inference (Phase 6)
+        self.learning_agent = LearningAgent(config_engine)
         # TelegramAgent: uses simple_config
         self.telegram_agent = TelegramAgent(simple_config)
         # ExitAgent: monitors held positions for exit conditions

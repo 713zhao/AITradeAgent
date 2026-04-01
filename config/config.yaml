@@ -65,6 +65,14 @@ finance:
     max_delta_per_contract: 100  # delta limit per option position
     allow_early_exercise: false  # handle assignment risk
 
+  # Machine Learning (Phase 6)
+  learning:
+    enabled: false
+    label_type: "win_rate"  # "win_rate" (binary) or "pnl" (regression)
+    retrain_days: 7
+    min_trades: 100
+    use_optuna: false  # hyperparameter tuning
+
   scheduling:
     market_scan_interval_minutes: 15
     price_refresh_interval_minutes: 15
