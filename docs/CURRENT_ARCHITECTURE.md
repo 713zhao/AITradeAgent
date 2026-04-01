@@ -476,7 +476,7 @@ End of Day (Market Close):
 
 | Feature | Status |
 |---------|--------|
-| Active agents | 13 core + RegimeAgent (optional, disabled by default) |
+| Active agents | 14 core + RegimeAgent (optional, disabled by default) |
 | LLM abstraction layer | ✅ Implemented (OpenRouter, OpenAI, Anthropic, Ollama) |
 | Market Regime Classification | ✅ Implemented (LLM + rule-based fallback) |
 | Config management | ✅ Single YAML (`config/config.yaml`) with hot-reload |
@@ -484,12 +484,14 @@ End of Day (Market Close):
 | Portfolio risk engine | ✅ Implemented (volatility, VaR, correlation, concentration) |
 | Position sizing algorithms | ✅ EqualRisk, VolatilityAdjusted, EqualWeight (configurable) |
 | Backtesting engine | ✅ Vectorized engine with walk-forward analysis |
+| Fundamentals integration | ✅ FundamentalsAgent with OpenBB, composite scores, cached |
+| News analysis | ✅ VADER baseline + optional LLM narrative extraction |
 | Symbol universe | 100 symbols across 5 themes |
 | Scanning | 3-tier: discovery (daily) + price monitor (15min) + exit (5min) |
 | Ranking | 5-factor composite scoring (0-1) with real data |
 | Exit management | Reactive (stops/profits) + strategic (re-analysis) |
 | Risk checks | Portfolio exposure, position size, drawdown, duplicates |
-| Data providers | Yahoo Finance (yfinance) |
+| Data providers | Yahoo Finance (yfinance) + OpenBB (fundamentals) |
 | Auto-execution | Enabled (confidence ≥ 0.8) |
 | Position model | `entry_price` alias (compatible with broker-style code) |
 | IndicatorsSnapshot | Dict-like `.get()` for compatibility |
@@ -515,8 +517,9 @@ End of Day (Market Close):
 | 2026-04-01 | RegimeAgent (Phase 1) | Optional market regime classifier with LLM and rule-based fallback. |
 | 2026-04-01 | Config YAML overhaul | Consolidated configuration into `config/config.yaml` with hot-reload support via watchdog. |
 | 2026-04-01 | Strategy regime integration | StrategyAgent now adjusts confidence based on market regime (boost/penalty). |
-| 2026-04-01 | Backtesting engine (Phase 2) | Vectorized backtest engine, walk-forward analysis, PDF reporting. |
 | 2026-04-01 | Portfolio risk & position sizing (Phase 3) | PortfolioRisk calculator, position sizer factory (EqualRisk, VolatilityAdjusted, EqualWeight) integrated into StrategyAgent. |
+| 2026-04-01 | Backtesting engine (Phase 2) | Vectorized backtest engine, walk-forward analysis, PDF reporting. |
+| 2026-04-01 | Fundamentals integration (Phase 4) | FundamentalsAgent (OpenBB) fetches PE/PB/ROE/growth, computes value/quality/growth scores. NewsAgent supports optional LLM sentiment with narratives. StrategyAgent boosts confidence based on fundamental scores. |
 
 ---
 
