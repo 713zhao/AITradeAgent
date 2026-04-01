@@ -1,15 +1,14 @@
 # AITradeAgent - Current Production Architecture
 
 **Version:** 2.1  
-**Last Updated:** 2026-03-31  
-**Scope:** Active agents wired into `app.py` orchestrator  
-**Status:** Production-ready, fully operational
+**Last Updated:** 2026-03-31 (Architecture as of v2.1)
+**Improvement Plan:** See [IMPROVEMENT_PLAN_2026Q2.md](./IMPROVEMENT_PLAN_2026Q2.md) for Q2 2026 roadmap
 
 ---
 
 ## Quick Summary
 
-**Currently Running:** 13 active agents wired into the orchestrator  
+**Currently Running:** 13 active agents wired into the orchestrator
 **3-Tier Architecture:**
 - **Tier 1 (Daily):** Discovery Scan → 100 symbols → rank → top 10/theme → full pipeline
 - **Tier 2 (15 min):** Lightweight price refresh for watchlist + held positions
