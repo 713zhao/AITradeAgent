@@ -155,50 +155,71 @@ class PortfolioAgent(Agent):
             if not symbols:
                 return
             
-            logger.info(f"Updating prices for {len(symbols)} positions (batch fetch via provider)")
-            
-            try:
-                # Batch fetch all symbols in one provider call to avoid rate limits
-                from datetime import datetime, timedelta
-                end_date = datetime.now().strftime("%Y-%m-%d")
-                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-                
-                results = await asyncio.to_thread(
-                    self.data_agent.provider.fetch_ohlcv,
-                    symbols,
-                    start_date=start_date,
-                    end_date=end_date,
-                    interval="1d"
-                )
-                
-                updated_count = 0
-                for symbol, df in results.items():
-                    if df is not None and not df.empty:
-                        # Cache the data for future single-symbol requests
-                        try:
-                            self.data_agent.cache.store(symbol, df, "1d")
-                        except Exception as e:
-                            logger.debug(f"Cache store failed for {symbol}: {e}")
-                        
-                        # Extract latest close price
-                        try:
-                            latest_price = float(df['Close'].iloc[-1])
-                            if latest_price and latest_price > 0:
-                                self.repository.update_position(symbol, current_price=latest_price)
-                                updated_count += 1
-                                logger.debug(f"Updated {symbol} current price to {latest_price}")
-                            else:
-                                logger.warning(f"Invalid price fetched for {symbol}: {latest_price}")
-                        except Exception as e:
-                            logger.warning(f"Failed to extract price from data for {symbol}: {e}")
-                
-                logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions (batch fetch)")
-            except Exception as e:
-                logger.error(f"Batch price fetch failed: {e}", exc_info=True)
-                # Fallback to individual fetches if batch fails entirely
-                logger.info("Falling back to individual fetch method")
-                await self._update_prices_individual()
-            
+            logger.info(f"Updating prices for {len(symbols)} positions (cache-first)")
+
+            # Step 1: serve from cache where possible
+            cache_hits = {}
+            stale_symbols = []
+            for symbol in symbols:
+                cached_df = self.data_agent.cache.get(symbol, "1d")
+                if cached_df is not None and not cached_df.empty:
+                    try:
+                        close_col = 'Close' if 'Close' in cached_df.columns else 'close'
+                        latest_price = float(cached_df[close_col].iloc[-1])
+                        if latest_price > 0:
+                            cache_hits[symbol] = latest_price
+                            continue
+                    except Exception as e:
+                        logger.debug(f"Cache price extraction failed for {symbol}: {e}")
+                stale_symbols.append(symbol)
+
+            logger.info(f"Price update: {len(cache_hits)} from cache, {len(stale_symbols)} stale/missing")
+
+            # Apply cached prices immediately (no network I/O)
+            for symbol, price in cache_hits.items():
+                self.repository.update_position(symbol, current_price=price)
+
+            # Step 2: only fetch stale symbols from yFinance
+            if stale_symbols:
+                try:
+                    from datetime import datetime, timedelta
+                    end_date = datetime.now().strftime("%Y-%m-%d")
+                    start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+                    results = await asyncio.to_thread(
+                        self.data_agent.provider.fetch_ohlcv,
+                        stale_symbols,
+                        start_date=start_date,
+                        end_date=end_date,
+                        interval="1d"
+                    )
+
+                    updated_count = 0
+                    for symbol, df in results.items():
+                        if df is not None and not df.empty:
+                            # Correctly store in cache using set(symbol, df, interval)
+                            try:
+                                self.data_agent.cache.set(symbol, df, "1d")
+                            except Exception as e:
+                                logger.debug(f"Cache store failed for {symbol}: {e}")
+
+                            try:
+                                latest_price = float(df['Close'].iloc[-1])
+                                if latest_price > 0:
+                                    self.repository.update_position(symbol, current_price=latest_price)
+                                    updated_count += 1
+                                    logger.debug(f"Updated {symbol} price to {latest_price}")
+                                else:
+                                    logger.warning(f"Invalid price fetched for {symbol}: {latest_price}")
+                            except Exception as e:
+                                logger.warning(f"Failed to extract price from data for {symbol}: {e}")
+
+                    logger.info(f"Fetched {updated_count}/{len(stale_symbols)} stale prices from yFinance")
+                except Exception as e:
+                    logger.error(f"Batch price fetch failed: {e}", exc_info=True)
+                    logger.info("Falling back to individual fetch method")
+                    await self._update_prices_individual()
+
             self._last_price_update = datetime.utcnow()
 
     async def _update_prices_individual(self):
