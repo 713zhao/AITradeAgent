@@ -97,9 +97,9 @@ class ExitAgent(Agent):
             if current_price is None and self.data_agent:
                 try:
                     quote_report = await self.data_agent.run(
-                        symbol=symbol, 
-                        interval="1d", 
-                        use_cache=False, 
+                        symbol=symbol,
+                        interval="1d",
+                        use_cache=True,
                         emit_events=False
                     )
                     if quote_report.status == "success" and "dataframe" in quote_report.payload:
@@ -175,7 +175,7 @@ class ExitAgent(Agent):
                 data_report = await self.data_agent.run(
                     symbol=symbol,
                     interval="1d",
-                    use_cache=False,
+                    use_cache=True,
                     emit_events=False
                 )
                 

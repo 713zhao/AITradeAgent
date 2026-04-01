@@ -222,7 +222,20 @@ class DataAgent(Agent):
         if self.cache.ttl_minutes != appropriate_ttl:
             logger.info(f"Updating cache TTL: {self.cache.ttl_minutes} min → {appropriate_ttl} min")
             self.cache.ttl_minutes = appropriate_ttl
-    
+
+    def _get_ttl_for_interval(self, interval: str) -> int:
+        """Return cache TTL appropriate for the data interval.
+
+        Daily bars close once per day — no need to re-fetch every 5 min.
+        Hourly bars update once per hour.  Intraday bars keep the base TTL.
+        """
+        base_ttl = self._get_dynamic_cache_ttl()
+        if interval in ("1d", "1wk", "1mo"):
+            return max(base_ttl, 60)   # at least 60 min for daily+ data
+        elif interval in ("1h", "4h", "60m"):
+            return max(base_ttl, 30)   # at least 30 min for hourly data
+        return base_ttl                # intraday: use market-hours TTL as-is
+
     async def run(self, symbol: str = "", 
                   start_date: Optional[str] = None,
                   end_date: Optional[str] = None,
@@ -334,6 +347,7 @@ class DataAgent(Agent):
         cached_df = None
 
         if use_cache:
+            self.cache.ttl_minutes = self._get_ttl_for_interval(interval)
             cached_df = self.cache.retrieve(cache_key)
             if cached_df is not None and not cached_df.empty:
                 logger.debug(f"[Cache Hit] {symbol} data from cache.")
