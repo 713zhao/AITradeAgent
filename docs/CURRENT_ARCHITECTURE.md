@@ -481,6 +481,9 @@ End of Day (Market Close):
 | Market Regime Classification | ✅ Implemented (LLM + rule-based fallback) |
 | Config management | ✅ Single YAML (`config/config.yaml`) with hot-reload |
 | Strategy regime integration | ✅ Confidence adjustment based on regime |
+| Portfolio risk engine | ✅ Implemented (volatility, VaR, correlation, concentration) |
+| Position sizing algorithms | ✅ EqualRisk, VolatilityAdjusted, EqualWeight (configurable) |
+| Backtesting engine | ✅ Vectorized engine with walk-forward analysis |
 | Symbol universe | 100 symbols across 5 themes |
 | Scanning | 3-tier: discovery (daily) + price monitor (15min) + exit (5min) |
 | Ranking | 5-factor composite scoring (0-1) with real data |
@@ -512,6 +515,8 @@ End of Day (Market Close):
 | 2026-04-01 | RegimeAgent (Phase 1) | Optional market regime classifier with LLM and rule-based fallback. |
 | 2026-04-01 | Config YAML overhaul | Consolidated configuration into `config/config.yaml` with hot-reload support via watchdog. |
 | 2026-04-01 | Strategy regime integration | StrategyAgent now adjusts confidence based on market regime (boost/penalty). |
+| 2026-04-01 | Backtesting engine (Phase 2) | Vectorized backtest engine, walk-forward analysis, PDF reporting. |
+| 2026-04-01 | Portfolio risk & position sizing (Phase 3) | PortfolioRisk calculator, position sizer factory (EqualRisk, VolatilityAdjusted, EqualWeight) integrated into StrategyAgent. |
 
 ---
 
