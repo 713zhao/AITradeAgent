@@ -162,6 +162,7 @@ class MainOrchestratorAgent:
         await self.event_bus.subscribe(Events.GET_SYSTEM_STATUS, self.handle_get_system_status)
         await self.event_bus.subscribe(Events.SCHEDULE, self.handle_schedule)  # health checks, daily report
         await self.event_bus.subscribe(Events.EXIT_CHECK_TRIGGER, self.handle_exit_check)  # Tier 3
+        await self.event_bus.subscribe(Events.POSITION_DEGRADED, self.handle_position_degraded)  # strategic exit
         await self.event_bus.subscribe(Events.PRICE_MONITOR_TRIGGER, self.handle_price_monitor)  # Tier 2
 
         # Start background agents
@@ -307,6 +308,39 @@ class MainOrchestratorAgent:
             if degraded:
                 logger.warning(f"ExitAgent found {len(degraded)} degraded positions")
                 await self.event_bus.publish(Event(event_type=Events.POSITION_DEGRADED, data={"degraded": degraded}))
+
+    async def handle_position_degraded(self, event: Event):
+        """Execute a market-sell for every degraded position reported by ExitAgent."""
+        degraded_list = event.data.get("degraded", [])
+        if not degraded_list:
+            return
+        logger.info(f"handle_position_degraded: {len(degraded_list)} position(s) to exit")
+        for record in degraded_list:
+            symbol = record.get("symbol")
+            quantity = record.get("quantity")
+            current_price = record.get("current_price")
+            reason = record.get("reason", "strategic degradation")
+            if not symbol or not quantity:
+                logger.warning(f"Degraded record missing symbol/quantity: {record}")
+                continue
+            logger.info(f"Executing strategic exit for {symbol}: {reason}")
+            trade_proposal = {
+                "symbol": symbol,
+                "action": "SELL",
+                "quantity": quantity,
+                "target_price": current_price,
+                "confidence": 1.0,
+                "rationale": [reason],
+            }
+            try:
+                exec_report = await self.execution_agent.run(approved_trade_proposal=trade_proposal)
+                if exec_report and exec_report.status == "success":
+                    await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload))
+                    logger.info(f"Strategic exit executed for {symbol}")
+                else:
+                    logger.warning(f"Strategic exit failed for {symbol}: {exec_report.message if exec_report else 'no report'}")
+            except Exception as e:
+                logger.error(f"Error executing strategic exit for {symbol}: {e}", exc_info=True)
 
     async def handle_price_monitor(self, event: Event):
         """Tier 2: Lightweight price refresh for watchlist + held symbols every 15 min."""

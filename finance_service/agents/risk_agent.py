@@ -373,6 +373,7 @@ class RiskAgent(Agent):
             # Fetch current portfolio state if PortfolioAgent is available
             current_positions: Dict[str, Position] = {}
             portfolio_equity: float = 100000.0  # fallback
+            available_cash: float = 100000.0     # fallback
             if self.portfolio_agent:
                 try:
                     portfolio_report = await self.portfolio_agent.run(
@@ -397,7 +398,8 @@ class RiskAgent(Agent):
                                 logger.warning(f"Failed to convert position {p.get('symbol')}: {e}")
                                 continue
                         portfolio_equity = portfolio_data["equity_metrics"]["total_equity"]
-                        logger.info(f"RiskAgent using live portfolio: equity=${portfolio_equity:,.2f}, positions={len(current_positions)}")
+                        available_cash = portfolio_data["equity_metrics"].get("current_cash", portfolio_equity)
+                        logger.info(f"RiskAgent using live portfolio: equity=${portfolio_equity:,.2f}, cash=${available_cash:,.2f}, positions={len(current_positions)}")
                         
                         # Safety check: if equity is negative or severely impaired, reject all proposals
                         if portfolio_equity <= 0:
@@ -441,6 +443,17 @@ class RiskAgent(Agent):
             message = f"Risk assessment complete for {len(results)} proposal(s). Approval Required: {any_approval_required}"
             # Determine decision: auto-execute only if all risk checks passed and no approval required
             decision = "APPROVED" if (all_passed and not any_approval_required) else "REJECTED"
+
+            # Cash sufficiency check: reject if total trade cost exceeds available cash
+            if decision == "APPROVED" and proposals_data:
+                p = proposals_data[0]
+                trade_cost = (p.get("quantity") or 0) * (p.get("target_price") or 0)
+                if trade_cost > available_cash:
+                    decision = "REJECTED"
+                    message = (f"Insufficient cash: trade costs ${trade_cost:,.2f} "
+                               f"but only ${available_cash:,.2f} available")
+                    logger.warning(f"RiskAgent REJECTED {p.get('symbol','?')}: {message}")
+
             _sym = proposals_data[0].get("symbol","?") if proposals_data else "?"
             _qty = proposals_data[0].get("quantity","?") if proposals_data else "?"
             _price = proposals_data[0].get("target_price","?") if proposals_data else "?"

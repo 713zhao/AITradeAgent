@@ -86,7 +86,6 @@ universe:
     - AITX
     - PRCT
     - LQDA
-    - EXAI
     - HIMS
     - GRAB
     - IONQ
@@ -220,7 +219,6 @@ universe:
   - CRM
   - CRWD
   - DDOG
-  - EXAI
   - FTNT
   - GFAI
   - GFS
