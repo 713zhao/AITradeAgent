@@ -6,7 +6,7 @@ risk:
   default_risk_budget_pct: 1.0
   stop_loss_default_pct: 1.5
   take_profit_default_pct: 3.0
-  max_concurrent_positions: 10
+  max_concurrent_positions: 30  # increased from 10 for testing
   min_position_size_usd: 100
   allow_short_selling: false
   margin_enabled: false
