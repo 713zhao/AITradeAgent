@@ -370,6 +370,13 @@ class StrategyAgent(Agent):
             should_buy, confidence, entry_rules = self.rule_strategy.evaluate_entry(indicators_snapshot)
             should_sell, exit_rules = self.rule_strategy.evaluate_exit(indicators_snapshot)
             
+            # Incorporate fundamental scores if available (Phase 4)
+            fundamentals = analysis_payload.get("fundamentals")
+            if fundamentals:
+                fund_boost = self._compute_fundamental_boost(fundamentals)
+                confidence = min(confidence + fund_boost, 1.0)
+                logger.debug(f"Fundamental confidence boost: +{fund_boost:.2%}")
+            
             # Build trade proposals if entry signal
             proposals = []
             if should_buy:
@@ -602,6 +609,30 @@ class StrategyAgent(Agent):
         
         logger.debug(f"Generated {len(proposals)} proposals.")
         return proposals
+
+    def _compute_fundamental_boost(self, fundamentals: Dict[str, Any]) -> float:
+        """
+        Compute confidence boost (0-0.1) based on fundamental scores.
+        Requires fundamentals dict with value_score, quality_score, growth_score (0-1).
+        """
+        try:
+            value_score = fundamentals.get('value_score', 0.5)
+            quality_score = fundamentals.get('quality_score', 0.5)
+            growth_score = fundamentals.get('growth_score', 0.5)
+            # Weighted combination: value 40%, quality 40%, growth 20%
+            composite = (value_score * 0.4 + quality_score * 0.4 + growth_score * 0.2)
+            # Boost: up to +5% if composite is very high (>0.8)
+            if composite > 0.8:
+                return 0.05
+            elif composite > 0.7:
+                return 0.03
+            elif composite < 0.3:
+                return -0.02  # penalty for poor fundamentals
+            else:
+                return 0.0
+        except Exception as e:
+            logger.warning(f"Fundamental boost calculation error: {e}")
+            return 0.0
 
     def __repr__(self) -> str:
         return f"<StrategyAgent(id='{self.agent_id}')>"

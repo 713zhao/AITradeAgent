@@ -114,6 +114,8 @@ class MainOrchestratorAgent:
         self.market_scanner_agent = MarketScannerAgent(config_engine)
         self.data_agent = DataAgent(config_engine)
         self.news_agent = NewsAgent(config_engine)
+        # FundamentalsAgent: fetch fundamental metrics (Phase 4)
+        self.fundamentals_agent = FundamentalsAgent(config_engine)
         # RegimeAgent: optional LLM market regime classifier (Phase 1)
         self.regime_agent = RegimeAgent(config_engine)
         # AnalysisAgent: uses default indicator periods; no config needed
@@ -230,6 +232,13 @@ class MainOrchestratorAgent:
             if data_report.status != "success":
                 logger.warning(f"Data fetch failed for {symbol}: {data_report.message}")
                 continue
+            # Fundamentals fetch (optional, parallel with news)
+            fundamentals_report = None
+            if self.config_engine.get("finance", "data/fetch_fundamentals", default=False):
+                fundamentals_report = await self.fundamentals_agent.run({"symbol": symbol})
+                if fundamentals_report.status != "success":
+                    logger.debug(f"Fundamentals unavailable for {symbol}: {fundamentals_report.message}")
+                    fundamentals_report = None
             # News fetch
             news_report = await self.news_agent.run(symbol=symbol)
             # Analysis
@@ -237,6 +246,10 @@ class MainOrchestratorAgent:
             if analysis_report.status != "success":
                 logger.warning(f"Analysis failed for {symbol}: {analysis_report.message}")
                 continue
+            
+            # Attach fundamentals to analysis payload for strategy if available
+            if fundamentals_report and fundamentals_report.status == "success":
+                analysis_report.payload["fundamentals"] = fundamentals_report.payload.get("analysis", {})
             
             # Regime classification (if enabled)
             if self.config_engine.get("llm", "modules/market_regime/enabled", default=False):
