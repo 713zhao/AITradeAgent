@@ -268,10 +268,19 @@ class HealthAgent(Agent):
             return
         
         try:
-            portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
+            portfolio_report = await asyncio.wait_for(
+                self.portfolio_agent.get_detailed_portfolio_state(),
+                timeout=3.0
+            )
             if portfolio_report.status != "success":
                 logger.error(f"Failed to get portfolio state for daily summary: {portfolio_report.message}")
                 return
+        except asyncio.TimeoutError:
+            logger.error("Portfolio state fetch timed out for daily summary; cannot send summary")
+            return
+        except Exception as e:
+            logger.error(f"Error fetching portfolio state for daily summary: {e}")
+            return
             
             metrics = portfolio_report.payload.get("equity_metrics", {})
             positions = portfolio_report.payload.get("positions", {})
