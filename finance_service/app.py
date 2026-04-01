@@ -269,7 +269,6 @@ class MainOrchestratorAgent:
                         logger.warning(f"Pre-execution Telegram notification failed: {_tg_err}")
                 exec_report = await self.execution_agent.run(risk_report)
                 if exec_report.status == "success":
-                    # Handled by event, but we also publish
                     await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload))
             # else: require approval, skip for now
 

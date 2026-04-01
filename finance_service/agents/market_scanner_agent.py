@@ -196,16 +196,9 @@ class MarketScannerAgent(Agent):
                 payload=payload
             )
 
-            # Publish MARKET_SCANNED event
-            try:
-                await self.event_bus.publish(Event(
-                    event_type=Events.MARKET_SCANNED,
-                    data=asdict(report)
-                ))
-            except Exception as e:
-                logger.error(f"Error publishing MARKET_SCANNED event: {e}", exc_info=True)
-                raise
-
+            # MARKET_SCANNED event is published by the orchestrator (handle_market_scan_trigger)
+            # after run() returns, with report.payload directly as event data.
+            # Do NOT publish here to avoid duplicate Telegram messages with 0 symbols.
             return report
 
         except Exception as e:

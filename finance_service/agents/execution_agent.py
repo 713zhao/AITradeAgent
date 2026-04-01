@@ -1,9 +1,7 @@
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
-from dataclasses import asdict
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
 
 logger = logging.getLogger(__name__)
@@ -21,7 +19,6 @@ class ExecutionAgent(Agent):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.event_bus = get_event_bus()
         logger.info(f"ExecutionAgent initialized with config: {self.config}")
 
     async def run(self, approval_report: AgentReport) -> Optional[AgentReport]:
@@ -61,19 +58,12 @@ class ExecutionAgent(Agent):
             message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
             payload = {"execution_result": execution_result}
 
-            # Publish execution event as an AgentReport
             report = AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
                 payload=payload
             )
-            event_data = asdict(report)
-            logger.info(f"[EXECUTION DEBUG] Publishing TRADE_EXECUTED event with data keys: {list(event_data.keys())}")
-            await self.event_bus.publish(Event(
-                event_type=Events.TRADE_EXECUTED,
-                data=event_data
-            ))
             return report
         except Exception as e:
             logger.error(f"Error in ExecutionAgent run: {e}")
