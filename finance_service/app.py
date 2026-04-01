@@ -128,8 +128,19 @@ class MainOrchestratorAgent:
         self.strategy_agent = StrategyAgent(config_engine, portfolio_agent=None)
         # RiskAgent: uses simple_config with policy dict
         self.risk_agent = RiskAgent(simple_config, portfolio_agent=None)
-        # ExecutionAgent: simple config
-        self.execution_agent = ExecutionAgent(simple_config)
+        
+        # Broker (Phase 7): create from config
+        broker_type = config_engine.get("finance", "execution/broker", default="paper")
+        broker_config = config_engine.get_section("finance").get("execution", {}).get("broker_config", {})
+        from finance_service.brokers.factory import BrokerFactory
+        broker = BrokerFactory.create(broker_type, broker_config)
+        # Connect broker
+        await broker.connect()
+        logger.info(f"Broker connected: {broker_type}")
+        
+        # ExecutionAgent: now takes broker instance
+        self.execution_agent = ExecutionAgent(broker)
+        
         # PortfolioAgent: needs simple_config and data_agent
         self.portfolio_agent = PortfolioAgent(simple_config, data_agent=self.data_agent)
         # HealthAgent: uses config_engine

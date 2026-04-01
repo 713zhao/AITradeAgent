@@ -20,6 +20,13 @@
 - ✅ RegimeAgent (optional) for market regime classification
 - ✅ Config YAML overhaul with hot-reload support
 - ✅ StrategyAgent now adjusts confidence based on regime
+- ✅ Backtesting engine (vectorized, walk-forward, PDF reports)
+- ✅ Portfolio risk & position sizing (PortfolioRisk, EqualRisk/Volatility/EqualWeight sizers)
+- ✅ Fundamentals integration (OpenBB, composite scores)
+- ✅ NewsAgent enhanced with optional LLM sentiment + narratives
+- ✅ Options support (OptionsDataAgent, OptionsStrategyAgent: covered calls, CSP)
+- ✅ ML Pipeline (FeatureStore, LearningAgent with LightGBM, SHAP, Optuna)
+- ✅ Broker abstraction (interface + PaperBroker + TigerBrokers stub)
 - ✅ All LLM features disabled by default (backward compatible)
 
 **Recent Resolutions (2026-03-30/31):**
@@ -488,6 +495,7 @@ End of Day (Market Close):
 | News analysis | ✅ VADER baseline + optional LLM narrative extraction |
 | Options data & strategies | ✅ OptionsDataAgent (chains, IV), OptionsStrategyAgent (CC, CSP, directional) |
 | ML Pipeline | ✅ Feature store, LearningAgent (LightGBM, SHAP, Optuna). Manual training; auto-inference optional |
+| Broker abstraction | ✅ Interface defined, PaperBroker implemented, TigerBrokersBroker stub |
 | Symbol universe | 100 symbols across 5 themes |
 | Scanning | 3-tier: discovery (daily) + price refresh (15min) + exit (5min) |
 | Ranking | 5-factor composite scoring (0-1) with real data |
