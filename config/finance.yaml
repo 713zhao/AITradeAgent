@@ -122,7 +122,6 @@ universe:
     - MCHP
     - TXN
     - GFS
-    - WOLF
   - name: Cloud
     symbols:
     - CRWD
