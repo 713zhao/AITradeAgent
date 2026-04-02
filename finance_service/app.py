@@ -174,12 +174,11 @@ class MainOrchestratorAgent:
     # Event handlers
     async def handle_market_scan_trigger(self, event: Event):
         logger.info("Received MARKET_SCAN_TRIGGER")
-        # Check market hours: if both US and HK closed, skip
+        # Check market hours: if both US and HK closed, skip scan entirely
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
-        # TEMPORARY: Force scan now to generate trades (09:48 SG, HK open)
         if not (is_us_market_open() or is_hk_market_open()):
-            logger.warning("Markets closed but forcing scan for immediate trade generation")
-            # return
+            logger.info("Markets closed (US and HK). Skipping market scan.")
+            return
         # Trigger scanner with DataAgent for proper ranking
         report = await self.market_scanner_agent.run(data_agent=self.data_agent)
         if report.status == "success" or report.status == "opportunity":
@@ -251,6 +250,11 @@ class MainOrchestratorAgent:
             proposal = proposals[0]  # best proposal
             risk_report = await self.risk_agent.run(proposal)
             if risk_report.payload.get("decision") == "APPROVED":
+                # Guard: only execute during market hours
+                from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
+                if not (is_us_market_open() or is_hk_market_open()):
+                    logger.warning(f"Skipping execution for {symbol}: markets closed")
+                    continue
                 # Send pre-execution Telegram notification before placing the trade
                 if self.telegram_agent and self.telegram_agent.enabled:
                     try:
