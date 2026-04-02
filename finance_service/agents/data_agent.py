@@ -241,6 +241,7 @@ class DataAgent(Agent):
                   end_date: Optional[str] = None,
                   interval: str = "1d",
                   use_cache: bool = True,
+                  cache_only: bool = False,
                   emit_events: bool = True, # This parameter will control event emission per symbol
                   refresh_all: bool = False,
                   fetch_fundamentals: Optional[bool] = None) -> AgentReport:
@@ -266,7 +267,8 @@ class DataAgent(Agent):
                     start_date=start_date,
                     end_date=end_date,
                     interval=interval,
-                    use_cache=use_cache
+                    use_cache=use_cache,
+                    cache_only=cache_only
                 )
                 if df is not None and not df.empty:
                     all_fetched_data[sym] = df
@@ -298,7 +300,8 @@ class DataAgent(Agent):
             start_date=start_date,
             end_date=end_date,
             interval=interval,
-            use_cache=use_cache
+            use_cache=use_cache,
+            cache_only=cache_only
         )
 
         if df is not None and not df.empty:
@@ -330,7 +333,8 @@ class DataAgent(Agent):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         interval: str = "1d",
-        use_cache: bool = True
+        use_cache: bool = True,
+        cache_only: bool = False
     ) -> Optional[pd.DataFrame]:
         """Fetches and caches data for a single symbol."""
         logger.info(f"[_fetch_data_for_symbol] symbol={symbol}, start_date={start_date}, end_date={end_date}, interval={interval}")
@@ -353,6 +357,10 @@ class DataAgent(Agent):
                 logger.debug(f"[Cache Hit] {symbol} data from cache.")
                 flow("DataAgent", "DONE", f"{symbol} → {len(cached_df)} rows [CACHE HIT]")
                 return cached_df
+
+        if cache_only:
+            flow("DataAgent", "SKIP", f"{symbol} → cache miss, skipping yFinance (cache_only mode)")
+            return None
 
         logger.debug(f"[Cache Miss] Fetching {symbol} data from provider.")
         # fetch_ohlcv is synchronous; run in thread to avoid blocking

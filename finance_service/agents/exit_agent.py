@@ -100,6 +100,7 @@ class ExitAgent(Agent):
                         symbol=symbol,
                         interval="1d",
                         use_cache=True,
+                        cache_only=True,
                         emit_events=False
                     )
                     if quote_report.status == "success" and "dataframe" in quote_report.payload:
@@ -176,6 +177,7 @@ class ExitAgent(Agent):
                     symbol=symbol,
                     interval="1d",
                     use_cache=True,
+                    cache_only=True,
                     emit_events=False
                 )
                 
