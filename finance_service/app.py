@@ -375,6 +375,12 @@ class MainOrchestratorAgent:
             data_agent=self.data_agent,
             held_symbols=held_symbols
         )
+        # Apply fetched prices to portfolio positions
+        if report and report.status == "success" and self.portfolio_agent:
+            price_dict = {item["symbol"]: item["price"] for item in report.payload.get("prices", [])}
+            if price_dict:
+                self.portfolio_agent.repository.update_position_prices(price_dict)
+                logger.info(f"Applied {len(price_dict)} price updates to portfolio")
         logger.info(f"Price monitor complete: {report.message}")
 
     async def handle_data_fetched(self, event: Event):
