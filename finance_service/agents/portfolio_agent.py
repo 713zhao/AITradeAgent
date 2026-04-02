@@ -99,9 +99,9 @@ class PortfolioAgent(Agent):
                 if position:
                     new_qty = position.quantity + quantity
                     new_cost = (position.cost_basis() + quantity * price) / new_qty
-                    self.repository.update_position(symbol, quantity=new_qty, avg_cost=new_cost, add_trade=trade.trade_id)
+                    self.repository.update_position(symbol, quantity=new_qty, avg_cost=new_cost, add_trade=trade_id)
                 else:
-                    self.repository.create_position(symbol, quantity=quantity, avg_cost=price, trades=[trade.trade_id])
+                    self.repository.create_position(symbol, quantity=quantity, avg_cost=price, trades=[trade_id])
                 # Set current_price to execution price (overwrites default 0.0 on new positions, updates existing)
                 self.repository.update_position(symbol, current_price=price)
             elif side == "SELL":
@@ -117,12 +117,12 @@ class PortfolioAgent(Agent):
                     if new_qty == 0:
                         self.repository.close_position(symbol)
                     else:
-                        self.repository.update_position(symbol, quantity=new_qty, add_trade=trade.trade_id)
+                        self.repository.update_position(symbol, quantity=new_qty, add_trade=trade_id)
                         # Also update current_price to latest (execution price) for transparency
                         self.repository.update_position(symbol, current_price=price)
                 else:
                     # Short sale
-                    self.repository.create_position(symbol, quantity=-quantity, avg_cost=price, trades=[trade.trade_id])
+                    self.repository.create_position(symbol, quantity=-quantity, avg_cost=price, trades=[trade_id])
             else:
                 msg = f"Unknown trade side: {side}"
                 logger.error(msg)

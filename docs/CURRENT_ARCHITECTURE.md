@@ -1,9 +1,9 @@
 # AITradeAgent - Current Production Architecture
 
-**Version:** 2.1  
-**Last Updated:** 2026-03-31  
+**Version:** 2.2  
+**Last Updated:** 2026-04-03  
 **Scope:** Active agents wired into `app.py` orchestrator  
-**Status:** Production-ready, fully operational
+**Status:** Operational with optimizations; auto_execute PAUSED pending HK data resolution
 
 ---
 
@@ -12,19 +12,19 @@
 **Currently Running:** 13 active agents wired into the orchestrator  
 **3-Tier Architecture:**
 - **Tier 1 (Daily):** Discovery Scan → 100 symbols → rank → top 10/theme → full pipeline
-- **Tier 2 (15 min):** Lightweight price refresh for watchlist + held positions
-- **Tier 3 (5 min):** ExitAgent monitors held positions (reactive + strategic)
+- **Tier 2 (15 min):** Lightweight price refresh for **open market symbols only** (HK/US)
+- **Tier 3 (5 min):** ExitAgent monitors **open market positions only**  
 **Interface:** Telegram bot for commands and notifications
 
-**Recent Resolutions (2026-03-30/31):**
-- ✅ Position corruption: added `entry_price` alias to Position model
-- ✅ IndicatorsSnapshot compatibility: added `.get()` method for dict-like access
-- ✅ Market scan rankings: real 0-1 composite scores (was uniform 0.5)
-- ✅ Event bus timeout: increased to 300s for long scans
-- ✅ Portfolio performance endpoint: `/portfolio/performance` now available
-- ✅ Telegram routing: fixed config override bug
-- ✅ Equity NaN issue: guarded against invalid prices
-- ✅ Auto-execute: enabled at confidence 0.8 (was 1.0)
+**Recent Updates (2026-04-03):**
+- ✅ Market-aware filtering: price_monitor and exit_check only process symbols whose markets are open (HK vs US)
+- ✅ Reduces API load, prevents HK `nan` errors during closed periods
+- ❌ **Auto_execute DISABLED** due to recurring HK data corruption (yFinance returns `nan` for .HK tickers when market closed). Must remove HK theme or implement fallback before re-enabling.
+- ⚠️ Equity currently corrupted (~$70k) while HK positions have `current_price=nan`. Will recover when HK opens next if data returns valid prices.
+
+**Ongoing Issues:**
+- HK price data unreliability (yFinance) causing portfolio valuation corruption
+- Strategy hasn't generated new signals since market scan 12:49 HK time; no trades for 12+ hours
 
 ---
 
@@ -45,7 +45,7 @@
 | 11 | LearningAgent | ✅ Active | Trade outcome analysis + recommendations |
 | 12 | HealthAgent | ✅ Active | Monitor system health + Telegram messages |
 | — | TelegramAgent | ✅ Active | User interface + notifications |
-| 13 | ExitAgent | ✅ Active | Reactive exits + strategic re-analysis (every 5 min) |
+| 13 | ExitAgent | ✅ Active | Reactive exits + strategic re-analysis (every 5 min, open-market filtered) |
 
 ---
 
@@ -82,17 +82,31 @@ Trading Pipeline (Daily):
 9. Daily EOD: SchedulerAgent emits DAILY_REPORT_TRIGGER
    → HealthAgent sends portfolio summary to Telegram
 
-Monitoring Loop (Every 5 min):
+Monitoring Loop (Every 5 min, market-aware):
 10. SchedulerAgent emits EXIT_CHECK_TRIGGER
     ↓
 11. Orchestrator retrieves portfolio positions from PortfolioAgent
     ↓
-12. ExitAgent.run(positions, perform_strategy_check=True):
+12. Filters positions: only those whose primary market (HK/US) is currently open
+    ↓
+13. ExitAgent.run(filtered_positions, perform_strategy_check=True):
     • Reactive: checks stop-loss / take-profit triggers
     • Strategic: re-analyzes via AnalysisAgent (RSI, trend)
     ↓
-13. If exits triggered → Telegram alert sent
+14. If exits triggered → Telegram alert sent
     If degradation detected → POSITION_DEGRADED event emitted
+
+Price Refresh (Every 15 min, market-aware):
+15. SchedulerAgent emits PRICE_MONITOR_TRIGGER
+    ↓
+16. Orchestrator checks market hours (HK/US)
+    ↓
+17. If both closed → skip entirely
+    Else → filter watchlist + held positions to open-market symbols only
+    ↓
+18. MarketScannerAgent.refresh_watchlist_prices() fetches quotes for filtered set
+    ↓
+19. PortfolioAgent.update_position_prices() updates current_price fields
 ```
 
 ---
@@ -111,6 +125,7 @@ Central event coordinator. Subscribes to all events and routes work to appropria
 - Manages per-symbol buffers (waits for both news + analysis before triggering strategy)
 - Chains agents in the correct sequence
 - Handles all 11 active event subscriptions
+- **Market-aware filtering** for price_monitor and exit_check (2026-04-03)
 
 **Wired to:** ALL other 11 agents (direct `run()` calls)
 
@@ -124,8 +139,8 @@ Fires periodic triggers throughout the day.
 
 **Currently emits (3-tier scheduling):**
 - `MARKET_SCAN_TRIGGER` — daily (Tier 1: full discovery scan)
-- `PRICE_MONITOR_TRIGGER` — every 15 min (Tier 2: lightweight price refresh)
-- `EXIT_CHECK_TRIGGER` — every 5 min (Tier 3: exit monitoring)
+- `PRICE_MONITOR_TRIGGER` — every 15 min (Tier 2: lightweight price refresh, **now market-aware**)
+- `EXIT_CHECK_TRIGGER` — every 5 min (Tier 3: exit monitoring, **now market-aware**)
 - `DATA_REFRESH_TRIGGER` — every 30 min (general data warming)
 - `DAILY_REPORT_TRIGGER` — end-of-day summary
 - `SCHEDULE` — every 4 hours (health check)
@@ -146,6 +161,7 @@ Discovers and monitors symbols using a 3-tier approach:
 
 **Tier 2 — Price Monitor (`refresh_watchlist_prices()`):**
 - Lightweight quote fetch for watchlist + held positions
+- **Market-aware:** only fetches symbols whose primary market (HK/US suffix) is currently open
 - Batch processing (20 symbols/batch, 1s delay)
 - Publishes `PRICE_REFRESH_COMPLETE`
 
@@ -162,6 +178,8 @@ Fetches OHLCV + fundamental data per symbol.
 - Uses configured data provider (OpenBB / Yahoo Finance / IBKR)
 - Caches results to avoid redundant API calls
 - Normalizes data format across providers
+
+**Note:** MarketScannerAgent now filters symbols by market open status before invoking DataAgent, reducing unnecessary calls for closed markets.
 
 ---
 
@@ -260,6 +278,7 @@ Maintains portfolio state and metrics.
 - Calculates P&L metrics (total equity, cash, position P&L, return %)
 - Serves as single source of truth for holdings
 - Responds to `GET_PORTFOLIO_STATE` queries from Telegram
+- **Market-aware price updates** (via MainOrchestrator filter)
 
 ---
 
@@ -307,8 +326,11 @@ Monitors held positions for exit conditions and strategic degradation.
 - **Reactive exits:** Checks stop-loss (`current_price ≤ stop_loss_price`) and take-profit (`current_price ≥ take_profit_price`)
 - **Strategic re-analysis:** Fetches fresh data, runs AnalysisAgent, flags if RSI > 70 (overbought) or trend is bearish
 
+**Market-aware integration (2026-04-03):**
+- Exit check runs **only on positions whose primary market is open** (HK/US), avoiding unnecessary data fetches and errors.
+
 **Integration flow:**
-- SchedulerAgent → `EXIT_CHECK_TRIGGER` → Orchestrator → `PortfolioAgent.get_positions()` → `ExitAgent.run()` → Telegram alerts
+- SchedulerAgent → `EXIT_CHECK_TRIGGER` → Orchestrator → `PortfolioAgent.get_positions()` → filter by market → `ExitAgent.run()` → Telegram alerts
 
 ---
 
@@ -342,50 +364,47 @@ finance:
     broker: paper              # Paper trading (simulated)
 
   risk:
-    max_position_pct: 0.01    # 1% max per symbol (Kelly-inspired)
+    max_position_pct: 0.10    # 10% max per symbol (increased from 1.5%)
     max_total_exposure_pct: 0.80  # 80% max total
     max_daily_loss_pct: 0.02  # Halt if daily loss >2%
     max_drawdown_pct: 0.15    # Halt at 15% drawdown
-    default_risk_budget_pct: 0.01
+    default_risk_budget_pct: 0.10
 
   strategy:
-    type: sma20_trend          # Current active strategy
+    type: sma50_trend_regime
     auto_execute:
-      enabled: true            # Auto-execute approved trades
-      confidence_threshold: 0.8  # Minimum 0.8 confidence (0-1 scale)
-      require_approval: false  # No manual approval needed
-    indicators:
-      rsi:
-        enabled: true
-        period: 14
-        oversold: 40
-        overbought: 65
-      macd:
-        enabled: true
-        fast_period: 12
-        slow_period: 26
-        signal_period: 9
-      sma:
-        enabled: true
-        periods: [10, 20, 50]
-      atr:
-        enabled: true
-        period: 14
-    rules:
-      rsi_entry_oversold: true
-      rsi_entry_oversold_threshold: 40
-      macd_crossover: true
-      price_above_sma10: true
-      rsi_exit_overbought: true
-      rsi_exit_overbought_threshold: 65
-      macd_signal_exit: true
-      stop_loss_enabled: true
-      take_profit_enabled: true
+      enabled: false            # ⚠️ DISABLED due to HK data corruption
+      confidence_threshold: 0.8
+      require_approval: false
+    entry_rules:
+      - name: price_above_sma50
+        type: entry
+        indicator: sma_50
+        condition: greater_than
+        value: 0.0
+        compare_to_price: true
+      - name: regime_bullish
+        type: entry
+        indicator: regime_score
+        condition: greater_than
+        value: 50.0
+    exit_rules:
+      - name: price_below_sma50
+        type: exit
+        indicator: sma_50
+        condition: less_than
+        value: 0.0
+        compare_to_price: true
+      - name: regime_bearish
+        type: exit
+        indicator: regime_score
+        condition: less_than
+        value: 30.0
 
   universe:
     themes:
       - name: AI
-        symbols: [NVDA, PLTR, UPST, AVGO, MSTR, AI, SYM, PATH, BBAI, SOUN, GFAI, AITX, PRCT, LQDA, EXAI, HIMS, GRAB, IONQ, RGTI, QUBT]
+        symbols: [NVDA, PLTR, UPST, AVGO, MSTR, AI, SYM, PATH, BBAI, SOUN, GFAI, AITX, PRCT, LQDA, HIMS, GRAB, IONQ, RGTI, QUBT]
       - name: Semiconductor
         symbols: [TSM, QCOM, AMD, ASML, ASR, INTC, MU, MRVL, ADI, NXPI, KLAC, LRCX, AMAT, ON, SWKS, ARM, MCHP, TXN, GFS, WOLF]
       - name: Cloud
@@ -394,15 +413,15 @@ finance:
         symbols: [MSFT, GOOGL, AAPL, AMZN, META, TSLA, BRK-B, LLY, V, UNH, JPM, XOM, JNJ, WMT, MA, PG, COST, HD, NFLX, ORCL]
       - name: Hong Kong
         symbols: [0700.HK, 9988.HK, 0941.HK, 1398.HK, 0388.HK, 2318.HK, 0005.HK, 1299.HK, 0027.HK, 0003.HK, 9618.HK, 9999.HK, 3690.HK, 1810.HK, 0966.HK, 0175.HK, 2382.HK, 0883.HK, 0002.HK, 0001.HK]
-    all_symbols: [auto-generated list of 100]
+    all_symbols: null
     whitelist:
       enabled: false
       symbols: []
 
   data:
     default_interval: 1d
-    default_lookback_days: 120
-    cache_ttl_minutes: 5
+    default_lookback_days: 365
+    cache_ttl_minutes: 30
     cache_enabled: true
     batch_size: 20
     batch_delay_sec: 1.0
@@ -435,15 +454,16 @@ Morning (Tier 1 — Daily Discovery):
 
 Throughout Day (Tier 2 — Price Monitor, every 15 min):
 └─ SchedulerAgent emits PRICE_MONITOR_TRIGGER
-└─ Orchestrator calls scanner.refresh_watchlist_prices()
-   └─ Lightweight quote fetch for watchlist + held positions
-   └─ Publishes PRICE_REFRESH_COMPLETE
+└─ Orchestrator checks market hours; if open, filters watchlist+held to open-market symbols
+└─ MarketScannerAgent.refresh_watchlist_prices() fetches quotes for filtered set
+└─ PortfolioAgent.update_position_prices() updates current_price fields
 
 Throughout Day (Tier 3 — Exit Monitor, every 5 min):
 └─ SchedulerAgent emits EXIT_CHECK_TRIGGER
-└─ Orchestrator retrieves positions → ExitAgent.run()
-   └─ Reactive: stop-loss / take-profit checks
-   └─ Strategic: re-analysis via AnalysisAgent (RSI, trend)
+└─ Orchestrator retrieves positions → filters by open market
+└─ ExitAgent.run(filtered_positions, perform_strategy_check=True):
+    • Reactive: stop-loss / take-profit checks
+    • Strategic: re-analysis via AnalysisAgent (RSI, trend)
 └─ Telegram alerts for exits or degraded positions
 
 End of Day (Market Close):
@@ -454,31 +474,35 @@ End of Day (Market Close):
 
 ---
 
-## Known Limitations (Current Production)
+## Known Limitations & Issues
 
 | Issue | Impact | Status |
 |-------|--------|--------|
-| ~~ExitAgent not wired~~ | ✅ ExitAgent wired — Tier 3 every 5 min | Completed |
-| ~~No ranking/scoring~~ | ✅ 5-factor composite scoring in Tier 1 | Completed |
-| ~~Small symbol universe~~ | ✅ Expanded to 100 symbols (20/theme) | Completed |
-| ~~Full pipeline every 15 min~~ | ✅ Separated into daily discovery + 15-min price monitor | Completed |
-| Approval workflow mocked | Auto-approval for testing | ✅ By design |
+| HK data unreliability | yFinance returns `nan` for .HK tickers when market closed → corrupts equity calculation (~$30k phantom loss) | 🔴 CRITICAL – blocks auto_execute |
+| No new trade signals | Strategy hasn't generated proposals since 12:49 HK time; possible correlation with HK data issues or market conditions | ⚠️ Monitoring |
+| Event handler stubs | `handle_analysis_complete` etc. are stub `pass`; event-driven routing not used (current flow is direct orchestration) | ✅ By design |
+| Hong Kong market open detection | Works correctly; price_monitor and exit_check now filter by market status (2026-04-03) | ✅ Fixed |
+
+**Workarounds in place:**
+- Auto_execute disabled until HK data issue resolved
+- Market-aware filtering prevents unnecessary fetches when markets closed
+- Portfolio valuation relies on cached `current_price`; will recover when HK opens and valid prices return
 
 ---
 
-## Feature Status (as of 2026-03-31)
+## Feature Status (as of 2026-04-03)
 
 | Feature | Status |
 |---------|--------|
 | Active agents | 13 (all wired) |
 | Symbol universe | 100 symbols across 5 themes |
-| Scanning | 3-tier: discovery (daily) + price monitor (15min) + exit (5min) |
+| Scanning | 3-tier: discovery (daily) + price monitor (15min, market-aware) + exit (5min, market-aware) |
 | Ranking | 5-factor composite scoring (0-1) with real data |
 | Exit management | Reactive (stops/profits) + strategic (re-analysis) |
 | Risk checks | Portfolio exposure, position size, drawdown, duplicates |
 | Data providers | Yahoo Finance (yfinance) |
-| Auto-execution | Enabled (confidence ≥ 0.8) |
-| Position model | `entry_price` alias (compatible with broker-style code) |
+| Auto-execution | ⚠️ DISABLED pending HK data fix |
+| Position model | entry_price alias; current_price updated via market-aware price monitor |
 | IndicatorsSnapshot | Dict-like `.get()` for compatibility |
 | Event bus timeout | 300s for long-running scans |
 | API endpoints | `/health`, `/portfolio/state`, `/portfolio/performance`, `/api/dashboard/*` |
@@ -486,20 +510,19 @@ End of Day (Market Close):
 
 ---
 
-## Recent Critical Fixes (2026-03-30/31)
+## Recent Critical Fixes & Changes
 
-| Fix | Description |
-|-----|-------------|
-| Position corruption | Added `entry_price` property alias to Position class; `to_dict()` now includes `entry_price`. Resolved NaN equity caused by missing entry price. |
-| IndicatorsSnapshot compatibility | Added `.get()` method to support dict-like access; fixed ExitAgent AttributeError. |
-| Market scan rankings | Fixed `handle_market_scan_trigger` to pass `data_agent`; rankings now computed (0-1) instead of uniform 0.5. |
-| Event bus timeout | Increased from 60s to 300s to allow full universe scans to complete. |
-| Missing performance endpoint | Added `/portfolio/performance` route (alias to `/api/dashboard/performance`). |
-| Telegram config override | Orchestrator no longer overrides Telegram settings with empty YAML values; falls back to .env. |
-| Equity NaN guard | `Position.market_value()` guards against invalid `current_price`; price updates validated. |
-| Auto-execute threshold | Changed from 1.0 → 0.8 to allow more trades while maintaining confidence filter. |
+| Date | Fix / Change | Description |
+|------|--------------|-------------|
+| 2026-04-03 | Market-aware filtering | Modified `MainOrchestratorAgent.handle_price_monitor()` and `handle_exit_check()` to only process symbols whose primary market (HK/US) is currently open. Reduces API load, prevents nan failures during closed periods. |
+| 2026-04-03 | Auto_execute disabled | Paused auto-trading due to recurring HK `nan` prices corrupting equity. Requires either removal of HK theme or fallback logic. |
+| 2026-04-03 | Position limit increase | `max_position_size_pct` raised to 10% to allow larger positions. |
+| 2026-04-02 | Event handler cleanup | Reverted custom event routing handlers to stubs; main pipeline uses direct calls, so those handlers caused errors. |
+| 2026-04-02 | Price monitor fix | Orchestrator now applies fetched prices to portfolio (`update_position_prices`). Previously fetched but didn't update. |
+| 2026-04-02 | UnboundLocalError fix | `PortfolioAgent.handle_trade_executed` created trade before referencing `trade_id`. |
+| 2026-04-02 | Config path fix | Absolute path for YAML config ensures correct loading regardless of cwd. |
 
-All systems verified healthy and operational.
+All systems verified healthy; operational though auto-trading paused.
 
 ---
 

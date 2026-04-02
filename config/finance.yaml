@@ -64,7 +64,7 @@ strategies:
 strategy:
   type: sma50_trend_regime
   auto_execute:
-    enabled: true
+    enabled: false
     confidence_threshold: 0.8
     require_approval: false
   indicators:
