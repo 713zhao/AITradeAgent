@@ -521,6 +521,39 @@ def create_app():
     async def health():
         return {"status": "ok"}
 
+
+    @app.route("/api/market/status")
+    async def market_status():
+        """Return current market status."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
+        
+        hk_time = datetime.now(ZoneInfo("Asia/Hong_Kong"))
+        us_open = is_us_market_open()
+        hk_open = is_hk_market_open()
+        
+        hk_time_str = hk_time.strftime("%H:%M UTC+8")
+        us_time = datetime.now(ZoneInfo("America/New_York"))
+        us_time_str = us_time.strftime("%H:%M EST")
+        
+        if us_open or hk_open:
+            market_status = "OPEN"
+            status_text = "US & HK" if (us_open and hk_open) else ("US" if us_open else "HK")
+            message = f"Market: {hk_time_str} – {status_text} market{'s' if status_text != 'US' else ''} OPEN"
+        else:
+            message = f"Market: {hk_time_str} – Both HK and US markets CLOSED"
+        
+        return jsonify({
+            "status": "success",
+            "market_status": message,
+            "us_open": us_open,
+            "hk_open": hk_open,
+            "hk_time": hk_time_str,
+            "us_time": us_time_str,
+            "timestamp": hk_time.isoformat()
+        })
+
     @app.route("/portfolio")
     async def get_portfolio():
         global _orchestrator
