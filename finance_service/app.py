@@ -301,8 +301,24 @@ class MainOrchestratorAgent:
         if not positions:
             logger.info("No open positions to check for exits.")
             return
+        # Filter positions to only those whose primary market is open
+        from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
+        us_open = is_us_market_open()
+        hk_open = is_hk_market_open()
+        filtered_positions = []
+        for pos in positions:
+            sym = pos.get("symbol", "")
+            if sym.endswith('.HK'):
+                if hk_open:
+                    filtered_positions.append(pos)
+            else:
+                if us_open:
+                    filtered_positions.append(pos)
+        if not filtered_positions:
+            logger.info("All positions in closed markets; skipping exit check.")
+            return
         # Run exit agent with strategic re-analysis every other check
-        report = await self.exit_agent.run(positions=positions, perform_strategy_check=True)
+        report = await self.exit_agent.run(positions=filtered_positions, perform_strategy_check=True)
         if report.status == "success":
             exits = report.payload.get("exits", [])
             degraded = report.payload.get("degraded_positions", [])
@@ -371,9 +387,20 @@ class MainOrchestratorAgent:
                     if sym:
                         held_symbols.add(sym)
         # Refresh prices for watchlist + held positions
+        # Filter to only symbols whose markets are open to reduce load and avoid errors
+        all_symbols = set(self._watchlist_symbols) | held_symbols
+        open_symbols = []
+        for sym in all_symbols:
+            if sym.endswith('.HK'):
+                if is_hk_market_open():
+                    open_symbols.append(sym)
+            else:
+                if is_us_market_open():
+                    open_symbols.append(sym)
+        # Pass filtered list to market scanner
         report = await self.market_scanner_agent.refresh_watchlist_prices(
             data_agent=self.data_agent,
-            held_symbols=held_symbols
+            held_symbols=set(open_symbols)
         )
         # Apply fetched prices to portfolio positions
         if report and report.status == "success" and self.portfolio_agent:
