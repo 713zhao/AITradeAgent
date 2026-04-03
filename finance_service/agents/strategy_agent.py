@@ -200,6 +200,8 @@ class StrategyAgent(Agent):
     def __init__(self, config_engine, portfolio_agent=None):
         self.config_engine = config_engine
         self.event_bus = get_event_bus()
+        # Get initial cash from config (used for position sizing)
+        self.initial_cash = self.config_engine.get("finance", "portfolio/initial_cash", default=100000.0)
         # Load rules from YAML config using correct pattern
         rules_config = self._load_rules_from_config()
         self.rule_strategy = RuleStrategy(rules_config)
