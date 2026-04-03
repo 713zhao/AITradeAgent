@@ -84,13 +84,13 @@ class MainOrchestratorAgent:
             "initial_cash": config_engine.get("finance", "portfolio/initial_cash", default=100000.0),
         }
         # Only add Telegram config from YAML if present; otherwise TelegramAgent will use .env via Config fallback
-        telegram_token = config_engine.get("telegram", "bot_token", default=None)
+        telegram_token = config_engine.get("notifications", "telegram/bot_token", default=None)
         if telegram_token:
             simple_config["telegram_bot_token"] = telegram_token
-        telegram_chat = config_engine.get("telegram", "chat_id", default=None)
+        telegram_chat = config_engine.get("notifications", "telegram/chat_id", default=None)
         if telegram_chat:
             simple_config["telegram_chat_id"] = telegram_chat
-        telegram_thread = config_engine.get("telegram", "message_thread_id", default=None)
+        telegram_thread = config_engine.get("notifications", "telegram/message_thread_id", default=None)
         if telegram_thread is not None:
             simple_config["telegram_message_thread_id"] = telegram_thread
         # Build risk policy dict from YAML risk section (to satisfy RiskAgent)
