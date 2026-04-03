@@ -159,7 +159,7 @@ class NewsAgent(Agent):
             **kwargs: Additional arguments (ignored, for compatibility)
         """
         if not symbol:
-            return AgentReport(self.agent_id, "error", "Missing symbol", {})
+            return AgentReport(agent_id=self.agent_id, status="error", message="Missing symbol", payload={})
 
         logger.debug(f"NewsAgent: fetching news for {symbol}")
         try:
@@ -167,10 +167,10 @@ class NewsAgent(Agent):
             articles = self._fetch_news(symbol)
             if not articles:
                 return AgentReport(
-                    self.agent_id,
-                    "success",
-                    f"No news found for {symbol}",
-                    {"analysis": NewsAnalysis(symbol=symbol, timestamp=datetime.now(), articles=[]).to_dict()}
+                    agent_id=self.agent_id,
+                    status="success",
+                    message=f"No news found for {symbol}",
+                    payload={"analysis": NewsAnalysis(symbol=symbol, timestamp=datetime.now(), articles=[]).to_dict()}
                 )
 
             # 2. Analyze sentiment
@@ -180,14 +180,14 @@ class NewsAgent(Agent):
                 analysis = self._analyze_with_vader(symbol, articles)
 
             return AgentReport(
-                self.agent_id,
-                "success",
-                f"News analysis complete for {symbol}",
-                {"analysis": analysis.to_dict()}
+                agent_id=self.agent_id,
+                status="success",
+                message=f"News analysis complete for {symbol}",
+                payload={"analysis": analysis.to_dict()}
             )
         except Exception as e:
             logger.error(f"NewsAgent error for {symbol}: {e}")
-            return AgentReport(self.agent_id, "error", str(e), {})
+            return AgentReport(agent_id=self.agent_id, status="error", message=str(e), payload={})
 
     def _fetch_news(self, symbol: str) -> List[Dict[str, str]]:
         """Fetch recent news articles for symbol."""
