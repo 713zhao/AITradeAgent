@@ -151,8 +151,13 @@ class NewsAgent(Agent):
         except Exception as e:
             logger.warning(f"NewsAgent LLM init failed: {e}; using VADER fallback")
 
-    async def run(self, payload: Dict[str, Any]) -> Optional[AgentReport]:
-        symbol = payload.get("symbol")
+    async def run(self, symbol: str, **kwargs) -> Optional[AgentReport]:
+        """Run news analysis for a given symbol.
+        
+        Args:
+            symbol: Stock ticker symbol
+            **kwargs: Additional arguments (ignored, for compatibility)
+        """
         if not symbol:
             return AgentReport(self.agent_id, "error", "Missing symbol", {})
 
