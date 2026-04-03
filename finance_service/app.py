@@ -855,6 +855,18 @@ def create_app():
         metrics = report.payload.get("equity_metrics", {})
         return jsonify(_sanitize_floats({"status": "success", "data": metrics}))
 
+    @app.route("/admin/trigger_market_scan", methods=["POST"])
+    async def admin_trigger_market_scan():
+        """Admin endpoint to manually trigger a market scan."""
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+        try:
+            await _orchestrator.scheduler_agent.handle_market_scan_trigger()
+            return jsonify({"status": "success", "message": "Market scan triggered"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     return app
 
 # Create the Quart app instance at module level for the launcher to use
