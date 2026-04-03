@@ -57,19 +57,22 @@ The system continuously scans markets, analyzes candidates, generates trade prop
     │       COMPLETE          │       │    │  orchestrator for     │
     └──────────┬──────────────┘       │    │  strategy recheck)    │
                                       │    └───────────────────────┘
-              ┌──────────────┬────────┴─────────────┐
-              │ (parallel)   │ (parallel)           │
-    ┌─────────▼──────┐   ┌───▼──────────┐   ┌─────▼────────────────┐
-    │  NewsAgent      │   │AnalysisAgent │   │ [Parallel support   │
-    │ Emits: NEWS_    │   │ Emits:       │   │  agents]            │
-    │ FETCH_COMPLETE  │   │ANALYSIS_     │   │ HealthAgent         │
-    └────────┬────────┘   │COMPLETE      │   │ TelegramAgent       │
-             │            └───┬──────────┘   │ PortfolioAgent      │
-             │                │              │ LearningAgent       │
-             └────────┬───────┘              └─────────────────────┘
-                      │(both ready)
+              ┌──────────────┬────────┴──────────────────┬──────────┐
+              │ (parallel)   │ (parallel)               │ (parallel)│
+    ┌─────────▼──────┐   ┌───▼──────────┐   ┌──────────▼────────┐
+    │  NewsAgent      │   │AnalysisAgent │   │TradingAgentsAnalyz│
+    │ Emits: NEWS_    │   │ Emits:       │   │  (Phase 1 - LLM)  │
+    │ FETCH_COMPLETE  │   │ANALYSIS_     │   │ Emits: LLM_       │
+    │                 │   │COMPLETE      │   │ ANALYSIS_COMPLETE │
+    └────────┬────────┘   └───┬──────────┘   │  ▲ via            │
+             │                │              │  │ TradingAgentsAPI│
+             │                │              └──┼────────────────┘
+             │                │                 │ (REST gateway)
+             └────────┬───────┴─────────────────┘
+                      │(all ready)
          ┌────────────▼──────────────┐
          │   StrategyAgent            │
+         │  (enriched with LLM data)  │
          │  Emits: TRADE_PROPOSAL_    │
          │         GENERATED          │
          └────────────┬───────────────┘
@@ -91,7 +94,7 @@ The system continuously scans markets, analyzes candidates, generates trade prop
          └────────────────────────────┘
 ```
 
----
+----
 
 ## Agent Inventory
 
