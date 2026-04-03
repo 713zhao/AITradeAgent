@@ -111,6 +111,10 @@ class MainOrchestratorAgent:
                 risk_policy[field] = val
         simple_config["policy"] = risk_policy
 
+        # Pass auto_execute flag to RiskAgent to enforce approval override
+        auto_execute_enabled = config_engine.get("finance", "strategy/auto_execute/enabled", default=True)
+        simple_config["auto_execute_enabled"] = auto_execute_enabled
+
         # Initialize agents
         self.scheduler_agent = SchedulerAgent(simple_config)
         self.market_scanner_agent = MarketScannerAgent(config_engine)
@@ -415,7 +419,9 @@ class MainOrchestratorAgent:
         pass
 
     async def handle_risk_complete(self, event: Event):
-async def handle_approval_required(self, event: Event):
+        pass
+
+    async def handle_approval_required(self, event: Event):
         """Handle APPROVAL_REQUIRED event - send telegram notification with approval buttons"""
         try:
             payload = event.data.get("payload", {})

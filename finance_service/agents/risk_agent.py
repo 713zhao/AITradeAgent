@@ -440,6 +440,12 @@ class RiskAgent(Agent):
             any_approval_required = any(r.approval_required for r in results)
             all_passed = all(r.passed for r in results)
             
+            # Master auto_execute override: if auto_execute is disabled, require approval for valid trades
+            # This ensures that when auto_execute=false, all trades go through approval regardless of confidence.
+            # Only applies if all risk checks passed (otherwise trade will be rejected anyway).
+            if all_passed and not any_approval_required and not self.config.get("auto_execute_enabled", True):
+                any_approval_required = True
+            
             message = f"Risk assessment complete for {len(results)} proposal(s). Approval Required: {any_approval_required}"
             # Determine decision: auto-execute only if all risk checks passed and no approval required
             decision = "APPROVED" if (all_passed and not any_approval_required) else "REJECTED"
