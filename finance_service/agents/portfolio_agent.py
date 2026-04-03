@@ -33,6 +33,9 @@ class PortfolioAgent(Agent):
         self.equity_calculator = EquityCalculator()
         self.data_agent = data_agent  # Optional DataAgent for fetching live quotes
         self.updated_at = datetime.utcnow()
+        self._price_update_lock = asyncio.Lock()  # Prevent concurrent price updates
+        self._last_price_update = datetime(1970, 1, 1)  # Never updated initially
+        self._price_update_interval = 300  # seconds (5 minutes); match scheduler frequency
         logger.info("PortfolioAgent initialized.")
 
     async def run(self, **kwargs) -> AgentReport:
@@ -143,34 +146,47 @@ class PortfolioAgent(Agent):
 
 
     async def update_prices_from_data_agent(self):
-        """Fetch latest prices for all positions using data_agent with cache and 30-day lookback."""
+        """Fetch latest prices for all positions with limited concurrency (5) and cache, protected by lock."""
         if not self.data_agent:
             return
         
-        symbols = list(self.repository.positions.keys())
-        if not symbols:
-            return
-        
-        logger.info(f"Updating prices for {len(symbols)} positions (sequential, cache=yes, 30d lookback)")
-        
-        # 30-day lookback to ensure enough data rows while reducing payload
-        from datetime import datetime, timedelta
-        end_dt = datetime.now().date()
-        start_dt = end_dt - timedelta(days=30)
-        start_str = start_dt.strftime("%Y-%m-%d")
-        end_str = end_dt.strftime("%Y-%m-%d")
-        
-        updated_count = 0
-        for symbol in symbols:
-            try:
-                report = await self.data_agent.run(
-                    symbol=symbol,
-                    interval="1d",
-                    emit_events=False,
-                    use_cache=True,
-                    start_date=start_str,
-                    end_date=end_str
-                )
+        async with self._price_update_lock:
+            symbols = list(self.repository.positions.keys())
+            if not symbols:
+                return
+            
+            logger.info(f"Updating prices for {len(symbols)} positions (concurrency=5, cache=yes, 30d lookback)")
+            
+            semaphore = asyncio.Semaphore(2)  # Reduce concurrency to 2 to avoid overwhelming provider
+            from datetime import datetime, timedelta
+            end_dt = datetime.now().date()
+            start_dt = end_dt - timedelta(days=30)
+            start_str = start_dt.strftime("%Y-%m-%d")
+            end_str = end_dt.strftime("%Y-%m-%d")
+            
+            async def fetch_one(symbol: str):
+                async with semaphore:
+                    try:
+                        report = await self.data_agent.run(
+                            symbol=symbol,
+                            interval="1d",
+                            emit_events=False,
+                            use_cache=True,
+                            start_date=start_str,
+                            end_date=end_str
+                        )
+                        return symbol, report
+                    except Exception as e:
+                        logger.warning(f"Error fetching {symbol}: {e}")
+                        return symbol, None
+            
+            tasks = [fetch_one(sym) for sym in symbols]
+            results = await asyncio.gather(*tasks, return_exceptions=False)
+            
+            updated_count = 0
+            for symbol, report in results:
+                if report is None:
+                    continue
                 if report.status == "success" and "dataframe" in report.payload:
                     df_dict = report.payload["dataframe"]
                     try:
@@ -188,11 +204,9 @@ class PortfolioAgent(Agent):
                         logger.warning(f"Failed to process price data for {symbol}: {e}")
                 else:
                     logger.warning(f"Failed to fetch price for {symbol}: {report.message if report else 'no report'}")
-            except Exception as e:
-                logger.warning(f"Error fetching {symbol}: {e}")
-                continue
-        
-        logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions")
+            
+            logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions")
+            self._last_price_update = datetime.utcnow()
 
     async def get_detailed_portfolio_state(self, chat_id: Optional[str] = None) -> AgentReport:
         """Retrieves detailed portfolio state and can publish it or return in a report."""
@@ -200,8 +214,14 @@ class PortfolioAgent(Agent):
         # Refresh timestamp to indicate state generation time
         self.updated_at = datetime.utcnow()
         
-        # Fetch live prices for all positions
-        await self.update_prices_from_data_agent()
+        # Rate limit price updates: skip if updated recently
+        now = datetime.utcnow()
+        elapsed = (now - self._last_price_update).total_seconds()
+        if elapsed >= self._price_update_interval:
+            logger.debug(f"Price update needed (last: {elapsed:.0f}s ago).")
+            await self.update_prices_from_data_agent()
+        else:
+            logger.debug(f"Skipping price update (last: {elapsed:.0f}s ago < {self._price_update_interval}s).")
         
         portfolio = self.repository.calculate_portfolio(self.initial_cash)
         positions_data = [pos.to_dict() for pos in self.repository.get_positions()]
