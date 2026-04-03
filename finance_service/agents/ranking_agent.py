@@ -19,7 +19,7 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-from finance_service.core.agent import Agent
+from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import get_event_bus
 from finance_service.core.yaml_config import YAMLConfigEngine
 
