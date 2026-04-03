@@ -46,16 +46,24 @@ The system continuously scans markets, analyzes candidates, generates trade prop
                     ┌───────────────┼──────────┤  • Re-analyze held   │
                     │               │          │    positions         │
                     ▼               │          │  • Emit signals      │
-    ┌───────────────────────┐       │          └────────────┬────────┘
-    │ MarketScannerAgent     │       │                       │
-    │ Emits: MARKET_SCANNED  │       │         ┌─────────────┴─────────┐
-    └───────────┬────────────┘       │         │(if check fails)       │
-                │ (per symbol)       │         │                       │
-    ┌───────────▼────────────┐       │    ┌────▼──────────────────┐
-    │    DataAgent            │       │    │ POSITION_DEGRADED     │
-    │ Emits: DATA_FETCH_      │       │    │ (sent back through    │
-    │       COMPLETE          │       │    │  orchestrator for     │
-    └──────────┬──────────────┘       │    │  strategy recheck)    │
+    ┌──────────────────────────────────┐       │          └────────────┬────────┘
+    │   MarketScannerAgent              │       │                       │
+    │   Emits: MARKET_SCANNED           │       │         ┌─────────────┴─────────┐
+    └──────────┬───────────────────────┘       │         │(if check fails)       │
+               │ (per symbol)                  │         │                       │
+    ┌──────────▼────────────────────────┐      │    ┌────▼──────────────────┐
+    │    RankingAgent (Phase 2)          │      │    │ POSITION_DEGRADED     │
+    │  • 5-factor re-ranking             │      │    │ (sent back through    │
+    │  • Liquidity, Momentum, Value,    │      │    │  orchestrator for     │
+    │    Growth, Quality scoring         │      │    │  strategy recheck)    │
+    │  Emits: RANKING_COMPLETE           │      │    └───────────────────────┘
+    └──────────┬────────────────────────┘      │
+               │ (re-ranked symbols)           │
+    ┌──────────▼────────────────────────────┐  │
+    │    DataAgent                          │  │
+    │    Emits: DATA_FETCH_COMPLETE         │  │
+    │           (per re-ranked symbol)      │  │
+    └──────────┬────────────────────────────┘  │    ┌────────────────────┐
                                       │    └───────────────────────┘
               ┌──────────────┬────────┴──────────────────┬──────────┐
               │ (parallel)   │ (parallel)               │ (parallel)│
