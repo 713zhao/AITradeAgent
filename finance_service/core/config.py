@@ -10,6 +10,8 @@ from pathlib import Path
 
 # Import validated Pydantic settings
 from .pydantic_config import settings as _pydantic_settings
+# Instantiate the cached settings to maintain backward compatibility with Config class attributes
+_pydantic_settings = _pydantic_settings()
 
 
 class Config:

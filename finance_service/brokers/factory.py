@@ -3,7 +3,7 @@ import os
 from typing import Dict, Any, Optional
 import logging
 
-from .interface import BrokerInterface, PaperBroker, TigerBrokersBroker
+from . import BrokerInterface, PaperBroker, TigerBrokersBroker
 
 logger = logging.getLogger(__name__)
 

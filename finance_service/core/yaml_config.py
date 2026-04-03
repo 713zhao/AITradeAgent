@@ -1,6 +1,6 @@
 """YAML-based configuration management.
 
-Reads configuration from config/config.yaml with hot-reload support.
+Reads configuration from config/finance.yaml with hot-reload support.
 Provides hierarchical get() with defaults.
 """
 import os
@@ -32,7 +32,7 @@ class YAMLConfigEngine:
 
     def __init__(self, config_dir: str = "config", enable_watchdog: bool = False):
         self.config_dir = Path(config_dir).resolve()
-        self.config_file = self.config_dir / "config.yaml"
+        self.config_file = self.config_dir / "finance.yaml"
         self._config: Dict[str, Any] = {}
         self._observer: Optional[Observer] = None
         self._reload_callback = None

@@ -17,6 +17,10 @@ from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.scheduler_agent import SchedulerAgent
 from finance_service.agents.market_scanner_agent import MarketScannerAgent
 from finance_service.agents.data_agent import DataAgent
+from finance_service.agents.fundamentals_agent import FundamentalsAgent
+from finance_service.agents.options_data_agent import OptionsDataAgent
+from finance_service.agents.options_strategy_agent import OptionsStrategyAgent
+from finance_service.agents.regime_agent import RegimeAgent
 from finance_service.agents.news_agent import NewsAgent
 from finance_service.agents.analysis_agent import AnalysisAgent
 from finance_service.agents.strategy_agent import StrategyAgent
@@ -26,6 +30,7 @@ from finance_service.agents.portfolio_agent import PortfolioAgent
 from finance_service.agents.health_agent import HealthAgent
 from finance_service.agents.telegram_agent import TelegramAgent
 from finance_service.agents.exit_agent import ExitAgent
+from finance_service.agents.learning_agent import LearningAgent
 from finance_service.agents.agent_interface import AgentReport
 from finance_service.portfolio.trade_repository import TradeRepository
 

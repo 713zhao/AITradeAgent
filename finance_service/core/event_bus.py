@@ -218,6 +218,7 @@ class Events:
     ANALYSIS_STARTED = "analysis_started"
     ANALYSIS_COMPLETE = "analysis_complete"
     ANALYSIS_FAILED = "analysis_failed" # Add failure event
+    MARKET_REGIME_UPDATED = "market_regime_updated"  # Market regime change notification
     
     # Decision events (now Trade Proposals)
     TRADE_PROPOSAL_GENERATED = "trade_proposal_generated" # Renamed from DECISION_MADE
@@ -256,6 +257,9 @@ class Events:
     # Learning events
     LEARNING_COMPLETE = "learning_complete" # New event for learning agent
     LEARNING_FEEDBACK = "learning_feedback" # Optional feedback event
+    
+    # Regime events
+    MARKET_REGIME_UPDATED = "market_regime_updated"  # Market regime classification updated
     
     # System query/response events
     GET_SYSTEM_STATUS = "get_system_status"

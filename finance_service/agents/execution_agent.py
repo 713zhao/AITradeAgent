@@ -6,7 +6,7 @@ from dataclasses import asdict
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
-from finance_service.brokers.interface import BrokerInterface, OrderResult
+from finance_service.brokers import BrokerInterface, OrderResult
 
 logger = logging.getLogger(__name__)
 

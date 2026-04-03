@@ -15,6 +15,7 @@ from dataclasses import dataclass, asdict
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.yaml_config import YAMLConfigEngine
+from finance_service.agents.options_data_agent import OptionsChain
 
 logger = logging.getLogger(__name__)
 

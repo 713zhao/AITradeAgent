@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from enum import Enum
@@ -232,7 +233,8 @@ class StrategyAgent(Agent):
 
         from finance_service.core.event_bus import get_event_bus, Events
         event_bus = get_event_bus()
-        event_bus.subscribe(Events.MARKET_REGIME_UPDATED, handle_regime)
+        # Schedule the async subscription without blocking __init__
+        asyncio.create_task(event_bus.subscribe(Events.MARKET_REGIME_UPDATED, handle_regime))
 
     def _adjust_confidence(self, base_confidence: float, symbol: str = None) -> float:
         """Adjust confidence based on current market regime"""
