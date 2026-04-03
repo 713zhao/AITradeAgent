@@ -526,3 +526,31 @@ scanner:
   price_monitor_top_n: 50
   price_monitor_interval_minutes: 15
   discovery_interval: daily
+
+# Telegram Notifications Configuration
+notifications:
+  telegram:
+    # Bot token - get this from BotFather
+    bot_token: "8694519756:AAGxp6d7Fho3-696h4ae4tHvjcVmtazQUOw"
+    
+    # Chat ID - run setup_telegram.py to get this (send any message to bot)
+    chat_id: ""  # Will be filled after running setup_telegram.py
+    
+    # Optional: For topic groups (message_thread_id)
+    message_thread_id: null
+    
+    # Enable/disable notifications
+    enabled: true
+    
+    # Notification types to send
+    notifications:
+      # Send when trade is executed
+      on_trade_executed: true
+      # Send when trade is closed
+      on_trade_closed: true
+      # Send daily summary
+      on_daily_summary: true
+      # Send error/alert messages
+      on_error_alert: true
+      # Send position updates
+      on_position_update: false
