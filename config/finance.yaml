@@ -1,43 +1,413 @@
-risk:
-  max_position_size_pct: 10
-  max_exposure_pct: 80
-  max_daily_loss_pct: 2.0
-  max_drawdown_pct: 15.0
-  default_risk_budget_pct: 10
-  stop_loss_default_pct: 1.5
-  take_profit_default_pct: 3.0
-  max_concurrent_positions: 25
-  min_position_size_usd: 100
-  approval_required_pct: 0.75
-  allow_short_selling: false
-  margin_enabled: false
-
-# Explicit strategy definitions for StrategyAgent
-strategies:
-  sma20_trend:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 1.0
-    entry_rules:
+finance:
+  risk:
+    max_position_size_pct: 10
+    max_exposure_pct: 80
+    max_daily_loss_pct: 2.0
+    max_drawdown_pct: 15.0
+    default_risk_budget_pct: 10
+    stop_loss_default_pct: 1.5
+    take_profit_default_pct: 3.0
+    max_concurrent_positions: 25
+    min_position_size_usd: 100
+    approval_required_pct: 0.75
+    allow_short_selling: false
+    margin_enabled: false
+  
+  # Explicit strategy definitions for StrategyAgent
+  strategies:
+    sma20_trend:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 1.0
+      entry_rules:
+        - name: price_above_sma20
+          type: entry
+          indicator: sma_20
+          condition: greater_than
+          value: 0.0
+          compare_to_price: true
+      exit_rules:
+        - name: price_below_sma20
+          type: exit
+          indicator: sma_20
+          condition: less_than
+          value: 0.0
+          compare_to_price: true
+  
+    sma50_trend_regime:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 1.0
+      entry_rules:
+        - name: price_above_sma50
+          type: entry
+          indicator: sma_50
+          condition: greater_than
+          value: 0.0
+          compare_to_price: true
+        - name: regime_bullish
+          type: entry
+          indicator: regime_score
+          condition: greater_than
+          value: 50.0
+      exit_rules:
+        - name: price_below_sma50
+          type: exit
+          indicator: sma_50
+          condition: less_than
+          value: 0.0
+          compare_to_price: true
+        - name: regime_bearish
+          type: exit
+          indicator: regime_score
+          condition: less_than
+          value: 30.0
+  
+  strategy:
+    type: sma50_trend_regime
+    auto_execute:
+      enabled: true
+      confidence_threshold: 0.8
+      require_approval: false
+    indicators:
+      sma:
+        enabled: true
+        periods:
+        - 20
+        - 50
+    rules:
+      price_above_sma50: true
+      regime_bullish: true
+      stop_loss_enabled: true
+      take_profit_enabled: true
+  universe:
+    themes:
+    - name: AI
+      symbols:
+      - NVDA
+      - PLTR
+      - UPST
+      - AVGO
+      - MSTR
+      - AI
+      - SYM
+      - PATH
+      - BBAI
+      - SOUN
+      - GFAI
+      - AITX
+      - PRCT
+      - LQDA
+      - HIMS
+      - GRAB
+      - IONQ
+      - RGTI
+      - QUBT
+    - name: Semiconductor
+      symbols:
+      - TSM
+      - QCOM
+      - AMD
+      - ASML
+      - ASR
+      - INTC
+      - MU
+      - MRVL
+      - ADI
+      - NXPI
+      - KLAC
+      - LRCX
+      - AMAT
+      - 'ON'
+      - SWKS
+      - ARM
+      - MCHP
+      - TXN
+      - GFS
+    - name: Cloud
+      symbols:
+      - CRWD
+      - DDOG
+      - NET
+      - MDB
+      - SNOW
+      - ZS
+      - PANW
+      - FTNT
+      - S
+      - OKTA
+      - TEAM
+      - HUBS
+      - VEEV
+      - BILL
+      - MNDY
+      - NOW
+      - WDAY
+      - ADBE
+      - CRM
+      - SHOP
+    - name: MegaCap
+      symbols:
+      - MSFT
+      - GOOGL
+      - AAPL
+      - AMZN
+      - META
+      - TSLA
+      - BRK-B
+      - LLY
+      - V
+      - UNH
+      - JPM
+      - XOM
+      - JNJ
+      - WMT
+      - MA
+      - PG
+      - COST
+      - HD
+      - NFLX
+      - ORCL
+    - name: Hong Kong
+      symbols:
+      - 0700.HK
+      - 9988.HK
+      - 0941.HK
+      - 1398.HK
+      - 0388.HK
+      - 2318.HK
+      - 0005.HK
+      - 1299.HK
+      - 0027.HK
+      - 0003.HK
+      - 9618.HK
+      - 9999.HK
+      - 3690.HK
+      - 1810.HK
+      - 0966.HK
+      - 0175.HK
+      - 2382.HK
+      - 0883.HK
+      - 0002.HK
+      - 0001.HK
+    all_symbols: null
+    whitelist:
+      enabled: false
+      symbols: []
+  data:
+    default_interval: 1d
+    default_lookback_days: 120
+    cache_ttl_minutes: 5
+    cache_enabled: true
+    batch_size: 20
+    batch_delay_sec: 1.0
+    request_jitter_sec: 0.5
+    backoff:
+      enabled: true
+      initial_wait_sec: 1
+      max_wait_sec: 60
+      multiplier: 2.0
+    cache_ttl_market_hours: 30
+    cache_ttl_after_hours: 15
+    cache_ttl_weekend: 60
+    cache_volatility_invalidation:
+      enabled: true
+      price_change_threshold_pct: 2.0
+  performance:
+    max_workers: 4
+    verbose: false
+    log_trades: true
+    buffer_batch_inserts: true
+    buffer_size: 100
+    api_timeout_sec: 30
+    api_retries: 3
+  portfolio:
+    initial_cash: 160000
+    base_currency: USD
+    reset_on_startup: false
+    archive_trades_on_reset: true
+    auto_rebalance_enabled: false
+    rebalance_frequency: monthly
+  scheduler:
+    market_scan_interval_minutes: 15
+    data_refresh_interval_minutes: 5
+  
+  # Market scanner settings
+  market_scan:
+    limit: 100  # Scan all symbols (universe size ~25)
+  
+  # ========================
+  # BACKTEST STRATEGIES
+  # ========================
+  # These strategies are used by the backtest runner. Live trading uses the 'strategy' section above.
+  fundamentals:
+    enabled: true
+    providers:
+    - yfinance
+    - alphavantage
+    alphavantage_api_key: plMOu5bijgq_Dci68wl0vk5mZvAyysxF
+  backtest_strategies:
+    momentum_trend:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 0.7
+      entry_rules:
+      - name: rsi_bullish
+        type: entry
+        indicator: rsi
+        condition: greater_than
+        value: 55.0
+      - name: macd_bullish_entry
+        type: entry
+        indicator: macd
+        condition: greater_than
+        value: 0.0
+      exit_rules:
+      - name: rsi_overbought_exit
+        type: exit
+        indicator: rsi
+        condition: greater_than
+        value: 65.0
+      - name: macd_bearish_exit
+        type: exit
+        indicator: macd
+        condition: less_than
+        value: 0.0
+    momentum_trend_filtered:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 0.7
+      entry_rules:
+      - name: rsi_bullish
+        type: entry
+        indicator: rsi
+        condition: greater_than
+        value: 55.0
+      - name: macd_bullish_entry
+        type: entry
+        indicator: macd
+        condition: greater_than
+        value: 0.0
+      - name: price_above_sma200
+        type: entry
+        indicator: sma_200
+        condition: greater_than
+        value: 0.0
+        compare_to_price: true
+      exit_rules:
+      - name: rsi_overbought_exit
+        type: exit
+        indicator: rsi
+        condition: greater_than
+        value: 65.0
+      - name: macd_bearish_exit
+        type: exit
+        indicator: macd
+        condition: less_than
+        value: 0.0
+    value_quality_news:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 0.6
+      entry_rules:
+      - name: pe_value
+        type: entry
+        indicator: pe_ratio
+        condition: less_than
+        value: 60.0
+      - name: revenue_growth
+        type: entry
+        indicator: revenue_growth_yoy
+        condition: greater_than
+        value: 0.1
+      - name: news_sentiment_bullish
+        type: entry
+        indicator: news_sentiment
+        condition: greater_than
+        value: 0.1
+      exit_rules:
+      - name: pe_overvalued
+        type: exit
+        indicator: pe_ratio
+        condition: greater_than
+        value: 100.0
+      - name: revenue_shrink
+        type: exit
+        indicator: revenue_growth_yoy
+        condition: less_than
+        value: 0.0
+      - name: news_bearish
+        type: exit
+        indicator: news_sentiment
+        condition: less_than
+        value: -0.2
+    momentum_lenient:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 0.5
+      entry_rules:
+      - name: rsi_bullish
+        type: entry
+        indicator: rsi
+        condition: greater_than
+        value: 55.0
+      - name: macd_bullish_entry
+        type: entry
+        indicator: macd
+        condition: greater_than
+        value: 0.0
+      exit_rules:
+      - name: rsi_overbought_exit
+        type: exit
+        indicator: rsi
+        condition: greater_than
+        value: 70.0
+      - name: macd_bearish_exit
+        type: exit
+        indicator: macd
+        condition: less_than
+        value: 0.0
+    sma20_trend:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 1.0
+      entry_rules:
       - name: price_above_sma20
         type: entry
         indicator: sma_20
         condition: greater_than
         value: 0.0
         compare_to_price: true
-    exit_rules:
+      exit_rules:
       - name: price_below_sma20
         type: exit
         indicator: sma_20
         condition: less_than
         value: 0.0
         compare_to_price: true
-
-  sma50_trend_regime:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 1.0
-    entry_rules:
+    sma50_trend:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 1.0
+      entry_rules:
+      - name: price_above_sma50
+        type: entry
+        indicator: sma_50
+        condition: greater_than
+        value: 0.0
+        compare_to_price: true
+      exit_rules:
+      - name: price_below_sma50
+        type: exit
+        indicator: sma_50
+        condition: less_than
+        value: 0.0
+        compare_to_price: true
+    sma50_trend_regime:
+      allocation: 1.0
+      risk_budget_pct: 1.5
+      confidence_threshold: 1.0
+      entry_rules:
       - name: price_above_sma50
         type: entry
         indicator: sma_50
@@ -49,7 +419,7 @@ strategies:
         indicator: regime_score
         condition: greater_than
         value: 50.0
-    exit_rules:
+      exit_rules:
       - name: price_below_sma50
         type: exit
         indicator: sma_50
@@ -61,377 +431,15 @@ strategies:
         indicator: regime_score
         condition: less_than
         value: 30.0
+  scanner:
+    discovery_top_n_per_theme: 10
+    price_monitor_top_n: 50
+    price_monitor_interval_minutes: 15
+    discovery_interval: daily
 
-strategy:
-  type: sma50_trend_regime
-  auto_execute:
-    enabled: true
-    confidence_threshold: 0.8
-    require_approval: false
-  indicators:
-    sma:
-      enabled: true
-      periods:
-      - 20
-      - 50
-  rules:
-    price_above_sma50: true
-    regime_bullish: true
-    stop_loss_enabled: true
-    take_profit_enabled: true
-universe:
-  themes:
-  - name: AI
-    symbols:
-    - NVDA
-    - PLTR
-    - UPST
-    - AVGO
-    - MSTR
-    - AI
-    - SYM
-    - PATH
-    - BBAI
-    - SOUN
-    - GFAI
-    - AITX
-    - PRCT
-    - LQDA
-    - HIMS
-    - GRAB
-    - IONQ
-    - RGTI
-    - QUBT
-  - name: Semiconductor
-    symbols:
-    - TSM
-    - QCOM
-    - AMD
-    - ASML
-    - ASR
-    - INTC
-    - MU
-    - MRVL
-    - ADI
-    - NXPI
-    - KLAC
-    - LRCX
-    - AMAT
-    - 'ON'
-    - SWKS
-    - ARM
-    - MCHP
-    - TXN
-    - GFS
-  - name: Cloud
-    symbols:
-    - CRWD
-    - DDOG
-    - NET
-    - MDB
-    - SNOW
-    - ZS
-    - PANW
-    - FTNT
-    - S
-    - OKTA
-    - TEAM
-    - HUBS
-    - VEEV
-    - BILL
-    - MNDY
-    - NOW
-    - WDAY
-    - ADBE
-    - CRM
-    - SHOP
-  - name: MegaCap
-    symbols:
-    - MSFT
-    - GOOGL
-    - AAPL
-    - AMZN
-    - META
-    - TSLA
-    - BRK-B
-    - LLY
-    - V
-    - UNH
-    - JPM
-    - XOM
-    - JNJ
-    - WMT
-    - MA
-    - PG
-    - COST
-    - HD
-    - NFLX
-    - ORCL
-  - name: Hong Kong
-    symbols:
-    - 0700.HK
-    - 9988.HK
-    - 0941.HK
-    - 1398.HK
-    - 0388.HK
-    - 2318.HK
-    - 0005.HK
-    - 1299.HK
-    - 0027.HK
-    - 0003.HK
-    - 9618.HK
-    - 9999.HK
-    - 3690.HK
-    - 1810.HK
-    - 0966.HK
-    - 0175.HK
-    - 2382.HK
-    - 0883.HK
-    - 0002.HK
-    - 0001.HK
-  all_symbols: null
-  whitelist:
-    enabled: false
-    symbols: []
-data:
-  default_interval: 1d
-  default_lookback_days: 120
-  cache_ttl_minutes: 5
-  cache_enabled: true
-  batch_size: 20
-  batch_delay_sec: 1.0
-  request_jitter_sec: 0.5
-  backoff:
-    enabled: true
-    initial_wait_sec: 1
-    max_wait_sec: 60
-    multiplier: 2.0
-  cache_ttl_market_hours: 30
-  cache_ttl_after_hours: 15
-  cache_ttl_weekend: 60
-  cache_volatility_invalidation:
-    enabled: true
-    price_change_threshold_pct: 2.0
-performance:
-  max_workers: 4
-  verbose: false
-  log_trades: true
-  buffer_batch_inserts: true
-  buffer_size: 100
-  api_timeout_sec: 30
-  api_retries: 3
-portfolio:
-  initial_cash: 100000
-  base_currency: USD
-  reset_on_startup: false
-  archive_trades_on_reset: true
-  auto_rebalance_enabled: false
-  rebalance_frequency: monthly
-scheduler:
-  market_scan_interval_minutes: 15
-  data_refresh_interval_minutes: 5
-
-# Market scanner settings
-market_scan:
-  limit: 100  # Scan all symbols (universe size ~25)
-
-# ========================
-# BACKTEST STRATEGIES
-# ========================
-# These strategies are used by the backtest runner. Live trading uses the 'strategy' section above.
-fundamentals:
-  enabled: true
-  providers:
-  - yfinance
-  - alphavantage
-  alphavantage_api_key: plMOu5bijgq_Dci68wl0vk5mZvAyysxF
-backtest_strategies:
-  momentum_trend:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 0.7
-    entry_rules:
-    - name: rsi_bullish
-      type: entry
-      indicator: rsi
-      condition: greater_than
-      value: 55.0
-    - name: macd_bullish_entry
-      type: entry
-      indicator: macd
-      condition: greater_than
-      value: 0.0
-    exit_rules:
-    - name: rsi_overbought_exit
-      type: exit
-      indicator: rsi
-      condition: greater_than
-      value: 65.0
-    - name: macd_bearish_exit
-      type: exit
-      indicator: macd
-      condition: less_than
-      value: 0.0
-  momentum_trend_filtered:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 0.7
-    entry_rules:
-    - name: rsi_bullish
-      type: entry
-      indicator: rsi
-      condition: greater_than
-      value: 55.0
-    - name: macd_bullish_entry
-      type: entry
-      indicator: macd
-      condition: greater_than
-      value: 0.0
-    - name: price_above_sma200
-      type: entry
-      indicator: sma_200
-      condition: greater_than
-      value: 0.0
-      compare_to_price: true
-    exit_rules:
-    - name: rsi_overbought_exit
-      type: exit
-      indicator: rsi
-      condition: greater_than
-      value: 65.0
-    - name: macd_bearish_exit
-      type: exit
-      indicator: macd
-      condition: less_than
-      value: 0.0
-  value_quality_news:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 0.6
-    entry_rules:
-    - name: pe_value
-      type: entry
-      indicator: pe_ratio
-      condition: less_than
-      value: 60.0
-    - name: revenue_growth
-      type: entry
-      indicator: revenue_growth_yoy
-      condition: greater_than
-      value: 0.1
-    - name: news_sentiment_bullish
-      type: entry
-      indicator: news_sentiment
-      condition: greater_than
-      value: 0.1
-    exit_rules:
-    - name: pe_overvalued
-      type: exit
-      indicator: pe_ratio
-      condition: greater_than
-      value: 100.0
-    - name: revenue_shrink
-      type: exit
-      indicator: revenue_growth_yoy
-      condition: less_than
-      value: 0.0
-    - name: news_bearish
-      type: exit
-      indicator: news_sentiment
-      condition: less_than
-      value: -0.2
-  momentum_lenient:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 0.5
-    entry_rules:
-    - name: rsi_bullish
-      type: entry
-      indicator: rsi
-      condition: greater_than
-      value: 55.0
-    - name: macd_bullish_entry
-      type: entry
-      indicator: macd
-      condition: greater_than
-      value: 0.0
-    exit_rules:
-    - name: rsi_overbought_exit
-      type: exit
-      indicator: rsi
-      condition: greater_than
-      value: 70.0
-    - name: macd_bearish_exit
-      type: exit
-      indicator: macd
-      condition: less_than
-      value: 0.0
-  sma20_trend:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 1.0
-    entry_rules:
-    - name: price_above_sma20
-      type: entry
-      indicator: sma_20
-      condition: greater_than
-      value: 0.0
-      compare_to_price: true
-    exit_rules:
-    - name: price_below_sma20
-      type: exit
-      indicator: sma_20
-      condition: less_than
-      value: 0.0
-      compare_to_price: true
-  sma50_trend:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 1.0
-    entry_rules:
-    - name: price_above_sma50
-      type: entry
-      indicator: sma_50
-      condition: greater_than
-      value: 0.0
-      compare_to_price: true
-    exit_rules:
-    - name: price_below_sma50
-      type: exit
-      indicator: sma_50
-      condition: less_than
-      value: 0.0
-      compare_to_price: true
-  sma50_trend_regime:
-    allocation: 1.0
-    risk_budget_pct: 1.5
-    confidence_threshold: 1.0
-    entry_rules:
-    - name: price_above_sma50
-      type: entry
-      indicator: sma_50
-      condition: greater_than
-      value: 0.0
-      compare_to_price: true
-    - name: regime_bullish
-      type: entry
-      indicator: regime_score
-      condition: greater_than
-      value: 50.0
-    exit_rules:
-    - name: price_below_sma50
-      type: exit
-      indicator: sma_50
-      condition: less_than
-      value: 0.0
-      compare_to_price: true
-    - name: regime_bearish
-      type: exit
-      indicator: regime_score
-      condition: less_than
-      value: 30.0
-scanner:
-  discovery_top_n_per_theme: 10
-  price_monitor_top_n: 50
-  price_monitor_interval_minutes: 15
-  discovery_interval: daily
+# Notifications Configuration
+notifications:
+  telegram:
+    bot_token: '8694519756:AAGxp6d7Fho3-696h4ae4tHvjcVmtazQUOw'
+    chat_id: '8383381149'
+    message_thread_id: null

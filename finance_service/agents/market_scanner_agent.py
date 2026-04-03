@@ -48,7 +48,7 @@ class MarketScannerAgent(Agent):
         self._load_watchlist()
         # DEBUG: Log config sections and universe
         all_sections = list(self.config._config.keys()) if hasattr(self.config, '_config') else 'no _config'
-        finance_section = self.config.get("finance", None, default=None)
+        finance_section = self.config.get_section("finance")
         if finance_section:
             universe_data = finance_section.get("universe") if isinstance(finance_section, dict) else None
         else:
