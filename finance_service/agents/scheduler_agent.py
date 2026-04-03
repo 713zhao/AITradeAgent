@@ -116,6 +116,10 @@ class SchedulerAgent(Agent):
         await self.event_bus.publish(Event(event_type=Events.DATA_REFRESH_TRIGGER, data={"interval": "hourly"}))
         logger.info("Published DATA_REFRESH_TRIGGER event (hourly).")
 
+    async def handle_market_scan_trigger(self):
+        """Public method to manually trigger a discovery scan."""
+        await self._trigger_discovery_scan()
+
     async def _trigger_health_check(self):
         await self.event_bus.publish(Event(event_type=Events.SCHEDULE, data={}))
         logger.info("Published SCHEDULE event for health check.")
