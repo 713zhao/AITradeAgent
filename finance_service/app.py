@@ -198,25 +198,39 @@ class MainOrchestratorAgent:
         logger.info(f"Orchestrator received MARKET_SCANNED event: {event.data}")
         # Event data is directly the payload from MarketScannerAgent, with possible additional fields
         symbols = event.data.get("symbols", [])
+        rated_symbols = event.data.get("rated_symbols", [])
         logger.info(f"Processing {len(symbols)} symbols: {symbols}")
 
-        # Send market scan summary to Telegram (always; includes details and top analysis)
+        # Send market scan summary to Telegram (always; includes details and ranked scores)
         if self.telegram_agent and self.telegram_agent.enabled:
             chat_id = self.telegram_agent.chat_id
             if chat_id:
-                # Build detailed summary for first 10 symbols
-                preview_symbols = symbols[:10]
+                # Build detailed ranked summary with composite scores
+                preview_symbols = rated_symbols[:50] if rated_symbols else []
                 details = []
-                for sym in preview_symbols:
+                
+                for item in preview_symbols:
+                    sym = item.get("symbol", "")
+                    score = item.get("rating", 0)
+                    rank = item.get("rank", 0)
                     snap = await self._get_symbol_snapshot(sym)
                     if snap:
-                        change_str = f"({snap['change']:+.1f}%)" if snap.get('change') is not None else ""
-                        details.append(f"• {snap['symbol']}: ${snap['price']:.2f} {change_str}")
+                        price = snap.get('price', 0)
+                        details.append(f"{rank:2d}. {sym:6s}  ${price:7.2f} (score={score:.3f})")
                     else:
-                        details.append(f"• {sym}: no data")
-                if len(symbols) > 10:
-                    details.append(f"... (+{len(symbols)-10} more)")
-                message = f"🔍 Market Scan: {len(symbols)} symbols\n" + "\n".join(details)
+                        details.append(f"{rank:2d}. {sym:6s}  N/A (score={score:.3f})")
+                
+                # Header with ranking info
+                total_count = len(symbols)
+                header = f"📊 Daily Market Scan – Top {min(50, total_count)} Symbols (Ranked by Composite Score)\n"
+                
+                # Add footer with additional info
+                footer = ""
+                if len(symbols) > 50:
+                    footer = f"\n... and {len(symbols) - 50} more symbols"
+                
+                message = header + "\n".join(details) + footer
+                
                 try:
                     await self.telegram_agent.send_message(chat_id=chat_id, message=message)
                     logger.info("Sent market scan summary to Telegram")
