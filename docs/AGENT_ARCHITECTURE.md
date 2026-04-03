@@ -126,6 +126,12 @@ The system continuously scans markets, analyzes candidates, generates trade prop
 | 16 | TradingAgentsAPI | `trading_agents_api` | `trading_agents_api.py` | ✅ REST API gateway for TradingAgents framework multi-agent orchestration |
 | — | LLM Config Module | — | `llm_config.py` | ✅ Multi-provider LLM configuration (Gemini, OpenRouter, OpenAI, Anthropic, xAI) |
 
+### Ranking & Interpretability Agents (Phase 2 ✅)
+
+| # | Agent | `agent_id` | File | Purpose |
+|---|-------|-----------|------|---------|
+| 17 | RankingAgent | `ranking_agent` | `ranking_agent.py` | ✅ Multi-factor symbol ranking with explainability and scoring breakdown |
+
 ---
 
 ## Event Bus — All Events
@@ -562,6 +568,87 @@ TA_DEEP_THINK_MODEL=gemini-2.5-pro-v1
 **Key Feature:** Hot-reload support — change LLM provider without restarting system.
 
 
+
+### 17. RankingAgent (Phase 2 - Interpretability ✅)
+
+**File:** `finance_service/agents/ranking_agent.py`  
+**Goal:** Provide explainable, multi-factor ranking of symbols with detailed scoring breakdown.
+
+**Trigger:** Called by orchestrator after `MARKET_SCANNED` to re-rank and enrich discovered symbols with scoring details.
+
+**Inputs:**
+- `symbols_with_data` — dict of {symbol: {theme, data, indicators, fundamentals}}
+
+**Processing:**
+Computes composite ranking score from 5 independent factors:
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Liquidity | 20% | Trading volume, bid-ask spread (min $1M daily) |
+| Momentum | 25% | RSI trend + MACD + SMA trend (technical) |
+| Value | 20% | P/E ratio, book value (fundamental valuation) |
+| Growth | 20% | EPS growth, revenue growth (expansion metrics) |
+| Quality | 15% | ROE, debt/equity ratio (financial health) |
+
+**Scoring Pipeline:**
+1. Compute raw metric for each factor
+2. Normalize each to 0-1 scale using configurable thresholds
+3. Apply weighted sum: `composite_score = Σ(weight_i × normalized_score_i)`
+4. Generate human-readable explanation highlighting top 3 factors
+5. Assign confidence score based on data completeness
+
+**Output Event:** `RANKING_COMPLETE`
+```python
+{
+    "agent_id": "ranking_agent",
+    "status": "success",
+    "payload": {
+        "ranked_symbols": [
+            {
+                "symbol": "NVDA",
+                "theme": "AI",
+                "composite_score": 0.87,
+                "rank": 1,
+                "confidence": 0.95,
+                "factors": [
+                    {
+                        "name": "momentum",
+                        "weight": 0.25,
+                        "raw_value": 32.4,
+                        "normalized_score": 0.85,
+                        "contribution": 0.212
+                    },
+                    {
+                        "name": "liquidity",
+                        "weight": 0.20,
+                        "raw_value": 45000000,
+                        "normalized_score": 0.90,
+                        "contribution": 0.180
+                    }
+                ],
+                "explanation": "NVDA: Strong momentum (0.85), Strong liquidity (0.90), Moderate value (0.62)"
+            }
+        ],
+        "ranking_timestamp": "2026-04-03T12:00:00Z",
+        "total_symbols": 50
+    }
+}
+```
+
+**Integration:**
+- Sits between `MARKET_SCANNED` and `DataAgent` processing
+- Re-rankable: can be called independently anytime to re-score symbolsexisting watch list
+- Decoder for strategy: StrategyAgent can use ranking confidence/explanations to adjust decision thresholds
+- Transparent: full factor breakdown enables learning and backtesting analysis
+
+**Key Design Decisions:**
+1. **Independent**: Not tied to MarketScannerAgent; can rank any symbol set
+2. **Explainable**: Returns full factor breakdown so users understand why symbol ranked where
+3. **Tunable**: All weights and thresholds configurable via YAML
+4. **Extensible**: New factors can be added without changing agent interface
+
+---
+
 ### 7. StrategyAgent (renumbered from 7)
 
 **File:** `finance_service/agents/strategy_agent.py`  
@@ -943,6 +1030,7 @@ Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
 | ExitAgent | ✅ Every 5 minutes | `EXIT_CHECK_TRIGGER` (reactive + strategic) |
 | TradingAgentsAnalyzer | Per-symbol after analysis ready | `ANALYSIS_COMPLETE` |
 | TradingAgentsAPI | Per LLM request | REST API (`POST /analyze`) |
+| RankingAgent | Per discovery batch | `MARKET_SCANNED` (re-ranking) |
 | TelegramAgent | Always on | User commands + incoming messages |
 
 ---
@@ -1052,9 +1140,10 @@ See [NEXT_STEPS.md](NEXT_STEPS.md) for the full roadmap. Top items:
 | ~~Medium~~ | ~~Expand symbol universe to 100 symbols~~ | ✅ Done — 20 per theme across 5 themes |
 | ~~High~~ | ~~Integrate Gemini LLM for regime analysis~~ | ✅ Done — TradingAgentsAnalyzer + Gemini 2.5 (Flash/Pro) |
 | ~~Medium~~ | ~~Add TradingAgents framework integration~~ | ✅ Done — LLM multi-agent analysis engine + REST API |
-| Medium | Add `RankingAgent` as separate agent to produce richer output (scores, reasons) | Explainable, reusable ranking independent of scanner |
+| ~~Medium~~ | ~~Add `RankingAgent` as separate agent~~ | ✅ Done — Multi-factor ranking with 5-factor scoring (liquidity, momentum, value, growth, quality) |
 | Medium | Implement position degradation alerts | Re-analyze held positions for thesis invalidation (via ExitAgent) |
 | Low | Add backtest harness for strategy evaluation | Historical performance validation |
+| Low | Add options analytics agent | Volatility surface analysis, pricing models |
 
 ---
 

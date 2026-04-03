@@ -31,6 +31,7 @@ from finance_service.agents.health_agent import HealthAgent
 from finance_service.agents.telegram_agent import TelegramAgent
 from finance_service.agents.exit_agent import ExitAgent
 from finance_service.agents.learning_agent import LearningAgent
+from finance_service.agents.ranking_agent import RankingAgent
 from finance_service.agents.agent_interface import AgentReport
 from finance_service.portfolio.trade_repository import TradeRepository
 
