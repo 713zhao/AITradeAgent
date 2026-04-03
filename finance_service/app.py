@@ -330,9 +330,13 @@ class MainOrchestratorAgent:
                 logger.info(f"[ORCHESTRATOR] No proposals for {symbol}, skipping")
                 continue
             proposal = final_proposals[0]  # best proposal
-            logger.info(f"[ORCHESTRATOR] Calling RiskAgent with proposal: {proposal}")
-            risk_report = await self.risk_agent.run(proposal)
-            logger.info(f"[ORCHESTRATOR] RiskAgent returned decision: {risk_report.payload.get('decision')}")
+            logger.info(f"[ORCHESTRATOR] Proposal details: symbol={proposal.get('symbol')}, action={proposal.get('action')}, quantity={proposal.get('quantity')}, confidence={proposal.get('confidence')}")
+            try:
+                risk_report = await self.risk_agent.run(proposal)
+                logger.info(f"[ORCHESTRATOR] RiskAgent returned: status={risk_report.status}, decision={risk_report.payload.get('decision')}")
+            except Exception as e:
+                logger.error(f"[ORCHESTRATOR] RiskAgent call failed: {e}", exc_info=True)
+                continue
             logger.info(f"Risk report for {symbol}: status={risk_report.status}, decision={risk_report.payload.get('decision')}, passed={risk_report.payload.get('all_passed')}, approval_required={risk_report.payload.get('any_approval_required')}")
             if risk_report.payload.get("decision") == "APPROVED":
                 # Send pre-execution Telegram notification before placing the trade
