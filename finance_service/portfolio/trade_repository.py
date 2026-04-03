@@ -21,12 +21,13 @@ class TradeRepository:
     Can be extended with SQLite persistence (Phase 3+).
     """
     
-    def __init__(self, use_db: bool = True):
+    def __init__(self, use_db: bool = True, db: Optional[Any] = None):
         """
         Initialize repository.
         
         Args:
             use_db: If True, enable persistence using portfolio database.
+            db: Optional Database instance (for testing with custom DB).
         """
         self.trades: List[Trade] = []
         self.positions: Dict[str, Position] = {}
@@ -34,7 +35,7 @@ class TradeRepository:
         self.db = None
         if use_db:
             try:
-                self.db = get_portfolio_db()
+                self.db = db if db is not None else get_portfolio_db()
                 self._load_from_db()
             except Exception as e:
                 logger.error(f"Failed to initialize database for TradeRepository: {e}")

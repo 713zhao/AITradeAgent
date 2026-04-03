@@ -117,7 +117,7 @@ class BacktestEngine:
 
         # Initialize portfolio tracking
         portfolio = pd.DataFrame(index=dates, columns=[
-            'cash', 'equity', 'position_value', ' realized_pnl', 'unrealized_pnl'
+            'cash', 'equity', 'position_value', 'realized_pnl', 'unrealized_pnl'
         ])
         portfolio.iloc[0] = {
             'cash': self.initial_capital,

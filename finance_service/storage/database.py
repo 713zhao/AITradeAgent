@@ -380,6 +380,21 @@ class Database:
         cursor.execute('DELETE FROM trade_store WHERE trade_id = ?', (trade_id,))
         self.connection.commit()
         return cursor.rowcount > 0
+
+    def clear_all_data(self) -> None:
+        """Delete all data from all tables (preserves schema)."""
+        cursor = self.connection.cursor()
+        tables = [
+            'trades', 'positions', 'portfolio_snapshots',
+            'config_audit_log', 'backtest_runs', 'analysis_cache',
+            'event_log', 'trade_store'
+        ]
+        for table in tables:
+            try:
+                cursor.execute(f"DELETE FROM {table}")
+            except Exception as e:
+                logger.warning(f"Failed to clear table {table}: {e}")
+        self.connection.commit()
     
     def close(self):
         """Close database connection"""

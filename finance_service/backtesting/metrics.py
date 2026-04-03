@@ -66,7 +66,11 @@ def calculate_metrics(
         gross_loss = abs(losses['pnl'].sum())
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.inf
         expectancy = (win_rate * avg_win) - ((1 - win_rate) * abs(avg_loss))
-        avg_holding = (trades['exit_date'] - trades['entry_date']).dt.days.mean()
+        # Holding period only if both exit_date and entry_date exist in DataFrame
+        if 'exit_date' in trades.columns and 'entry_date' in trades.columns:
+            avg_holding = (trades['exit_date'] - trades['entry_date']).dt.days.mean()
+        else:
+            avg_holding = 0.0
     else:
         win_rate = avg_win = avg_loss = profit_factor = expectancy = avg_holding = 0.0
         gross_profit = gross_loss = 0.0
