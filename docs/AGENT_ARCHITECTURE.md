@@ -95,6 +95,8 @@ The system continuously scans markets, analyzes candidates, generates trade prop
 
 ## Agent Inventory
 
+### Core Trading Agents
+
 | # | Agent | `agent_id` | File | Trigger |
 |---|-------|-----------|------|---------|
 | 1 | MainOrchestratorAgent | `main_orchestrator_agent` | `app.py` | Always running |
@@ -112,6 +114,14 @@ The system continuously scans markets, analyzes candidates, generates trade prop
 | 13 | HealthAgent | `health_agent` | `health_agent.py` | `TRADE_EXECUTED`, `SCHEDULE`, `DAILY_REPORT_TRIGGER` |
 | 14 | ExitAgent | `exit_agent` | `exit_agent.py` | ✅ Every 5 min via `EXIT_CHECK_TRIGGER` |
 | — | TelegramAgent | `telegram_agent` | `telegram_agent.py` | User commands + broadcast messages |
+
+### LLM & Advanced Analysis Agents (Phase 1 - Gemini Integration ✅)
+
+| # | Agent | `agent_id` | File | Purpose |
+|---|-------|-----------|------|---------|
+| 15 | TradingAgentsAnalyzer | `trading_agents_analyzer` | `trading_agents_analyzer.py` | ✅ LLM-powered opportunity analysis using TradingAgents framework (Gemini 2.5) |
+| 16 | TradingAgentsAPI | `trading_agents_api` | `trading_agents_api.py` | ✅ REST API gateway for TradingAgents framework multi-agent orchestration |
+| — | LLM Config Module | — | `llm_config.py` | ✅ Multi-provider LLM configuration (Gemini, OpenRouter, OpenAI, Anthropic, xAI) |
 
 ---
 
@@ -145,6 +155,9 @@ ANALYSIS_FAILED           ← AnalysisAgent: error
 
 # Regime (Phase 1 - LLM Augmentation)
 MARKET_REGIME_UPDATED     ← RegimeAgent: market regime classification (trending, range, vol)
+
+# LLM Analysis (Phase 1 - Gemini Integration)
+LLM_ANALYSIS_COMPLETE     ← TradingAgentsAnalyzer: Gemini LLM multi-agent analysis (opportunities, risks)
 
 # Strategy
 TRADE_PROPOSAL_GENERATED  ← StrategyAgent: BUY/SELL proposals ready
@@ -458,6 +471,93 @@ llm:
 **Integration:** `StrategyAgent` subscribes to this event and adjusts confidence thresholds accordingly (e.g., higher thresholds in trending markets, lower in low volatility).
 
 ---
+
+
+### 15. TradingAgentsAnalyzer (Phase 1 - Gemini Integration ✅)
+
+**File:** `finance_service/agents/trading_agents_analyzer.py`  
+**Goal:** Leverage LLM-powered multi-agent analysis through TradingAgents framework for deep opportunity evaluation.
+
+**Trigger:** Called by orchestrator after analysis indicators are ready; integrates with `RegimeAgent` and `StrategyAgent`.
+
+**Inputs:**
+- `symbol` — ticker to analyze
+- `ohlcv_data` — OHLCV DataFrame
+- `fundamentals` — fundamental metrics
+- `indicators` — technical indicators from `AnalysisAgent`
+- `market_regime` — regime classification from `RegimeAgent`
+
+**Processing:**
+- Routes multi-step LLM analysis through TradingAgents framework
+- Quick-think LLM (Gemini 2.5 Flash): Rapid pattern recognition (0.2s latency)
+- Deep-think LLM (Gemini 2.5 Pro): Detailed opportunity assessment (1-2s latency)
+- Evaluates trader psychology, market microstructure, regime-specific tactics
+- Returns ranked opportunities with detailed rationale and risk assessment
+
+**Output Event:** `LLM_ANALYSIS_COMPLETE`
+```python
+{
+    "agent_id": "trading_agents_analyzer",
+    "status": "success",
+    "payload": {
+        "symbol": "NVDA",
+        "opportunities": [
+            {
+                "opportunity_id": "opp-001",
+                "type": "breakout_momentum",
+                "strength": 0.88,
+                "rationale": "Bullish regime confirmation + RSI recovery from oversold",
+                "recommended_action": "aggressive_entry",
+                "risk_factors": ["sector_volatility", "macro_uncertainty"]
+            }
+        ],
+        "llm_models_used": ["gemini-2.5-flash-v1", "gemini-2.5-pro-v1"],
+        "analysis_latency_ms": 1245
+    }
+}
+```
+
+**Integration:** Works in tandem with `RegimeAgent` (shares market regime context) and `StrategyAgent` (enriches proposals with LLM analysis).
+
+---
+
+### 16. TradingAgentsAPI (Phase 1 - Gemini Integration ✅)
+
+**File:** `finance_service/agents/trading_agents_api.py`  
+**Goal:** Provide REST API gateway for TradingAgents framework multi-agent orchestration and external integrations.
+
+**Endpoints:**
+- `POST /analyze` — Submit symbol for LLM-powered analysis
+- `GET /status/{task_id}` — Poll analysis completion status
+- `GET /results/{task_id}` — Retrieve analysis results
+- `POST /feedback` — Log analysis outcome for future model tuning
+
+**Integration:** Used by `MainOrchestratorAgent` to queue and retrieve LLM analyses asynchronously.
+
+---
+
+### LLM Configuration
+
+**File:** `finance_service/agents/llm_config.py`  
+**Goal:** Centralized multi-provider LLM configuration and credential management.
+
+**Supported Providers:**
+- **Google Gemini** ✅ (Active: gemini-2.5-flash-v1, gemini-2.5-pro-v1)
+- **OpenRouter** (OpenAI, Anthropic, xAI models)
+- **OpenAI** (GPT-4, GPT-3.5)
+- **Anthropic** (Claude 3 Sonnet)
+- **xAI** (Grok v2, v3)
+
+**Configuration Source:** Environment variables (`.env` file)
+```bash
+LLM_PROVIDER=google
+GOOGLE_API_KEY=<gemini-key>
+TA_QUICK_THINK_MODEL=gemini-2.5-flash-v1
+TA_DEEP_THINK_MODEL=gemini-2.5-pro-v1
+```
+
+**Key Feature:** Hot-reload support — change LLM provider without restarting system.
+
 
 ### 7. StrategyAgent (renumbered from 7)
 
@@ -838,6 +938,8 @@ Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
 | LearningAgent | Per trade | `TRADE_EXECUTED` |
 | HealthAgent | Per trade + daily schedule | `TRADE_EXECUTED` / `SCHEDULE` |
 | ExitAgent | ✅ Every 5 minutes | `EXIT_CHECK_TRIGGER` (reactive + strategic) |
+| TradingAgentsAnalyzer | Per-symbol after analysis ready | `ANALYSIS_COMPLETE` |
+| TradingAgentsAPI | Per LLM request | REST API (`POST /analyze`) |
 | TelegramAgent | Always on | User commands + incoming messages |
 
 ---
@@ -945,7 +1047,11 @@ See [NEXT_STEPS.md](NEXT_STEPS.md) for the full roadmap. Top items:
 | ~~High~~ | ~~Wire `ExitAgent` into `SchedulerAgent` (every 5 min)~~ | ✅ Done — Tier 3 exit monitoring every 5 min |
 | ~~High~~ | ~~3-tier scanning architecture~~ | ✅ Done — daily discovery + 15-min price monitor + 5-min exits |
 | ~~Medium~~ | ~~Expand symbol universe to 100 symbols~~ | ✅ Done — 20 per theme across 5 themes |
+| ~~High~~ | ~~Integrate Gemini LLM for regime analysis~~ | ✅ Done — TradingAgentsAnalyzer + Gemini 2.5 (Flash/Pro) |
+| ~~Medium~~ | ~~Add TradingAgents framework integration~~ | ✅ Done — LLM multi-agent analysis engine + REST API |
 | Medium | Add `RankingAgent` as separate agent to produce richer output (scores, reasons) | Explainable, reusable ranking independent of scanner |
+| Medium | Implement position degradation alerts | Re-analyze held positions for thesis invalidation (via ExitAgent) |
+| Low | Add backtest harness for strategy evaluation | Historical performance validation |
 
 ---
 
