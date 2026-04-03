@@ -1,10 +1,11 @@
 """Market Scanner - 3-Tier scanning: Discovery (daily), Price Monitor (15min), Exit Monitor (5min)"""
 import json
 import logging
+from finance_service.core.flow_logger import flow
 import asyncio
 import os
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Set, Tuple, Any
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -45,6 +46,14 @@ class MarketScannerAgent(Agent):
             os.path.dirname(__file__), "..", "storage", "watchlist.json"
         )
         self._load_watchlist()
+        # DEBUG: Log config sections and universe
+        all_sections = list(self.config._config.keys()) if hasattr(self.config, '_config') else 'no _config'
+        finance_section = self.config.get("finance", None, default=None)
+        if finance_section:
+            universe_data = finance_section.get("universe") if isinstance(finance_section, dict) else None
+        else:
+            universe_data = None
+        logger.info(f"[INIT DEBUG] config sections: {all_sections}, finance_section keys: {list(finance_section.keys()) if isinstance(finance_section, dict) else 'not dict'}, universe: {universe_data}")
         logger.info(f"MarketScannerAgent initialized (whitelist_enabled={self._whitelist_enabled})")
 
     # ─── Public accessors ───────────────────────────────────────────
@@ -66,6 +75,7 @@ class MarketScannerAgent(Agent):
     def get_available_themes(self) -> List[str]:
         """Get all available theme names."""
         themes = self.config.get("finance", "universe/themes", default=[])
+        logger.info(f"[DBG THEMES] themes={themes}, type={type(themes)}")
         return [t.get("name", "") for t in themes if isinstance(t, dict)]
 
     def get_watchlist(self) -> List[Dict[str, Any]]:
@@ -132,8 +142,12 @@ class MarketScannerAgent(Agent):
         Returns:
             AgentReport with ranked symbols and ratings
         """
+        # DEBUG: Log config values early
+        raw_themes = self.config.get("finance", "universe/themes", default=[])
+        logger.info(f"[RUN DEBUG] raw_themes count: {len(raw_themes) if isinstance(raw_themes, list) else 'not list'}, include_themes={include_themes}")
         top_n = self.config.get("finance", "scanner/discovery_top_n_per_theme", default=limit)
         logger.info(f"[Discovery] Running full scan: themes={include_themes}, top_n={top_n}, min_liq={min_liquidity}")
+        flow("MarketScanner", "START", f"full scan: {len(self.get_available_themes())} themes, top_n={top_n}")
 
         try:
             available_themes = self.get_available_themes()
@@ -189,6 +203,7 @@ class MarketScannerAgent(Agent):
             }
             logger.info(message)
 
+            flow("MarketScanner", "DONE", f"{len(flat_symbols)} symbols found from {len(themes_to_scan)} themes")
             report = AgentReport(
                 agent_id=self.agent_id,
                 status="opportunity",
@@ -196,16 +211,9 @@ class MarketScannerAgent(Agent):
                 payload=payload
             )
 
-            # Publish MARKET_SCANNED event
-            try:
-                await self.event_bus.publish(Event(
-                    event_type=Events.MARKET_SCANNED,
-                    data=asdict(report)
-                ))
-            except Exception as e:
-                logger.error(f"Error publishing MARKET_SCANNED event: {e}", exc_info=True)
-                raise
-
+            # MARKET_SCANNED event is published by the orchestrator (handle_market_scan_trigger)
+            # after run() returns, with report.payload directly as event data.
+            # Do NOT publish here to avoid duplicate Telegram messages with 0 symbols.
             return report
 
         except Exception as e:
@@ -236,6 +244,30 @@ class MarketScannerAgent(Agent):
                 if s not in symbols_to_check:
                     symbols_to_check.append(s)
 
+        # Market-aware filtering: only include symbols whose primary market is open
+        from finance_service.utils.market_hours import is_hk_market_open, is_us_market_open
+        hk_open = is_hk_market_open()
+        us_open = is_us_market_open()
+        if not (hk_open or us_open):
+            logger.info("[PriceMonitor] Both markets closed; skipping fetch.")
+            return AgentReport(
+                agent_id=self.agent_id,
+                status="success",
+                message="Markets closed; no price fetch.",
+                payload={"prices": [], "count": 0}
+            )
+        # Filter to open-market symbols only
+        original_count = len(symbols_to_check)
+        filtered_symbols = []
+        for sym in symbols_to_check:
+            if sym.endswith('.HK'):
+                if hk_open:
+                    filtered_symbols.append(sym)
+            else:
+                if us_open:
+                    filtered_symbols.append(sym)
+        symbols_to_check = filtered_symbols
+
         logger.info(f"[PriceMonitor] Refreshing prices for {len(symbols_to_check)} symbols "
                      f"(watchlist={len(self._watchlist_symbols)}, held={len(held_symbols or [])})")
 
@@ -248,10 +280,63 @@ class MarketScannerAgent(Agent):
             )
 
         prices: List[Dict[str, Any]] = []
-        for symbol in symbols_to_check:
-            price_data = await self._fetch_quick_quote(symbol, data_agent)
-            if price_data:
-                prices.append(price_data)
+        if data_agent:
+            try:
+                # Batch fetch all symbols in one go to avoid rate limiting (was 401 errors)
+                end_date = datetime.now().strftime("%Y-%m-%d")
+                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+                logger.info(f"[PriceMonitor] Batch fetching {len(symbols_to_check)} symbols via provider (start={start_date}, end={end_date})")
+                
+                # Call provider.fetch_ohlcv directly (uses batching and delays)
+                results = await asyncio.to_thread(
+                    data_agent.provider.fetch_ohlcv,
+                    symbols_to_check,
+                    start_date=start_date,
+                    end_date=end_date,
+                    interval="1d"
+                )
+                
+                # Extract latest prices and optionally store in cache
+                for symbol, df in results.items():
+                    if df is not None and not df.empty:
+                        # Cache the fetched data for future single-symbol requests
+                        try:
+                            data_agent.cache.store(symbol, df, "1d")
+                        except Exception as e:
+                            logger.debug(f"Cache store failed for {symbol}: {e}")
+                        
+                        # Extract latest close price, volume, and change
+                        if len(df) >= 2 and 'Close' in df.columns:
+                            latest_close = float(df['Close'].iloc[-1])
+                            prev_close = float(df['Close'].iloc[-2])
+                            volume = int(df['Volume'].iloc[-1]) if 'Volume' in df.columns else None
+                            change_pct = ((latest_close - prev_close) / prev_close) * 100 if prev_close and prev_close != 0 else None
+                        elif not df.empty and 'Close' in df.columns:
+                            latest_close = float(df['Close'].iloc[-1])
+                            volume = int(df['Volume'].iloc[-1]) if 'Volume' in df.columns else None
+                            change_pct = None
+                        else:
+                            continue
+                        
+                        prices.append({
+                            "symbol": symbol,
+                            "price": latest_close,
+                            "volume": volume,
+                            "change_pct": change_pct,
+                            "timestamp": datetime.utcnow().isoformat(),
+                        })
+                logger.info(f"[PriceMonitor] Batch fetch produced {len(prices)}/{len(symbols_to_check)} valid price updates")
+            except Exception as e:
+                logger.error(f"[PriceMonitor] Batch fetch failed: {e}", exc_info=True)
+                # Fallback to individual fetches if batch fails entirely
+                logger.info("[PriceMonitor] Falling back to individual fetch method")
+                prices = []
+                for symbol in symbols_to_check:
+                    price_data = await self._fetch_quick_quote(symbol, data_agent)
+                    if price_data:
+                        prices.append(price_data)
+        else:
+            logger.warning("[PriceMonitor] No DataAgent provided; cannot fetch prices")
 
         message = f"Price refresh: {len(prices)} of {len(symbols_to_check)} symbols updated."
         payload = {

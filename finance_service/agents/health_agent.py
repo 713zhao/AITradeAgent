@@ -5,8 +5,10 @@ Sends alerts if drawdown exceeds thresholds or system issues detected.
 """
 
 import logging
+from finance_service.core.flow_logger import flow
+import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events
 from finance_service.agents.portfolio_agent import PortfolioAgent
@@ -91,6 +93,7 @@ class HealthAgent(Agent):
     
     async def perform_health_check(self) -> AgentReport:
         """Perform portfolio and system health checks."""
+        flow("HealthAgent", "CHECK", "performing health check")
         logger.info("HealthAgent performing health check")
         
         # Get portfolio agent from orchestrator (injected)
@@ -145,7 +148,14 @@ class HealthAgent(Agent):
         # Equity below initial capital?
         if total_equity < initial_cash * 0.9:
             alerts.append(f"📉 Equity below 90% of initial: ${total_equity:,.2f} vs ${initial_cash:,.2f}")
-        
+
+        # yFinance / price fetch errors from portfolio agent
+        if self.portfolio_agent and getattr(self.portfolio_agent, "last_price_fetch_error", None):
+            await self.send_error_alert(
+                "Price Fetch Error",
+                [self.portfolio_agent.last_price_fetch_error]
+            )
+
         # Check if we sent an alert recently and are in cooldown
         now = datetime.utcnow()
         if alerts and self.last_alert_time:
@@ -170,6 +180,7 @@ class HealthAgent(Agent):
             "checked_at": now.isoformat()
         }
         
+        flow("HealthAgent", "DONE", f"status={status} drawdown={drawdown:.1f}% equity=${total_equity:,.0f}")
         return AgentReport(agent_id=self.agent_id, status="success", message="Health check completed", payload=health_status)
     
     async def get_health_status(self) -> Dict[str, Any]:
@@ -202,7 +213,25 @@ class HealthAgent(Agent):
         message = "\n".join(message_lines)
         await self.telegram_agent.send_message(chat_id=chat_id, message=message)
         logger.info(f"Sent health alert via Telegram with {len(alerts)} alerts")
-    
+
+    async def send_error_alert(self, title: str, details: List[str]) -> None:
+        """Send a system/operational error alert to Telegram."""
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured, cannot send error alert")
+            return
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            return
+        lines = [f"🚨 *{title}*"]
+        for d in details:
+            lines.append(f"  • {d}")
+        message = "\n".join(lines)
+        try:
+            await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+            logger.info(f"Sent error alert: {title}")
+        except Exception as e:
+            logger.error(f"Failed to send error alert: {e}")
+
     async def send_trade_notification(self, execution_payload: Dict[str, Any]):
         """Send trade execution notification via Telegram."""
         if not self.telegram_agent or not self.telegram_agent.enabled:
@@ -222,16 +251,21 @@ class HealthAgent(Agent):
         price = result.get("filled_price", result.get("price", 0))
         status = result.get("status", "??")
         
-        # Get current portfolio info for context
+        # Get current portfolio info for context (with timeout to avoid blocking)
         portfolio_summary = "Portfolio info unavailable"
         if self.portfolio_agent:
             try:
-                portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
+                portfolio_report = await asyncio.wait_for(
+                    self.portfolio_agent.get_detailed_portfolio_state(),
+                    timeout=2.0
+                )
                 if portfolio_report.status == "success":
                     portfolio = portfolio_report.payload
                     equity = portfolio.get("equity_metrics", {}).get("total_equity", 0)
                     positions = len(portfolio.get("positions", {}))
                     portfolio_summary = f"Portfolio: ${equity:,.2f}, {positions} positions"
+            except asyncio.TimeoutError:
+                logger.warning("Portfolio state fetch timed out in trade notification; proceeding without portfolio context")
             except Exception as e:
                 logger.warning(f"Could not get portfolio state for trade notification: {e}")
         
@@ -262,7 +296,10 @@ class HealthAgent(Agent):
             return
         
         try:
-            portfolio_report = await self.portfolio_agent.get_detailed_portfolio_state()
+            portfolio_report = await asyncio.wait_for(
+                self.portfolio_agent.get_detailed_portfolio_state(),
+                timeout=3.0
+            )
             if portfolio_report.status != "success":
                 logger.error(f"Failed to get portfolio state for daily summary: {portfolio_report.message}")
                 return
@@ -301,6 +338,7 @@ class HealthAgent(Agent):
             message = "\n".join(summary_lines)
             await self.telegram_agent.send_message(chat_id=chat_id, message=message)
             logger.info("Sent daily portfolio summary")
-            
+        except asyncio.TimeoutError:
+            logger.error("Portfolio state fetch timed out for daily summary; cannot send summary")
         except Exception as e:
             logger.error(f"Error sending daily summary: {e}")

@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 from typing import Dict, Any, Optional, List, Tuple, Union, Set
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
@@ -349,6 +350,7 @@ class RiskAgent(Agent):
         Supports both single proposal (dict) and AgentReport payload with "proposal" or "proposals".
         """
         logger.info("RiskAgent run: Evaluating trade proposal(s) for risk.")
+        flow("RiskAgent", "START", "evaluating proposals")
 
         try:
             # Determine payload from input
@@ -371,6 +373,7 @@ class RiskAgent(Agent):
             # Fetch current portfolio state if PortfolioAgent is available
             current_positions: Dict[str, Position] = {}
             portfolio_equity: float = 100000.0  # fallback
+            available_cash: float = 100000.0     # fallback
             if self.portfolio_agent:
                 try:
                     portfolio_report = await self.portfolio_agent.run(
@@ -395,7 +398,8 @@ class RiskAgent(Agent):
                                 logger.warning(f"Failed to convert position {p.get('symbol')}: {e}")
                                 continue
                         portfolio_equity = portfolio_data["equity_metrics"]["total_equity"]
-                        logger.info(f"RiskAgent using live portfolio: equity=${portfolio_equity:,.2f}, positions={len(current_positions)}")
+                        available_cash = portfolio_data["equity_metrics"].get("current_cash", portfolio_equity)
+                        logger.info(f"RiskAgent using live portfolio: equity=${portfolio_equity:,.2f}, cash=${available_cash:,.2f}, positions={len(current_positions)}")
                         
                         # Safety check: if equity is negative or severely impaired, reject all proposals
                         if portfolio_equity <= 0:
@@ -443,9 +447,30 @@ class RiskAgent(Agent):
             any_approval_required = any(r.approval_required for r in results)
             all_passed = all(r.passed for r in results)
             
+            # Master auto_execute override: if auto_execute is disabled, require approval for valid trades
+            # This ensures that when auto_execute=false, all trades go through approval regardless of confidence.
+            # Only applies if all risk checks passed (otherwise trade will be rejected anyway).
+            if all_passed and not any_approval_required and not self.config.get("auto_execute_enabled", True):
+                any_approval_required = True
+            
             message = f"Risk assessment complete for {len(results)} proposal(s). Approval Required: {any_approval_required}"
             # Determine decision: auto-execute only if all risk checks passed and no approval required
             decision = "APPROVED" if (all_passed and not any_approval_required) else "REJECTED"
+
+            # Cash sufficiency check: reject if total trade cost exceeds available cash
+            if decision == "APPROVED" and proposals_data:
+                p = proposals_data[0]
+                trade_cost = (p.get("quantity") or 0) * (p.get("target_price") or 0)
+                if trade_cost > available_cash:
+                    decision = "REJECTED"
+                    message = (f"Insufficient cash: trade costs ${trade_cost:,.2f} "
+                               f"but only ${available_cash:,.2f} available")
+                    logger.warning(f"RiskAgent REJECTED {p.get('symbol','?')}: {message}")
+
+            _sym = proposals_data[0].get("symbol","?") if proposals_data else "?"
+            _qty = proposals_data[0].get("quantity","?") if proposals_data else "?"
+            _price = proposals_data[0].get("target_price","?") if proposals_data else "?"
+            flow("RiskAgent", "DONE", f"{_sym} → {decision} qty={_qty} @ ${_price}")
             payload_out = {
                 "risk_assessments": [r.to_dict() for r in results],
                 "trade_proposals": [proposal_data for proposal_data in proposals_data],

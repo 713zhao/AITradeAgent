@@ -1,5 +1,6 @@
 """Exit Agent - Monitors positions for stop loss, take profit, and strategic re-analysis."""
 import logging
+from finance_service.core.flow_logger import flow
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -53,6 +54,7 @@ class ExitAgent(Agent):
         degraded_positions = []
         
         # Mode 1: Check for reactive exits (stop-loss / take-profit)
+        flow("ExitAgent", "START", f"checking {len(positions)} position(s) for exits")
         logger.info(f"ExitAgent: Checking {len(positions)} position(s) for reactive exits...")
         exits = await self._check_reactive_exits(positions)
         
@@ -71,6 +73,7 @@ class ExitAgent(Agent):
             "timestamp": datetime.utcnow().isoformat()
         }
         
+        flow("ExitAgent", "DONE", message)
         logger.info(message)
         return AgentReport(agent_id=self.agent_id, status="success", message=message, payload=payload)
 
@@ -94,9 +97,10 @@ class ExitAgent(Agent):
             if current_price is None and self.data_agent:
                 try:
                     quote_report = await self.data_agent.run(
-                        symbol=symbol, 
-                        interval="1d", 
-                        use_cache=False, 
+                        symbol=symbol,
+                        interval="1d",
+                        use_cache=True,
+                        cache_only=True,
                         emit_events=False
                     )
                     if quote_report.status == "success" and "dataframe" in quote_report.payload:
@@ -172,7 +176,8 @@ class ExitAgent(Agent):
                 data_report = await self.data_agent.run(
                     symbol=symbol,
                     interval="1d",
-                    use_cache=False,
+                    use_cache=True,
+                    cache_only=True,
                     emit_events=False
                 )
                 
@@ -194,12 +199,13 @@ class ExitAgent(Agent):
                 indicators = analysis_report.payload.get("indicators_snapshot", {})
                 
                 # Simple heuristic: RSI < 30 is "buy-worthy" (oversold)
-                # If RSI > 70 now, it's degraded (overbought, should exit)
-                rsi = indicators.get("rsi", 50)
-                trend = indicators.get("trend", "neutral")
-                
-                # Degradation signal: RSI > 70 (overbought) OR bearish trend reversal
-                is_degraded = (rsi > 70) or (trend == "bearish")
+                # Use strategy's exit rules to determine if position should be sold
+                try:
+                    should_sell, exit_rules = self.strategy_agent.rule_strategy.evaluate_exit(indicators)
+                    is_degraded = should_sell
+                except Exception as e:
+                    logger.error(f"Error evaluating exit strategy for {symbol}: {e}")
+                    is_degraded = False
                 
                 if is_degraded:
                     entry_price = pos.get("entry_price", 0)
@@ -212,10 +218,9 @@ class ExitAgent(Agent):
                         "entry_price": entry_price,
                         "current_price": current_price,
                         "pnl": pnl,
-                        "rsi": rsi,
-                        "trend": trend,
-                        "reason": f"Position degraded: RSI {rsi:.1f} (overbought) or trend {trend}",
-                        "recommendation": "Review for strategic exit",
+                        "exit_rules": exit_rules,
+                        "reason": f"Position exit signal: {', '.join(exit_rules) if exit_rules else 'strategy exit'}",
+                        "recommendation": "Strategic exit triggered",
                         "checked_at": datetime.utcnow().isoformat()
                     }
                     degraded.append(degraded_record)

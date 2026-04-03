@@ -1,19 +1,15 @@
 import logging
-import asyncio
+from finance_service.core.flow_logger import flow
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass, asdict
 import pandas as pd
-import numpy as np
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.models import TradeProposal
 from finance_service.indicators.models import IndicatorsSnapshot, SignalType, IndicatorResult
-# Phase 3: Portfolio risk and position sizing
-from finance_service.risk.position_sizing import PositionSizerFactory, PositionSizingContext
-from finance_service.risk.portfolio_risk import PortfolioRisk
 
 logger = logging.getLogger(__name__)
 
@@ -200,69 +196,27 @@ class StrategyAgent(Agent):
     def __init__(self, config_engine, portfolio_agent=None):
         self.config_engine = config_engine
         self.event_bus = get_event_bus()
-        # Get initial cash from config (used for position sizing)
-        self.initial_cash = self.config_engine.get("finance", "portfolio/initial_cash", default=100000.0)
         # Load rules from YAML config using correct pattern
         rules_config = self._load_rules_from_config()
         self.rule_strategy = RuleStrategy(rules_config)
+        # Load portfolio and risk parameters for position sizing
+        self.initial_cash = self.config_engine.get("finance", "portfolio/initial_cash", default=100000.0)
+        # Get active strategy's risk_budget_pct
+        strategy_name = self.config_engine.get("finance", "strategy/type", default=None)
+        self.risk_budget_pct = 1.5  # default
+        if strategy_name:
+            strategies = self.config_engine.get("finance", "strategies", default={})
+            if isinstance(strategies, dict) and strategy_name in strategies:
+                strat_cfg = strategies[strategy_name]
+                self.risk_budget_pct = strat_cfg.get('risk_budget_pct', 1.5)
+        # Inject portfolio_agent for position-awareness (FIX 2)
         self.portfolio_agent = portfolio_agent
-        # Position cooling
+        # Position cooling: track last entry per symbol to avoid stacking
         self.last_entry_time: Dict[str, datetime] = {}
+        # Cooling period in hours (configurable)
         self.position_cooling_hours = self.config_engine.get("finance", "strategy/position_cooling_hours", default=24)
-        # Regime tracking
-        self._current_regime: Optional[Dict[str, Any]] = None
-        self._subscribe_to_regime()
-        logger.info(f"StrategyAgent initialized with {len(rules_config)} rules, cooling={self.position_cooling_hours}h")
-        
-        # Position Sizer (Phase 3)
-        try:
-            sizing_method = self.config_engine.get("finance", "strategy/position_sizing_method", default="equal_risk")
-            sizer_kwargs = {}
-            if sizing_method == "volatility_adjusted":
-                sizer_kwargs['lookback_days'] = 20
-                sizer_kwargs['target_volatility'] = 0.20
-            self.position_sizer = PositionSizerFactory.create(sizing_method, **sizer_kwargs)
-            logger.info(f"Position sizer: {sizing_method}")
-        except Exception as e:
-            logger.warning(f"Position sizer init failed: {e}. Using equal_risk.")
-            self.position_sizer = PositionSizerFactory.create("equal_risk")
-
-    def _subscribe_to_regime(self):
-        """Subscribe to regime update events"""
-        async def handle_regime(event_data: Dict):
-            self._current_regime = event_data.get("regime")
-            logger.debug(f"StrategyAgent received regime: {self._current_regime}")
-
-        from finance_service.core.event_bus import get_event_bus, Events
-        event_bus = get_event_bus()
-        # Schedule the async subscription without blocking __init__
-        asyncio.create_task(event_bus.subscribe(Events.MARKET_REGIME_UPDATED, handle_regime))
-
-    def _adjust_confidence(self, base_confidence: float, symbol: str = None) -> float:
-        """Adjust confidence based on current market regime"""
-        if not self._current_regime:
-            return base_confidence
-
-        regime = self._current_regime.get("regime", "mixed")
-        regime_conf = self._current_regime.get("confidence", 0.5)
-
-        # Regime-specific adjustments
-        if regime in ("trending_bullish", "trending_bearish"):
-            # Strong trends increase confidence in directional moves
-            boost = 0.05 + (regime_conf * 0.05)  # +5-10%
-            return min(base_confidence + boost, 1.0)
-        elif regime == "high_volatility":
-            # High vol decreases confidence (unpredictable)
-            penalty = 0.10
-            return max(base_confidence - penalty, 0.1)
-        elif regime == "low_volatility":
-            # Low vol can mean mean-reversion works well
-            if base_confidence > 0.6:
-                return min(base_confidence + 0.05, 1.0)  # boost high-confidence signals
-            else:
-                return base_confidence  # ignore weak signals
-        else:
-            return base_confidence
+        logger.info(f"StrategyAgent: portfolio_value=${self.initial_cash:,.2f}, risk_budget_pct={self.risk_budget_pct}%, position_cooling_hours={self.position_cooling_hours}")
+        logger.info(f"StrategyAgent initialized with {len(rules_config)} rules")
 
     def _load_rules_from_config(self) -> List[Dict]:
         """Load trading rules from YAML configuration."""
@@ -360,6 +314,7 @@ class StrategyAgent(Agent):
         Returns:
             AgentReport with proposals list in payload
         """
+        flow("StrategyAgent", "START", f"{symbol or '?'}")
         try:
             # Get indicator snapshot from analysis report
             indicators_snapshot = analysis_payload.get("indicators_snapshot")
@@ -373,13 +328,6 @@ class StrategyAgent(Agent):
             # Evaluate entry/exit rules
             should_buy, confidence, entry_rules = self.rule_strategy.evaluate_entry(indicators_snapshot)
             should_sell, exit_rules = self.rule_strategy.evaluate_exit(indicators_snapshot)
-            
-            # Incorporate fundamental scores if available (Phase 4)
-            fundamentals = analysis_payload.get("fundamentals")
-            if fundamentals:
-                fund_boost = self._compute_fundamental_boost(fundamentals)
-                confidence = min(confidence + fund_boost, 1.0)
-                logger.debug(f"Fundamental confidence boost: +{fund_boost:.2%}")
             
             # Build trade proposals if entry signal
             proposals = []
@@ -438,38 +386,27 @@ class StrategyAgent(Agent):
                 if stop_loss_price >= current_price:
                     stop_loss_price = round(current_price * 0.95, 2)  # 5% below as fallback
                 
-                # Position sizing via configured sizer (Phase 3)
-                try:
-                    risk_budget_pct = self.config_engine.get("finance", "strategy/risk_per_trade_pct", 1.0) / 100.0
-                    # Build minimal PortfolioRisk context (no vol/corr for now)
-                    portfolio_risk = PortfolioRisk(
-                        total_equity=portfolio_equity,
-                        total_position_value=0,
-                        cash=0,
-                        positions={},  # sizers currently don't need this
-                        portfolio_volatility_annual=0,
-                        var_95=0,
-                        expected_shortfall_95=0,
-                        sector_exposure={},
-                        max_single_position_pct=0,
-                        herfindahl_index=0,
-                    )
-                    context = PositionSizingContext(
-                        portfolio_risk=portfolio_risk,
-                        signal={'action': 'BUY', 'confidence': confidence, 'price': current_price},
-                        risk_budget_pct=risk_budget_pct,
-                        current_equity=portfolio_equity,
-                        stop_loss_price=stop_loss_price,
-                    )
-                    desired_total_shares = self.position_sizer.calculate(context)
-                    desired_new_shares = max(0, desired_total_shares - existing_qty)
-                    # Apply max position size limit
+                # Position sizing: risk-based, respecting existing exposure
+                risk_per_share = current_price - stop_loss_price
+                if risk_per_share <= 0:
+                    logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share}. Using default 1 share.")
+                    quantity = 1
+                else:
+                    # Maximum loss amount we're willing to take for this trade
+                    risk_budget_usd = portfolio_equity * (self.risk_budget_pct / 100.0)
+                    desired_quantity = int(risk_budget_usd / risk_per_share)
+                    desired_quantity = max(1, desired_quantity)
+                    
+                    # --- FIX 2: Adjust quantity to respect max position size ---
+                    # Compute total position after trade
+                    total_qty = existing_qty + desired_quantity
+                    # Max allowed qty based on % of portfolio
                     max_allowed_value = portfolio_equity * (max_position_size_pct / 100.0)
-                    max_allowed_shares = int(max_allowed_value / current_price)
-                    if desired_new_shares > max_allowed_shares:
-                        quantity = max_allowed_shares
+                    max_allowed_qty = int(max_allowed_value / current_price)
+                    if total_qty > max_allowed_qty:
+                        quantity = max(0, max_allowed_qty - existing_qty)
                         if quantity == 0:
-                            logger.info(f"Position size limit: max {max_allowed_shares} shares. Skipping entry.")
+                            logger.info(f"Position size limit: existing {existing_qty} shares, max allowed {max_allowed_qty}. Skipping entry.")
                             return AgentReport(
                                 agent_id=self.agent_id,
                                 status="success",
@@ -477,13 +414,9 @@ class StrategyAgent(Agent):
                                 payload={"proposals": []}
                             )
                         else:
-                            logger.info(f"Reduced quantity to {quantity} due to position size limit")
+                            logger.info(f"Reduced quantity from {desired_quantity} to {quantity} due to position size limit (existing: {existing_qty})")
                     else:
-                        quantity = desired_new_shares
-                    quantity = max(1, quantity) if quantity > 0 else 0
-                except Exception as e:
-                    logger.error(f"Position sizer error: {e}. Using fallback 1 share.")
-                    quantity = 1
+                        quantity = desired_quantity
                 
                 proposal = TradeProposal(
                     symbol=symbol,
@@ -504,6 +437,7 @@ class StrategyAgent(Agent):
             # Note: Exits are handled by PortfolioAgent when rules trigger; strategy only generates BUY proposals
             
             if proposals:
+                flow("StrategyAgent", "DONE", f"{symbol} → BUY conf={confidence:.2f} qty={proposals[0].get('quantity','?')} rules={len(entry_rules)}/{len(self.rule_strategy.entry_rules)}")
                 logger.info(f"Strategy generated {len(proposals)} trade proposal(s)")
                 return AgentReport(
                     agent_id=self.agent_id,
@@ -513,6 +447,7 @@ class StrategyAgent(Agent):
                 )
             else:
                 # No proposals generated - this is normal, not an error
+                flow("StrategyAgent", "SKIP", f"{symbol or '?'} → no signal (WAIT)")
                 return AgentReport(
                     agent_id=self.agent_id,
                     status="success",
@@ -570,9 +505,6 @@ class StrategyAgent(Agent):
             should_buy, buy_confidence, entry_rules = self.rule_strategy.evaluate_entry(indicators_snapshot)
             should_sell, exit_rules = self.rule_strategy.evaluate_exit(indicators_snapshot)
 
-            # Apply regime-based confidence adjustment
-            adjusted_buy_confidence = self._adjust_confidence(buy_confidence)
-
             # Simple decision logic for now, can be expanded
             if should_buy and not should_sell:
                 # Placeholder for calculating target and stop prices using ATR or other methods
@@ -587,7 +519,7 @@ class StrategyAgent(Agent):
                 proposals.append(asdict(TradeProposal(
                     symbol=symbol,
                     action="BUY",
-                    confidence=adjusted_buy_confidence,  # Use regime-adjusted confidence
+                    confidence=buy_confidence,
                     target_price=target_price,
                     stop_loss_price=stop_loss_price,
                     rationale=entry_rules
@@ -613,30 +545,6 @@ class StrategyAgent(Agent):
         
         logger.debug(f"Generated {len(proposals)} proposals.")
         return proposals
-
-    def _compute_fundamental_boost(self, fundamentals: Dict[str, Any]) -> float:
-        """
-        Compute confidence boost (0-0.1) based on fundamental scores.
-        Requires fundamentals dict with value_score, quality_score, growth_score (0-1).
-        """
-        try:
-            value_score = fundamentals.get('value_score', 0.5)
-            quality_score = fundamentals.get('quality_score', 0.5)
-            growth_score = fundamentals.get('growth_score', 0.5)
-            # Weighted combination: value 40%, quality 40%, growth 20%
-            composite = (value_score * 0.4 + quality_score * 0.4 + growth_score * 0.2)
-            # Boost: up to +5% if composite is very high (>0.8)
-            if composite > 0.8:
-                return 0.05
-            elif composite > 0.7:
-                return 0.03
-            elif composite < 0.3:
-                return -0.02  # penalty for poor fundamentals
-            else:
-                return 0.0
-        except Exception as e:
-            logger.warning(f"Fundamental boost calculation error: {e}")
-            return 0.0
 
     def __repr__(self) -> str:
         return f"<StrategyAgent(id='{self.agent_id}')>"

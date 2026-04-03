@@ -1,4 +1,5 @@
 import logging
+from finance_service.core.flow_logger import flow
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import asyncio
@@ -36,6 +37,7 @@ class PortfolioAgent(Agent):
         self._price_update_lock = asyncio.Lock()  # Prevent concurrent price updates
         self._last_price_update = datetime(1970, 1, 1)  # Never updated initially
         self._price_update_interval = 300  # seconds (5 minutes); match scheduler frequency
+        self.last_price_fetch_error: Optional[str] = None  # Latest yFinance error, for health checks
         logger.info("PortfolioAgent initialized.")
 
     async def run(self, **kwargs) -> AgentReport:
@@ -61,6 +63,7 @@ class PortfolioAgent(Agent):
 
     async def handle_trade_executed(self, trade_info: Dict[str, Any]) -> AgentReport:
         """Handles TRADE_EXECUTED event to update portfolio positions and trades."""
+        flow("PortfolioAgent", "UPDATE", f"received trade: {trade_info.get('symbol',trade_info.get('execution_result',{}).get('symbol','?')) if isinstance(trade_info,dict) else '?'}")
         logger.info(f"[PORTFOLIO DEBUG] handle_trade_executed called with trade_info: {trade_info}")
         # Unwrap AgentReport wrapper: {agent_id, status, payload: {execution_result: {...}}}
         if "agent_id" in trade_info and "payload" in trade_info:
@@ -85,34 +88,22 @@ class PortfolioAgent(Agent):
         try:
             side = side.upper()
             if side == "BUY":
-                # --- FIX 1: Cash sufficiency check ---
-                trade_value = quantity * price
-                # Get current available cash from repository (track running cash balance)
-                # Since repository doesn't track cash separately, we compute from portfolio formula
-                # available_cash = initial_cash - spent_on_long_positions
-                current_portfolio = self.repository.calculate_portfolio(self.initial_cash)
-                available_cash = current_portfolio.current_cash
-                if trade_value > available_cash:
-                    msg = f"Insufficient cash for BUY: need ${trade_value:,.2f}, available ${available_cash:,.2f}"
-                    logger.error(msg)
-                    return AgentReport(agent_id=self.agent_id, status="error", message=msg)
-
+                # --- FIX 2: Ensure current_price is set on position ---
                 logger.info(f"[PORTFOLIO DEBUG] Creating BUY trade for {symbol}")
                 trade = self.repository.create_trade(
                     task_id=trade_id,
                     symbol=symbol, side="BUY", quantity=quantity, price=price,
                     decision={}, confidence=1.0, reason="Executed Trade"
                 )
-                logger.info(f"[PORTFOLIO DEBUG] Trade created with trade_id={trade.trade_id}")
                 position = self.repository.get_position(symbol)
-                logger.info(f"[PORTFOLIO DEBUG] Existing position before update: {position}")
                 if position:
                     new_qty = position.quantity + quantity
                     new_cost = (position.cost_basis() + quantity * price) / new_qty
-                    self.repository.update_position(symbol, quantity=new_qty, avg_cost=new_cost, add_trade=trade.trade_id)
+                    self.repository.update_position(symbol, quantity=new_qty, avg_cost=new_cost, add_trade=trade_id)
                 else:
-                    self.repository.create_position(symbol, quantity=quantity, avg_cost=price, trades=[trade.trade_id])
-                logger.info(f"[PORTFOLIO DEBUG] Position after update: {self.repository.get_position(symbol)}")
+                    self.repository.create_position(symbol, quantity=quantity, avg_cost=price, trades=[trade_id])
+                # Set current_price to execution price (overwrites default 0.0 on new positions, updates existing)
+                self.repository.update_position(symbol, current_price=price)
             elif side == "SELL":
                 logger.info(f"[PORTFOLIO DEBUG] Creating SELL trade for {symbol}")
                 trade = self.repository.create_trade(
@@ -126,9 +117,12 @@ class PortfolioAgent(Agent):
                     if new_qty == 0:
                         self.repository.close_position(symbol)
                     else:
-                        self.repository.update_position(symbol, quantity=new_qty, add_trade=trade.trade_id)
+                        self.repository.update_position(symbol, quantity=new_qty, add_trade=trade_id)
+                        # Also update current_price to latest (execution price) for transparency
+                        self.repository.update_position(symbol, current_price=price)
                 else:
-                    self.repository.create_position(symbol, quantity=-quantity, avg_cost=price, trades=[trade.trade_id])
+                    # Short sale
+                    self.repository.create_position(symbol, quantity=-quantity, avg_cost=price, trades=[trade_id])
             else:
                 msg = f"Unknown trade side: {side}"
                 logger.error(msg)
@@ -138,6 +132,7 @@ class PortfolioAgent(Agent):
             self.repository.update_trade_status(trade.trade_id, TradeStatus.FILLED, filled_quantity=quantity, executed_by="system")
             
             self.updated_at = datetime.utcnow()
+            flow("PortfolioAgent", "DONE", f"{symbol} {side} {quantity} @ ${price}")
             logger.info(f"Portfolio updated after {side} trade: {trade_id}")
             return AgentReport(agent_id=self.agent_id, status="success", message=f"Trade {trade_id} processed", payload=trade.to_dict())
         except Exception as e:
@@ -146,7 +141,7 @@ class PortfolioAgent(Agent):
 
 
     async def update_prices_from_data_agent(self):
-        """Fetch latest prices for all positions with limited concurrency (5) and cache, protected by lock."""
+        """Fetch latest prices for all positions in a single batch to avoid rate limiting."""
         if not self.data_agent:
             return
         
@@ -155,73 +150,135 @@ class PortfolioAgent(Agent):
             if not symbols:
                 return
             
-            logger.info(f"Updating prices for {len(symbols)} positions (concurrency=5, cache=yes, 30d lookback)")
-            
-            semaphore = asyncio.Semaphore(2)  # Reduce concurrency to 2 to avoid overwhelming provider
-            from datetime import datetime, timedelta
-            end_dt = datetime.now().date()
-            start_dt = end_dt - timedelta(days=30)
-            start_str = start_dt.strftime("%Y-%m-%d")
-            end_str = end_dt.strftime("%Y-%m-%d")
-            
-            async def fetch_one(symbol: str):
-                async with semaphore:
+            logger.info(f"Updating prices for {len(symbols)} positions (cache-first)")
+
+            # Step 1: serve from cache where possible
+            cache_hits = {}
+            stale_symbols = []
+            for symbol in symbols:
+                cached_df = self.data_agent.cache.get(symbol, "1d")
+                if cached_df is not None and not cached_df.empty:
                     try:
-                        report = await self.data_agent.run(
-                            symbol=symbol,
-                            interval="1d",
-                            emit_events=False,
-                            use_cache=True,
-                            start_date=start_str,
-                            end_date=end_str
-                        )
-                        return symbol, report
+                        close_col = 'Close' if 'Close' in cached_df.columns else 'close'
+                        latest_price = float(cached_df[close_col].iloc[-1])
+                        if latest_price > 0:
+                            cache_hits[symbol] = latest_price
+                            continue
                     except Exception as e:
-                        logger.warning(f"Error fetching {symbol}: {e}")
-                        return symbol, None
-            
-            tasks = [fetch_one(sym) for sym in symbols]
-            results = await asyncio.gather(*tasks, return_exceptions=False)
-            
-            updated_count = 0
-            for symbol, report in results:
-                if report is None:
-                    continue
-                if report.status == "success" and "dataframe" in report.payload:
-                    df_dict = report.payload["dataframe"]
-                    try:
-                        import pandas as pd
-                        df = pd.DataFrame.from_dict(df_dict)
-                        if not df.empty:
-                            latest_price = df.iloc[-1]['close']
-                            if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
-                                self.repository.update_position(symbol, current_price=latest_price)
-                                updated_count += 1
-                                logger.debug(f"Updated {symbol} current price to {latest_price}")
-                            else:
-                                logger.warning(f"Invalid price fetched for {symbol}: {latest_price}")
-                    except Exception as e:
-                        logger.warning(f"Failed to process price data for {symbol}: {e}")
-                else:
-                    logger.warning(f"Failed to fetch price for {symbol}: {report.message if report else 'no report'}")
-            
-            logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions")
+                        logger.debug(f"Cache price extraction failed for {symbol}: {e}")
+                stale_symbols.append(symbol)
+
+            logger.info(f"Price update: {len(cache_hits)} from cache, {len(stale_symbols)} stale/missing")
+
+            # Apply cached prices immediately (no network I/O)
+            for symbol, price in cache_hits.items():
+                self.repository.update_position(symbol, current_price=price)
+
+            # Step 2: only fetch stale symbols from yFinance
+            if stale_symbols:
+                try:
+                    from datetime import datetime, timedelta
+                    end_date = datetime.now().strftime("%Y-%m-%d")
+                    start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+                    results = await asyncio.to_thread(
+                        self.data_agent.provider.fetch_ohlcv,
+                        stale_symbols,
+                        start_date=start_date,
+                        end_date=end_date,
+                        interval="1d"
+                    )
+
+                    updated_count = 0
+                    for symbol, df in results.items():
+                        if df is not None and not df.empty:
+                            # Correctly store in cache using set(symbol, df, interval)
+                            try:
+                                self.data_agent.cache.set(symbol, df, "1d")
+                            except Exception as e:
+                                logger.debug(f"Cache store failed for {symbol}: {e}")
+
+                            try:
+                                latest_price = float(df['Close'].iloc[-1])
+                                if latest_price > 0:
+                                    self.repository.update_position(symbol, current_price=latest_price)
+                                    updated_count += 1
+                                    logger.debug(f"Updated {symbol} price to {latest_price}")
+                                else:
+                                    logger.warning(f"Invalid price fetched for {symbol}: {latest_price}")
+                            except Exception as e:
+                                logger.warning(f"Failed to extract price from data for {symbol}: {e}")
+
+                    logger.info(f"Fetched {updated_count}/{len(stale_symbols)} stale prices from yFinance")
+                except Exception as e:
+                    self.last_price_fetch_error = f"Batch yFinance fetch failed: {e}"
+                    logger.error(f"Batch price fetch failed: {e}", exc_info=True)
+                    logger.info("Falling back to individual fetch method")
+                    await self._update_prices_individual()
+
+            self.last_price_fetch_error = None  # Clear error on successful run
             self._last_price_update = datetime.utcnow()
+
+    async def _update_prices_individual(self):
+        """Fallback: fetch prices individually with limited concurrency."""
+        symbols = list(self.repository.positions.keys())
+        if not symbols:
+            return
+        
+        semaphore = asyncio.Semaphore(2)
+        from datetime import datetime, timedelta
+        end_dt = datetime.now().date()
+        start_dt = end_dt - timedelta(days=30)
+        start_str = start_dt.strftime("%Y-%m-%d")
+        end_str = end_dt.strftime("%Y-%m-%d")
+        
+        async def fetch_one(symbol: str):
+            async with semaphore:
+                try:
+                    report = await self.data_agent.run(
+                        symbol=symbol,
+                        interval="1d",
+                        emit_events=False,
+                        use_cache=True,
+                        start_date=start_str,
+                        end_date=end_str
+                    )
+                    return symbol, report
+                except Exception as e:
+                    logger.warning(f"Error fetching {symbol}: {e}")
+                    return symbol, None
+        
+        tasks = [fetch_one(sym) for sym in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        
+        updated_count = 0
+        for symbol, report in results:
+            if report is None:
+                continue
+            if report.status == "success" and "dataframe" in report.payload:
+                df_dict = report.payload["dataframe"]
+                try:
+                    import pandas as pd
+                    df = pd.DataFrame.from_dict(df_dict)
+                    if not df.empty:
+                        latest_price = df.iloc[-1]['close']
+                        if isinstance(latest_price, (int, float)) and latest_price == latest_price and latest_price > 0:
+                            self.repository.update_position(symbol, current_price=latest_price)
+                            updated_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to process price data for {symbol}: {e}")
+        
+        logger.info(f"Updated prices for {updated_count}/{len(symbols)} positions (individual fallback)")
 
     async def get_detailed_portfolio_state(self, chat_id: Optional[str] = None) -> AgentReport:
         """Retrieves detailed portfolio state and can publish it or return in a report."""
+        flow("PortfolioAgent", "CHECK", "generating portfolio state")
         logger.info("PortfolioAgent generating detailed portfolio state.")
         # Refresh timestamp to indicate state generation time
         self.updated_at = datetime.utcnow()
         
-        # Rate limit price updates: skip if updated recently
-        now = datetime.utcnow()
-        elapsed = (now - self._last_price_update).total_seconds()
-        if elapsed >= self._price_update_interval:
-            logger.debug(f"Price update needed (last: {elapsed:.0f}s ago).")
-            await self.update_prices_from_data_agent()
-        else:
-            logger.debug(f"Skipping price update (last: {elapsed:.0f}s ago < {self._price_update_interval}s).")
+        # NOTE: Price updates are handled asynchronously by the price monitor (MarketScannerAgent).
+        # Do NOT block portfolio state queries fetching live prices.
         
         portfolio = self.repository.calculate_portfolio(self.initial_cash)
         positions_data = [pos.to_dict() for pos in self.repository.get_positions()]

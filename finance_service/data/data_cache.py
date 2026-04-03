@@ -80,7 +80,7 @@ class DataCache:
                     cursor = conn.cursor()
                     
                     # Check if data is cached and not expired
-                    cutoff = datetime.now() - timedelta(minutes=self.ttl_minutes)
+                    cutoff = datetime.utcnow() - timedelta(minutes=self.ttl_minutes)
                     
                     cursor.execute('''
                         SELECT timestamp, open, high, low, close, volume
@@ -218,7 +218,7 @@ class DataCache:
                         cursor.execute('DELETE FROM ohlcv_cache WHERE symbol = ?', (symbol,))
                     else:
                         # Delete expired entries
-                        cutoff = datetime.now() - timedelta(minutes=self.ttl_minutes)
+                        cutoff = datetime.utcnow() - timedelta(minutes=self.ttl_minutes)
                         cursor.execute('DELETE FROM ohlcv_cache WHERE cached_at < ?', (cutoff,))
                     
                     conn.commit()
@@ -243,7 +243,7 @@ class DataCache:
                 symbols = [row[0] for row in cursor.fetchall()]
                 
                 # Expired entries
-                cutoff = datetime.now() - timedelta(minutes=self.ttl_minutes)
+                cutoff = datetime.utcnow() - timedelta(minutes=self.ttl_minutes)
                 cursor.execute(
                     'SELECT COUNT(*) FROM ohlcv_cache WHERE cached_at < ?',
                     (cutoff,)

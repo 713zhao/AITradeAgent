@@ -1,4 +1,5 @@
 """Telegram Agent - Handles Telegram commands and sends reports (PTB v22 compatible)."""
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 from telegram import Bot
@@ -56,13 +57,36 @@ class TelegramAgent(Agent):
                 self.bot = None
 
     async def run(self):
+        """Start Telegram bot polling without blocking the running asyncio event loop.
+
+        python-telegram-bot v20+ provides run_polling() which internally calls
+        loop.run_until_complete() — incompatible with an already-running loop
+        (e.g. Hypercorn). We use the lower-level coroutines instead:
+        initialize → updater.start_polling → application.start, then hold
+        until the application signals it should stop.
+        """
         if not self.enabled or not self.application:
             logger.info("Telegram Agent is disabled or not properly initialized.")
             return
-        logger.info(f"{self.agent_id} starting polling.")
-        # Run polling (blocking until stopped)
-        await self.application.run_polling()
-        logger.info(f"{self.agent_id} polling stopped.")
+        logger.info(f"{self.agent_id} starting polling (non-blocking mode).")
+        try:
+            await self.application.initialize()
+            await self.application.updater.start_polling(drop_pending_updates=True)
+            await self.application.start()
+            logger.info(f"{self.agent_id} polling started successfully.")
+            # Keep running as long as the updater is polling
+            while self.application.updater.running:
+                await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"{self.agent_id} polling error: {e}")
+        finally:
+            try:
+                await self.application.updater.stop()
+                await self.application.stop()
+                await self.application.shutdown()
+            except Exception:
+                pass
+            logger.info(f"{self.agent_id} polling stopped.")
 
     async def send_message(self, chat_id: str, message: str, parse_mode: Optional[str] = None):
         if not self.enabled or not self.bot:

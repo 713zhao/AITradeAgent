@@ -61,11 +61,7 @@ class SchedulerAgent(Agent):
                 timedelta(hours=4)
             )
             # Daily summary after market close: run at 16:05 UTC+8 (08:05 UTC) daily
-            await self._schedule_task(
-                "daily_report",
-                self._trigger_daily_report,
-                timedelta(days=1)
-            )
+            await self._schedule_daily_at("daily_report", "08:05", self._trigger_daily_report)
             # Pre-market scans (30min before market open)
             await self._schedule_daily_at("pre_market_scan_hk", "01:00", self._trigger_pre_market_scan_hk)
             await self._schedule_daily_at("pre_market_scan_us", "13:00", self._trigger_pre_market_scan_us)
@@ -119,6 +115,10 @@ class SchedulerAgent(Agent):
     async def _trigger_hourly_data_refresh(self):
         await self.event_bus.publish(Event(event_type=Events.DATA_REFRESH_TRIGGER, data={"interval": "hourly"}))
         logger.info("Published DATA_REFRESH_TRIGGER event (hourly).")
+
+    async def handle_market_scan_trigger(self):
+        """Public method to manually trigger a discovery scan."""
+        await self._trigger_discovery_scan()
 
     async def _trigger_health_check(self):
         await self.event_bus.publish(Event(event_type=Events.SCHEDULE, data={}))

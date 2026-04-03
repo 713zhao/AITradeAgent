@@ -1,6 +1,7 @@
 """Data Manager - Orchestrates data fetching, caching, and universe management"""
 import asyncio
 import logging
+from finance_service.core.flow_logger import flow
 from typing import Dict, List, Optional, Any
 import pandas as pd
 from datetime import datetime, timedelta
@@ -221,12 +222,26 @@ class DataAgent(Agent):
         if self.cache.ttl_minutes != appropriate_ttl:
             logger.info(f"Updating cache TTL: {self.cache.ttl_minutes} min → {appropriate_ttl} min")
             self.cache.ttl_minutes = appropriate_ttl
-    
+
+    def _get_ttl_for_interval(self, interval: str) -> int:
+        """Return cache TTL appropriate for the data interval.
+
+        Daily bars close once per day — no need to re-fetch every 5 min.
+        Hourly bars update once per hour.  Intraday bars keep the base TTL.
+        """
+        base_ttl = self._get_dynamic_cache_ttl()
+        if interval in ("1d", "1wk", "1mo"):
+            return max(base_ttl, 60)   # at least 60 min for daily+ data
+        elif interval in ("1h", "4h", "60m"):
+            return max(base_ttl, 30)   # at least 30 min for hourly data
+        return base_ttl                # intraday: use market-hours TTL as-is
+
     async def run(self, symbol: str = "", 
                   start_date: Optional[str] = None,
                   end_date: Optional[str] = None,
                   interval: str = "1d",
                   use_cache: bool = True,
+                  cache_only: bool = False,
                   emit_events: bool = True, # This parameter will control event emission per symbol
                   refresh_all: bool = False,
                   fetch_fundamentals: Optional[bool] = None) -> AgentReport:
@@ -252,7 +267,8 @@ class DataAgent(Agent):
                     start_date=start_date,
                     end_date=end_date,
                     interval=interval,
-                    use_cache=use_cache
+                    use_cache=use_cache,
+                    cache_only=cache_only
                 )
                 if df is not None and not df.empty:
                     all_fetched_data[sym] = df
@@ -284,7 +300,8 @@ class DataAgent(Agent):
             start_date=start_date,
             end_date=end_date,
             interval=interval,
-            use_cache=use_cache
+            use_cache=use_cache,
+            cache_only=cache_only
         )
 
         if df is not None and not df.empty:
@@ -316,10 +333,12 @@ class DataAgent(Agent):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         interval: str = "1d",
-        use_cache: bool = True
+        use_cache: bool = True,
+        cache_only: bool = False
     ) -> Optional[pd.DataFrame]:
         """Fetches and caches data for a single symbol."""
         logger.info(f"[_fetch_data_for_symbol] symbol={symbol}, start_date={start_date}, end_date={end_date}, interval={interval}")
+        flow("DataAgent", "START", f"fetch {symbol} [{interval}]")
         
         # Set default date range: ~400 calendar days to ensure 200+ trading days
         if start_date is None or end_date is None:
@@ -332,10 +351,16 @@ class DataAgent(Agent):
         cached_df = None
 
         if use_cache:
+            self.cache.ttl_minutes = self._get_ttl_for_interval(interval)
             cached_df = self.cache.retrieve(cache_key)
             if cached_df is not None and not cached_df.empty:
                 logger.debug(f"[Cache Hit] {symbol} data from cache.")
+                flow("DataAgent", "DONE", f"{symbol} → {len(cached_df)} rows [CACHE HIT]")
                 return cached_df
+
+        if cache_only:
+            flow("DataAgent", "SKIP", f"{symbol} → cache miss, skipping yFinance (cache_only mode)")
+            return None
 
         logger.debug(f"[Cache Miss] Fetching {symbol} data from provider.")
         # fetch_ohlcv is synchronous; run in thread to avoid blocking
@@ -408,6 +433,7 @@ class DataAgent(Agent):
             return df
         else:
             logger.warning(f"No data fetched for {symbol} or DataFrame is empty.")
+            flow("DataAgent", "WARN", f"{symbol} → no data returned")
             return None
 
     async def fetch_universe(
