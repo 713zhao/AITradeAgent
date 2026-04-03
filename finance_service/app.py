@@ -48,7 +48,8 @@ class MainOrchestratorAgent:
     """Orchestrates all agents and handles event routing."""
 
     def __init__(self, config: Dict[str, Any]):
-        self.config_engine = AppConfig()
+        from finance_service.core.yaml_config import YAMLConfigEngine
+        self.config_engine = YAMLConfigEngine(config_dir="config")
         self.config = config
         self.event_bus = get_event_bus()  # Get the singleton
         self.repository = TradeRepository()
