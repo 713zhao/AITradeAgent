@@ -298,7 +298,9 @@ class MainOrchestratorAgent:
             base_proposals = strategy_report.payload.get("proposals", [])
             final_proposals = base_proposals  # default to base
             
-            if self.config_engine.get("finance", "options/enabled", default=False) and base_proposals:
+            options_enabled = self.config_engine.get("finance", "options/enabled", default=False)
+            logger.info(f"[ORCHESTRATOR] Options enabled config value: {options_enabled}, base_proposals count: {len(base_proposals)}")
+            if options_enabled and base_proposals:
                 try:
                     # Get current portfolio position (if any)
                     position = None
