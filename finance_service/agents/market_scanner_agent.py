@@ -551,3 +551,19 @@ class MarketScannerAgent(Agent):
         stats = self.get_stats()
         return (f"MarketScannerAgent(symbols={stats['total_symbols']}, "
                 f"themes={stats['total_themes']}, watchlist={stats['watchlist_count']})")
+
+    # ─── TEST COMPATIBILITY ────────────────────────────────────────────────
+
+    def scan_universe(self, include_themes: Optional[List[str]] = None) -> List[str]:
+        """
+        Synchronous wrapper for compatibility: return list of symbols to scan.
+        This returns the configured symbols (or by theme) without performing
+        the full discovery scan which requires a data_agent.
+        """
+        if include_themes:
+            symbols = []
+            for theme in include_themes:
+                symbols.extend(self.get_symbols_by_theme(theme))
+            return list(set(symbols))
+        else:
+            return self.get_all_symbols()

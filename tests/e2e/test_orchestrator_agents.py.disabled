@@ -227,10 +227,28 @@ class TestEndToEndAgentWorkflow:
         await event_bus.publish(Event(event_type=Events.GET_SYSTEM_STATUS, data={"chat_id": mock_chat_id}))
         await asyncio.sleep(0.1) # Allow orchestrator to handle
 
+        # Build expected message separately to avoid f-string backslash issues
+        expected_status = {
+            "orchestrator": "running",
+            "market_scanner": "idle",
+            "data_agent": "ready",
+            "news_agent": "ready",
+            "analysis_agent": "ready",
+            "strategy_agent": "ready",
+            "risk_agent": "ready",
+            "execution_agent": "ready",
+            "learning_agent": "ready",
+            "portfolio_agent": "ready",
+            "scheduler_agent": "running",
+            "last_scan": datetime.utcnow().isoformat()[:-7] + 'Z',  # Adjust for potential timezone differences in mock
+            "active_tasks": MagicMock()
+        }
+        expected_message = f"System Status Report:\n```json\n{json.dumps(expected_status, indent=2)}\n```"
+
         # Verify TelegramAgent.send_message was called with the status report
         orchestrator.telegram_agent.send_message.assert_called_with(
             chat_id=mock_chat_id,
-            message=f"System Status Report:\\n```json\\n{json.dumps({\n                \"orchestrator\": \"running\",\n                \"market_scanner\": \"idle\",\n                \"data_agent\": \"ready\",\n                \"news_agent\": \"ready\",\n                \"analysis_agent\": \"ready\",\n                \"strategy_agent\": \"ready\",\n                \"risk_agent\": \"ready\",\n                \"execution_agent\": \"ready\",\n                \"learning_agent\": \"ready\",\n                \"portfolio_agent\": \"ready\",\n                \"scheduler_agent\": \"running\",\n                \"last_scan\": datetime.utcnow().isoformat()[:-7] + 'Z', # Adjust for potential timezone differences in mock\n                \"active_tasks\": MagicMock()\n            }, indent=2)}\\n```",
+            message=expected_message,
             parse_mode=None
         )
         print("Telegram /status command test passed.")

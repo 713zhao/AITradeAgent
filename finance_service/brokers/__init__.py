@@ -5,10 +5,44 @@ Enables switching between paper trading, Alpaca, Tiger Brokers, etc.
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 from finance_service.core.models import Position, Trade
+
+
+class OrderSide(Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class OrderType(Enum):
+    MARKET = "market"
+    LIMIT = "limit"
+    STOP = "stop"
+    STOP_LIMIT = "stop_limit"
+
+
+class OrderStatus(Enum):
+    SUBMITTED = "submitted"
+    FILLED = "filled"
+    PARTIAL = "partial"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class OrderRequest:
+    """Request to place an order"""
+    order_id: str
+    symbol: str
+    side: OrderSide
+    quantity: float
+    order_type: OrderType
+    price: Optional[float] = None
+    stop_price: Optional[float] = None
+    time_in_force: str = "DAY"
 
 
 @dataclass

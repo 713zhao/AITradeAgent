@@ -20,6 +20,7 @@ class Position:
     theta: Optional[float] = None
     vega: Optional[float] = None
     
+    @property
     def market_value(self) -> float:
         """Calculate current market value.
         For options, multiply by 100 (contract multiplier) if underlying price is per-share.

@@ -373,7 +373,7 @@ class BacktestEngine:
             avg_win = np.mean([t.pnl for t in win_trades]) if win_trades else 0.0
             avg_loss = np.mean([t.pnl for t in lose_trades]) if lose_trades else 0.0
             profit_factor = sum(t.pnl for t in win_trades) / abs(sum(t.pnl for t in lose_trades)) if lose_trades else np.inf
-            expectancy = (win_rate * avg_win) - ((1 - win_rate) * abs(avg_loss)))
+            expectancy = (win_rate * avg_win) - ((1 - win_rate) * abs(avg_loss))
             avg_holding_period = np.mean([(t.exit_date - t.entry_date).days for t in trades])
         else:
             win_rate = avg_win = avg_loss = profit_factor = expectancy = avg_holding_period = 0.0

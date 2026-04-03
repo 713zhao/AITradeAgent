@@ -6,16 +6,69 @@ Features:
 - Falls back to VADER sentiment when LLM disabled
 - Caches results (1h for news, 24h for LLM analysis)
 """
+import json
 import logging
+import re
+import sqlite3
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
+from pathlib import Path
+import numpy as np
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
 from finance_service.core.yaml_config import YAMLConfigEngine
 
 logger = logging.getLogger(__name__)
+
+
+class _NewsCache:
+    """Simple SQLite cache for news analysis results.
+
+    Not thread-safe; intended for single-process use.
+    """
+    def __init__(self, db_path: str, ttl_minutes: int = 60):
+        self.db_path = Path(db_path)
+        self.ttl = timedelta(minutes=ttl_minutes)
+        self._init_db()
+
+    def _init_db(self):
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS news_cache (
+                    symbol TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    cached_at TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+
+    def get(self, symbol: str) -> Optional[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                "SELECT data, cached_at FROM news_cache WHERE symbol = ?",
+                (symbol,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            data_json, cached_at_str = row
+            cached_at = datetime.fromisoformat(cached_at_str)
+            if datetime.utcnow() - cached_at > self.ttl:
+                return None
+            return json.loads(data_json)
+
+    def set(self, symbol: str, payload: Dict[str, Any]):
+        cached_at = datetime.utcnow().isoformat()
+        data_json = json.dumps(payload)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO news_cache (symbol, data, cached_at) VALUES (?, ?, ?)",
+                (symbol, data_json, cached_at)
+            )
+            conn.commit()
 
 
 @dataclass
@@ -70,6 +123,13 @@ class NewsAgent(Agent):
 
     def _init_llm(self):
         """Initialize LLM if enabled in config"""
+        self._llm_manager = None
+        self._vader = None
+        try:
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+            self._vader = SentimentIntensityAnalyzer()
+        except ImportError:
+            pass
         llm_enabled = self.config_engine.get("llm", "enabled", default=False)
         if not llm_enabled:
             return
@@ -207,3 +267,154 @@ Output only valid JSON:""" + """
         except Exception as e:
             logger.error(f"LLM news analysis failed for {symbol}: {e}; falling back to VADER")
             return self._analyze_with_vader(symbol, articles)
+
+    # ─── LEGACY FETCH METHODS (stubs) ───────────────────────────────────────────
+    # These are kept for backward compatibility with old tests. They now delegate
+    # to the unified _fetch_news which uses yfinance.
+
+    async def _fetch_alphavantage(self, symbol: str) -> List[Dict]:
+        """Legacy Alpha Vantage fetcher - returns empty list (not supported anymore)."""
+        logger.debug(f"_fetch_alphavantage called for {symbol} but returning [] (unsupported)")
+        return []
+
+    async def _fetch_finnhub(self, symbol: str) -> List[Dict]:
+        """Legacy Finnhub fetcher - returns empty list (not supported anymore)."""
+        logger.debug(f"_fetch_finnhub called for {symbol} but returning [] (unsupported)")
+        return []
+
+    async def _fetch_yahoo(self, symbol: str) -> List[Dict]:
+        """Legacy Yahoo fetcher - delegates to _fetch_news."""
+        return self._fetch_news(symbol)
+
+    # ─── BACKWARD COMPATIBILITY FOR OLD TEST INTERFACE ─────────────────────────
+
+    # ─── BACKWARD COMPATIBILITY ────────────────────────────────────────────────
+    # These methods implement the old API that tests expect. New code should use
+    # the NewsAnalysis dataclass and the new _analyze_with_vader/_analyze_with_llm.
+
+    def _analyze_sentiment(self, articles: List[Dict]) -> tuple[float, str]:
+        """Analyze sentiment for a list of articles (old test interface).
+
+        Expects articles with keys: 'headline', 'summary', 'av_sentiment_score' (optional)
+        Returns: (score: float between -1 and 1, label: str)
+        """
+        if not articles:
+            return 0.0, "neutral"
+        scores = []
+        for art in articles:
+            # Start with Alpha Vantage score if provided
+            av_score = art.get('av_sentiment_score')
+            if av_score is not None:
+                try:
+                    scores.append(float(av_score))
+                    continue
+                except (ValueError, TypeError):
+                    pass
+            # Fallback to VADER
+            if self._vader:
+                text = art.get('headline', '') + ". " + art.get('summary', '')
+                vader_score = self._vader.polarity_scores(text)['compound']
+                scores.append(vader_score)
+            else:
+                scores.append(0.0)
+        overall = sum(scores) / len(scores) if scores else 0.0
+        overall = max(-1.0, min(1.0, overall))  # clamp
+        # Determine label
+        if overall >= 0.3:
+            label = "bullish"
+        elif overall <= -0.3:
+            label = "bearish"
+        else:
+            label = "neutral"
+        return overall, label
+
+    def _analyze_sentiment(self, articles: List[Dict]) -> tuple[float, str]:
+        """Analyze sentiment for a list of articles (old test interface).
+
+        Expects articles with keys: 'headline', 'summary', 'av_sentiment_score' (optional)
+        Returns: (score: float between -1 and 1, label: str)
+        """
+        if not articles:
+            return 0.0, "neutral"
+        scores = []
+        for art in articles:
+            # Alpha Vantage score and VADER fallback
+            av_score = art.get('av_sentiment_score')
+            if av_score is not None:
+                try:
+                    av = float(av_score)
+                except (ValueError, TypeError):
+                    av = None
+            else:
+                av = None
+
+            vader_score = None
+            if self._vader:
+                text = art.get('headline', '') + ". " + art.get('summary', '')
+                vader_score = self._vader.polarity_scores(text)['compound']
+
+            # Blend: if both available, average them; otherwise use whichever exists
+            if av is not None and vader_score is not None:
+                blended = (av + vader_score) / 2
+            elif av is not None:
+                blended = av
+            elif vader_score is not None:
+                blended = vader_score
+            else:
+                blended = 0.0
+            scores.append(blended)
+
+        overall = sum(scores) / len(scores) if scores else 0.0
+        overall = max(-1.0, min(1.0, overall))  # clamp
+
+        # Determine label (tests expect 0.3/-0.3 thresholds)
+        if overall >= 0.3:
+            label = "bullish"
+        elif overall <= -0.3:
+            label = "bearish"
+        else:
+            label = "neutral"
+        return overall, label
+
+    def _identify_catalysts(self, articles: List[Dict], sentiment_score: float) -> List[str]:
+        """Extract catalyst events from article headlines and summaries (old test interface)."""
+        catalysts = []
+        # Keyword patterns for catalysts
+        pattern_map = [
+            (r'beats?\s+earnings', 'earnings beat'),
+            (r'beat\s+estimates|estimates\s+beaten', 'earnings beat'),
+            (r'missed?\s+earnings', 'earnings miss'),
+            (r'upgrade', 'analyst upgrade'),
+            (r'downgrade', 'analyst downgrade'),
+            (r'acquisition|buyout|merger', 'merger/acquisition'),
+            (r'new\s+product|unveiled|launch', 'product launch'),
+            (r'FDA.*approv|regulatory\s+approval|approved', 'regulatory approval'),
+            (r'guidance\s+raised|raised\s+guidance', 'guidance raised'),
+            (r'guidance\s+lowered|cut\s+guidance', 'guidance lowered'),
+            (r'insider\s+buy|executive\s+ purchase', 'insider buying'),
+            (r'short\s+squeeze', 'short squeeze'),
+        ]
+        for art in articles:
+            text = (art.get('headline', '') + ' ' + art.get('summary', '')).lower()
+            for regex, catalyst in pattern_map:
+                if re.search(regex, text, re.IGNORECASE):
+                    catalysts.append(catalyst)
+        # Fallback based on strong sentiment when no keywords match
+        if not catalysts:
+            if sentiment_score >= 0.5:
+                catalysts.append('strong positive sentiment')
+            elif 0.3 <= sentiment_score < 0.5:
+                catalysts.append('positive news flow')
+            elif sentiment_score <= -0.5:
+                catalysts.append('strong negative sentiment')
+            elif -0.5 < sentiment_score <= -0.3:
+                catalysts.append('negative news flow')
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique = []
+        for c in catalysts:
+            if c not in seen:
+                seen.add(c)
+                unique.append(c)
+        return unique
