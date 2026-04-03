@@ -474,7 +474,7 @@ class MainOrchestratorAgent:
                 if data_report.status != "success" or "dataframe" not in data_report.payload:
                     continue
                 df = data_report.payload["dataframe"]
-                analysis_report = await self.analysis_agent.run(data_payload=df, symbol=sym)
+                analysis_report = await self.analysis_agent.run(data_payload=data_report.payload, symbol=sym)
                 if analysis_report.status != "success":
                     continue
                 strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=sym)
