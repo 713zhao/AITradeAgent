@@ -25,6 +25,7 @@ from finance_service.agents.execution_agent import ExecutionAgent
 from finance_service.agents.portfolio_agent import PortfolioAgent
 from finance_service.agents.health_agent import HealthAgent
 from finance_service.agents.telegram_agent import TelegramAgent
+from finance_service.tools.approval_gate import get_approval_gate
 from finance_service.agents.exit_agent import ExitAgent
 from finance_service.agents.agent_interface import AgentReport
 from finance_service.portfolio.trade_repository import TradeRepository
@@ -165,6 +166,7 @@ class MainOrchestratorAgent:
         await self.event_bus.subscribe(Events.EXIT_CHECK_TRIGGER, self.handle_exit_check)  # Tier 3
         await self.event_bus.subscribe(Events.POSITION_DEGRADED, self.handle_position_degraded)  # strategic exit
         await self.event_bus.subscribe(Events.PRICE_MONITOR_TRIGGER, self.handle_price_monitor)  # Tier 2
+        await self.event_bus.subscribe(Events.APPROVAL_REQUIRED, self.handle_approval_required)
 
         # Start background agents
         asyncio.create_task(self.scheduler_agent.run())
@@ -377,6 +379,7 @@ class MainOrchestratorAgent:
         if not (is_us_market_open() or is_hk_market_open()):
             logger.info("Markets closed (US and HK). Skipping price monitor.")
             return
+        # Refresh prices for watchlist + held positions
         # Get held symbols from portfolio
         held_symbols = set()
         if self.portfolio_agent:
@@ -386,21 +389,10 @@ class MainOrchestratorAgent:
                     sym = pos.get("symbol")
                     if sym:
                         held_symbols.add(sym)
-        # Refresh prices for watchlist + held positions
-        # Filter to only symbols whose markets are open to reduce load and avoid errors
-        all_symbols = set(self._watchlist_symbols) | held_symbols
-        open_symbols = []
-        for sym in all_symbols:
-            if sym.endswith('.HK'):
-                if is_hk_market_open():
-                    open_symbols.append(sym)
-            else:
-                if is_us_market_open():
-                    open_symbols.append(sym)
-        # Pass filtered list to market scanner
+        # Delegate to scanner; it will combine with its watchlist and filter by market open status
         report = await self.market_scanner_agent.refresh_watchlist_prices(
             data_agent=self.data_agent,
-            held_symbols=set(open_symbols)
+            held_symbols=held_symbols
         )
         # Apply fetched prices to portfolio positions
         if report and report.status == "success" and self.portfolio_agent:
@@ -423,7 +415,95 @@ class MainOrchestratorAgent:
         pass
 
     async def handle_risk_complete(self, event: Event):
-        pass
+async def handle_approval_required(self, event: Event):
+        """Handle APPROVAL_REQUIRED event - send telegram notification with approval buttons"""
+        try:
+            payload = event.data.get("payload", {})
+            proposals = payload.get("trade_proposals", [])
+            risk_assessments = payload.get("risk_assessments", [])
+            
+            if not proposals:
+                logger.warning("APPROVAL_REQUIRED event has no trade proposals")
+                return
+            
+            proposal = proposals[0]
+            risk = risk_assessments[0] if risk_assessments else {}
+            
+            symbol = proposal.get("symbol", "?")
+            action = proposal.get("action", "?") 
+            quantity = proposal.get("quantity", 1)
+            price = proposal.get("target_price", "?")
+            confidence = risk.get("confidence", 0)
+            
+            # Create task_id for approval tracking
+            task_id = f"{symbol}_{action}_{int(__import__('time').time())}"
+            
+            # Prepare approval details
+            details = {
+                "symbol": symbol,
+                "quantity": quantity,
+                "price": price,
+                "confidence": confidence,
+                "violations": risk.get("violations", [])
+            }
+            
+            proposal_summary = f"{action} {quantity} shares of {symbol} @ ${price}"
+            
+            # Get approval gate and request approval
+            approval_gate = await get_approval_gate("telegram")
+            if not approval_gate.enabled:
+                logger.warning("Approval gate not enabled, executing trade anyway")
+                await self.execute_trade_proposal(proposal, task_id)
+                return
+            
+            # Send approval request with buttons and wait for response  
+            approved, message = await approval_gate.request_approval(
+                task_id=task_id,
+                proposal_summary=proposal_summary,
+                details=details
+            )
+            
+            if approved:
+                logger.info(f"Trade {task_id} approved: {message}")
+                # Execute the trade
+                await self.execute_trade_proposal(proposal, task_id)
+            else:
+                logger.info(f"Trade {task_id} rejected: {message}")
+                await self.telegram_agent.send_message(f"❌ Trade {symbol} {action} cancelled by user")
+                
+        except Exception as e:
+            logger.error(f"Error handling approval required: {e}", exc_info=True)
+    
+    async def execute_trade_proposal(self, proposal: Dict[str, Any], task_id: str):
+        """Execute a trade proposal after approval"""
+        try:
+            from datetime import datetime
+            
+            execution_result = {
+                "trade_id": task_id,
+                "symbol": proposal.get("symbol"),
+                "action": proposal.get("action"),
+                "quantity": proposal.get("quantity", 1.0),
+                "filled_price": proposal.get("target_price"),
+                "status": "FILLED",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # Send execution notification
+            await self.telegram_agent.send_message(
+                f"✅ Trade Executed: {proposal.get('action')} {proposal.get('quantity')} {proposal.get('symbol')} @ ${proposal.get('target_price')}"
+            )
+            
+            # Publish trade executed event
+            await self.event_bus.publish(__import__('finance_service.core.event_bus', fromlist=['Event']).Event(
+                event_type=__import__('finance_service.core.event_bus', fromlist=['Events']).Events.TRADE_EXECUTED,
+                data={"trade_info": execution_result}
+            ))
+            
+            logger.info(f"Trade {task_id} execution completed")
+        except Exception as e:
+            logger.error(f"Error executing trade proposal: {e}", exc_info=True)
+
 
     async def handle_trade_executed(self, event: Event):
         # PortfolioAgent handles trade updates

@@ -244,6 +244,30 @@ class MarketScannerAgent(Agent):
                 if s not in symbols_to_check:
                     symbols_to_check.append(s)
 
+        # Market-aware filtering: only include symbols whose primary market is open
+        from finance_service.utils.market_hours import is_hk_market_open, is_us_market_open
+        hk_open = is_hk_market_open()
+        us_open = is_us_market_open()
+        if not (hk_open or us_open):
+            logger.info("[PriceMonitor] Both markets closed; skipping fetch.")
+            return AgentReport(
+                agent_id=self.agent_id,
+                status="success",
+                message="Markets closed; no price fetch.",
+                payload={"prices": [], "count": 0}
+            )
+        # Filter to open-market symbols only
+        original_count = len(symbols_to_check)
+        filtered_symbols = []
+        for sym in symbols_to_check:
+            if sym.endswith('.HK'):
+                if hk_open:
+                    filtered_symbols.append(sym)
+            else:
+                if us_open:
+                    filtered_symbols.append(sym)
+        symbols_to_check = filtered_symbols
+
         logger.info(f"[PriceMonitor] Refreshing prices for {len(symbols_to_check)} symbols "
                      f"(watchlist={len(self._watchlist_symbols)}, held={len(held_symbols or [])})")
 
