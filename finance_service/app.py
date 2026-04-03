@@ -855,6 +855,40 @@ def create_app():
         metrics = report.payload.get("equity_metrics", {})
         return jsonify(_sanitize_floats({"status": "success", "data": metrics}))
 
+    @app.route("/api/market/watchlist")
+    async def api_market_watchlist():
+        """Return the current market scanner watchlist with ratings and latest prices (top 10)."""
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+        try:
+            scanner = _orchestrator.market_scanner_agent
+            data_agent = _orchestrator.data_agent
+            watchlist = scanner.get_watchlist()  # [{symbol, theme, rating, rank}, ...]
+            if not watchlist:
+                return jsonify({"status": "success", "data": [], "message": "Watchlist empty"})
+            symbols = [item["symbol"] for item in watchlist]
+            # Fetch latest prices (blocking I/O -> run in thread)
+            prices = await asyncio.to_thread(data_agent.fetch_latest_prices, symbols)
+            # Combine
+            combined = []
+            for item in watchlist:
+                sym = item["symbol"]
+                combined.append({
+                    "symbol": sym,
+                    "theme": item.get("theme"),
+                    "rating": item.get("rating"),
+                    "rank": item.get("rank"),
+                    "current_price": prices.get(sym)
+                })
+            # Sort by rank (ascending) and take top 10
+            combined.sort(key=lambda x: x["rank"] if isinstance(x["rank"], (int, float)) else 9999)
+            top10 = combined[:10]
+            return jsonify(_sanitize_floats({"status": "success", "data": top10}))
+        except Exception as e:
+            logger.exception("Error fetching watchlist")
+            return jsonify({"error": str(e)}), 500
+
     @app.route("/admin/trigger_market_scan", methods=["POST"])
     async def admin_trigger_market_scan():
         """Admin endpoint to manually trigger a market scan."""
