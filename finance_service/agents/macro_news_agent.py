@@ -61,8 +61,8 @@ class MacroNewsAgent(Agent):
         self.config_engine = config_engine
         self.event_bus = get_event_bus()
         self._cache = _NewsCache(
-            db_path=self.config_engine.get("finance", "macro_news/cache_path", default="finance_service/storage/macro_news_cache.sqlite"),
-            ttl_minutes=self.config_engine.get("finance", "macro_news/cache_ttl_minutes", default=360)  # 6 hours
+            db_path=self.config_engine.get("macro_news_agent", "cache_path", default="finance_service/storage/macro_news_cache.sqlite"),
+            ttl_minutes=self.config_engine.get("macro_news_agent", "cache_ttl_minutes", default=360)  # 6 hours
         )
         self._init_nlp()
 
@@ -85,8 +85,8 @@ class MacroNewsAgent(Agent):
         Returns:
             AgentReport with MacroNewsReport payload
         """
-        lookback_hours = self.config_engine.get("finance", "macro_news/lookback_hours", default=48)
-        max_articles = self.config_engine.get("finance", "macro_news/max_articles", default=20)
+        lookback_hours = self.config_engine.get("macro_news_agent", "lookback_hours", default=48)
+        max_articles = self.config_engine.get("macro_news_agent", "max_articles", default=20)
 
         cache_key = f"macro_{lookback_hours}h"
         cached = self._cache.get(cache_key)

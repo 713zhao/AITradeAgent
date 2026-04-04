@@ -80,7 +80,7 @@ class MarketRegimeAgent(Agent):
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_expiry: Optional[datetime] = None
         self.cache_ttl_minutes = self.config_engine.get(
-            "finance", "market_regime_agent/cache_ttl_minutes", default=60
+            "market_regime_agent", "cache_ttl_minutes", default=60
         )
 
     async def run(self, payload: Optional[Dict[str, Any]] = None) -> Optional[AgentReport]:
@@ -110,7 +110,7 @@ class MarketRegimeAgent(Agent):
         try:
             # 1. Fetch index data
             indices_config = self.config_engine.get(
-                "finance", "market_regime_agent/indices",
+                "market_regime_agent", "indices",
                 default={
                     "SP500": {"symbol": "^GSPC", "name": "S&P 500"},
                     "NASDAQ": {"symbol": "^IXIC", "name": "NASDAQ Composite"},

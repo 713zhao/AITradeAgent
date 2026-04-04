@@ -67,7 +67,7 @@ class SymbolSelectorAgent(Agent):
         self.news_agent = news_agent
         self.event_bus = get_event_bus()
         self._llm_manager = self._init_llm()
-        self.cache_ttl_hours = self.config_engine.get("finance", "symbol_selector/cache_ttl_hours", default=24)
+        self.cache_ttl_hours = self.config_engine.get("symbol_selector", "cache_ttl_hours", default=24)
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_key: Optional[str] = None
         self._cache_expiry: Optional[datetime] = None
@@ -218,7 +218,7 @@ class SymbolSelectorAgent(Agent):
     async def _gather_candidate_data(self, symbols: List[str]) -> List[CandidateData]:
         """Gather all needed data for candidate symbols in parallel."""
         # Limit to top N to control cost
-        max_symbols = self.config_engine.get("finance", "symbol_selector/max_input_symbols", default=50)
+        max_symbols = self.config_engine.get("symbol_selector", "max_input_symbols", default=50)
         symbols = symbols[:max_symbols]
 
         tasks = []
