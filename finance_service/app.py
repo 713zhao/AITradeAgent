@@ -1031,6 +1031,27 @@ def create_app():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    @app.route("/admin/force_scan", methods=["POST"])
+    async def admin_force_scan():
+        """Force a market scan, bypassing market-hours check."""
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+        try:
+            report = await _orchestrator.market_scanner_agent.run(data_agent=_orchestrator.data_agent)
+            if report.status in ("success", "opportunity"):
+                event_data = report.payload.copy()
+                event_data["status"] = report.status
+                event_data["message"] = report.message
+                from finance_service.core.event_bus import Event, Events
+                await _orchestrator.event_bus.publish(Event(event_type=Events.MARKET_SCANNED, data=event_data))
+                return jsonify({"status": "success", "message": report.message, "symbols": event_data.get("symbols", [])})
+            else:
+                return jsonify({"status": report.status, "message": report.message})
+        except Exception as e:
+            logger.error(f"Force scan error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
     return app
 
 # Create the Quart app instance at module level for the launcher to use

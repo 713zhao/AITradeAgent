@@ -33,8 +33,8 @@ class MarketScannerAgent(Agent):
 
     def __init__(self, config_engine: YAMLConfigEngine):
         self.config = config_engine
-        self._whitelist_enabled = self.config.get("finance", "universe/whitelist/enabled", default=False)
-        self._whitelist_symbols = set(self.config.get("finance", "universe/whitelist/symbols", default=[]))
+        self._whitelist_enabled = self.config.get("universe", "whitelist/enabled", default=False)
+        self._whitelist_symbols = set(self.config.get("universe", "whitelist/symbols", default=[]))
         self.event_bus = get_event_bus()
         self._score_cache: Dict[str, float] = {}
         # Watchlist: populated by discovery scan, consumed by price monitor
@@ -60,12 +60,12 @@ class MarketScannerAgent(Agent):
 
     def get_all_symbols(self) -> List[str]:
         """Get all configured symbols from universe."""
-        symbols = self.config.get("finance", "universe/all_symbols", default=[])
+        symbols = self.config.get("universe", "all_symbols", default=[])
         return list(set(symbols))
 
     def get_symbols_by_theme(self, theme: str) -> List[str]:
         """Get symbols for a specific theme."""
-        themes = self.config.get("finance", "universe/themes", default=[])
+        themes = self.config.get("universe", "themes", default=[])
         for t in themes:
             if isinstance(t, dict) and t.get("name", "").lower() == theme.lower():
                 return list(set(t.get("symbols", [])))
@@ -74,7 +74,7 @@ class MarketScannerAgent(Agent):
 
     def get_available_themes(self) -> List[str]:
         """Get all available theme names."""
-        themes = self.config.get("finance", "universe/themes", default=[])
+        themes = self.config.get("universe", "themes", default=[])
         logger.info(f"[DBG THEMES] themes={themes}, type={type(themes)}")
         return [t.get("name", "") for t in themes if isinstance(t, dict)]
 
@@ -143,9 +143,9 @@ class MarketScannerAgent(Agent):
             AgentReport with ranked symbols and ratings
         """
         # DEBUG: Log config values early
-        raw_themes = self.config.get("finance", "universe/themes", default=[])
+        raw_themes = self.config.get("universe", "themes", default=[])
         logger.info(f"[RUN DEBUG] raw_themes count: {len(raw_themes) if isinstance(raw_themes, list) else 'not list'}, include_themes={include_themes}")
-        top_n = self.config.get("finance", "scanner/discovery_top_n_per_theme", default=limit)
+        top_n = self.config.get("scanner", "discovery_top_n_per_theme", default=limit)
         logger.info(f"[Discovery] Running full scan: themes={include_themes}, top_n={top_n}, min_liq={min_liquidity}")
         flow("MarketScanner", "START", f"full scan: {len(self.get_available_themes())} themes, top_n={top_n}")
 

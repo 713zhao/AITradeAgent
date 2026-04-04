@@ -82,7 +82,7 @@ class SymbolSelectorAgent(Agent):
                 logger.info("LLM disabled; SymbolSelector will not be used")
                 return None
 
-            module_enabled = self.config_engine.get("finance", "symbol_selector/enabled", default=False)
+            module_enabled = self.config_engine.get("symbol_selector", "enabled", default=False)
             if not module_enabled:
                 logger.info("SymbolSelector disabled in config")
                 return None
@@ -91,9 +91,9 @@ class SymbolSelectorAgent(Agent):
                 provider=self.config_engine.get("llm", "provider", default="openrouter"),
                 api_key_env=self.config_engine.get("llm", "api_key_env", default="OPENROUTER_API_KEY"),
                 base_url=self.config_engine.get("llm", "base_url", default=None),
-                default_model=self.config_engine.get("finance", "symbol_selector/model",
-                                                    default=self.config_engine.get("llm", "model", default="openrouter/auto")),
-                temperature=self.config_engine.get("finance", "symbol_selector/temperature", default=0.2),
+                default_model=self.config_engine.get("symbol_selector", "model",
+                                                   default=self.config_engine.get("llm", "model", default="openrouter/auto")),
+                temperature=self.config_engine.get("symbol_selector", "temperature", default=0.2),
                 max_tokens=4000,
                 timeout=self.config_engine.get("llm", "timeout", default=30),
                 max_retries=self.config_engine.get("llm", "max_retries", default=3),
@@ -189,8 +189,10 @@ class SymbolSelectorAgent(Agent):
             prompt = self._build_prompt(candidate_data_list, market_context)
 
             # 4. Call LLM
-            llm_response = await self._llm_manager.generate(prompt)
-            rankings = self._parse_llm_response(llm_response)
+            # Use provider.generate_async to avoid asyncio.run() inside async context
+            llm_response = await self._llm_manager.provider.generate_async(prompt)
+            llm_text = llm_response.content if hasattr(llm_response, "content") else str(llm_response)
+            rankings = self._parse_llm_response(llm_text)
 
             # 5. Cache and return
             result = {
