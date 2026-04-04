@@ -274,6 +274,7 @@ class Events:
     PRICE_MONITOR_TRIGGER = "price_monitor_trigger"  # Tier 2: lightweight price refresh (every 15 min)
     DAILY_REPORT_TRIGGER = "daily_report_trigger"
     HEALTH_CHECK_TRIGGER = "health_check_trigger"
+    PRE_SCAN_CONTEXT_REFRESH = "pre_scan_context_refresh"  # Pre-warm MarketRegimeAgent + MacroNewsAgent before scanner
 
 # Global event bus instance (lazy-loaded singleton)
 # For backward compatibility, provide a direct reference

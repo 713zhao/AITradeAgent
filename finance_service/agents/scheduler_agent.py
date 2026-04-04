@@ -161,7 +161,15 @@ class SchedulerAgent(Agent):
         logger.info(f"Scheduled daily task {task_name} at {time_utc_str} UTC (first run in {initial_delay/3600:.1f} hours)")
 
     async def _trigger_pre_market_scan_hk(self):
-        """Trigger pre-market scan for Hong Kong (30min before 09:30 HKT)."""
+        """Trigger pre-market scan for Hong Kong (30min before 09:30 HKT).
+        Pre-warms MarketRegimeAgent + MacroNewsAgent 5 minutes before scanner.
+        """
+        # Step 1: Pre-warm regime and macro context for HK (cache refresh)
+        await self.event_bus.publish(Event(event_type=Events.PRE_SCAN_CONTEXT_REFRESH, data={"market": "HK"}))
+        logger.info("Published PRE_SCAN_CONTEXT_REFRESH for HK pre-market (pre-warming regime + macro)")
+        # Give orchestrator ~5 seconds to warm cache before scanner runs
+        await asyncio.sleep(5)
+        # Step 2: Trigger market scanner
         await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
             "interval": "pre_market",
             "send_telegram_report": True,
@@ -170,7 +178,15 @@ class SchedulerAgent(Agent):
         logger.info("Published MARKET_SCAN_TRIGGER for HK pre-market")
 
     async def _trigger_pre_market_scan_us(self):
-        """Trigger pre-market scan for US (30min before 09:30 local time)."""
+        """Trigger pre-market scan for US (30min before 09:30 local time).
+        Pre-warms MarketRegimeAgent + MacroNewsAgent 5 minutes before scanner.
+        """
+        # Step 1: Pre-warm regime and macro context for US (cache refresh)
+        await self.event_bus.publish(Event(event_type=Events.PRE_SCAN_CONTEXT_REFRESH, data={"market": "US"}))
+        logger.info("Published PRE_SCAN_CONTEXT_REFRESH for US pre-market (pre-warming regime + macro)")
+        # Give orchestrator ~5 seconds to warm cache before scanner runs
+        await asyncio.sleep(5)
+        # Step 2: Trigger market scanner
         await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
             "interval": "pre_market",
             "send_telegram_report": True,

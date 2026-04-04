@@ -112,11 +112,15 @@ class MarketRegimeAgent(Agent):
             indices_config = self.config_engine.get(
                 "market_regime_agent", "indices",
                 default={
-                    "SP500": {"symbol": "^GSPC", "name": "S&P 500"},
-                    "NASDAQ": {"symbol": "^IXIC", "name": "NASDAQ Composite"},
-                    "DOW": {"symbol": "^DJI", "name": "Dow Jones Industrial"},
-                    "VIX": {"symbol": "^VIX", "name": "CBOE Volatility Index"},
-                    "RUSSELL2000": {"symbol": "^RUT", "name": "Russell 2000"}
+                    "SP500":       {"symbol": "^GSPC",     "name": "S&P 500",               "market": "US"},
+                    "NASDAQ":      {"symbol": "^IXIC",     "name": "NASDAQ Composite",      "market": "US"},
+                    "DOW":         {"symbol": "^DJI",      "name": "Dow Jones Industrial",  "market": "US"},
+                    "VIX":         {"symbol": "^VIX",      "name": "CBOE Volatility Index", "market": "US"},
+                    "RUSSELL2000": {"symbol": "^RUT",      "name": "Russell 2000",          "market": "US"},
+                    "HSI":         {"symbol": "^HSI",      "name": "Hang Seng Index",       "market": "HK"},
+                    "HSCE":        {"symbol": "^HSCE",     "name": "H-Shares Index",        "market": "HK"},
+                    "SHANGHAI":    {"symbol": "000001.SS", "name": "Shanghai Composite",    "market": "HK"},
+                    "VHSI":        {"symbol": "^VHSI",     "name": "CBOE Hang Seng VIX",    "market": "HK"},
                 }
             )
 
@@ -190,18 +194,36 @@ class MarketRegimeAgent(Agent):
             # 2. Compute market breadth if market_scanner available
             breadth = self._compute_breadth()
 
-            # 3. Derive regime flags
-            regime = self._derive_regime(index_metrics, breadth)
+            # 3. Split indices by market and derive per-market regimes
+            us_indices = {k: v for k, v in index_metrics.items()
+                          if indices_config.get(k, {}).get("market", "US") == "US"}
+            hk_indices = {k: v for k, v in index_metrics.items()
+                          if indices_config.get(k, {}).get("market", "HK") == "HK"}
+
+            regime_us = self._derive_regime(us_indices, breadth, market="US")
+            regime_hk = self._derive_regime(hk_indices, None, market="HK")
+
+            # Combined regime: risk-off if either market is risk-off
+            combined_risk_on = regime_us.risk_on and regime_hk.risk_on
+            combined_summary = f"US: {regime_us.summary} | HK: {regime_hk.summary}"
+            from dataclasses import replace as dc_replace
+            regime_combined = dc_replace(
+                regime_us,
+                risk_on=combined_risk_on,
+                summary=combined_summary,
+                indices={**regime_us.indices, **regime_hk.indices}
+            )
 
             # Convert to dict for serialization
             indices_dict = {k: asdict(v) for k, v in index_metrics.items()}
             breadth_dict = asdict(breadth) if breadth else {}
-            regime_dict = asdict(regime)
 
             payload_out = {
                 "indices": indices_dict,
                 "breadth": breadth_dict,
-                "regime": regime_dict,
+                "regime": asdict(regime_combined),
+                "regime_us": asdict(regime_us),
+                "regime_hk": asdict(regime_hk),
                 "timestamp": datetime.utcnow().isoformat()
             }
 
@@ -251,7 +273,7 @@ class MarketRegimeAgent(Agent):
             logger.warning(f"Breadth computation failed: {e}")
             return None
 
-    def _derive_regime(self, index_metrics: Dict[str, IndexMetrics], breadth: Optional[MarketBreadth]) -> MarketRegime:
+    def _derive_regime(self, index_metrics: Dict[str, IndexMetrics], breadth: Optional[MarketBreadth], market: str = "US") -> MarketRegime:
         """Derive overall market regime flags from index metrics."""
         # Defaults
         risk_on = True
@@ -260,10 +282,17 @@ class MarketRegimeAgent(Agent):
         trend_strength = "moderate"
         summary_parts = []
 
-        # Use SP500 as primary indicator
-        sp500 = index_metrics.get("SP500")
-        vix = index_metrics.get("VIX")
-        nasdaq = index_metrics.get("NASDAQ")
+        # Use primary indicators per market
+        if market == "HK":
+            sp500 = index_metrics.get("HSI")       # Hang Seng as primary trend indicator
+            vix   = index_metrics.get("VHSI")      # HK volatility index
+            nasdaq = index_metrics.get("HSCE")     # H-shares as momentum proxy
+        else:
+            sp500 = index_metrics.get("SP500")
+            vix   = index_metrics.get("VIX")
+            nasdaq = index_metrics.get("NASDAQ")
+
+        market_label = "HSI" if market == "HK" else "SP500"
 
         if sp500:
             # Trend: above SMA200 is bullish trend
@@ -276,7 +305,7 @@ class MarketRegimeAgent(Agent):
             else:
                 trend_strength = "moderate"
 
-            summary_parts.append(f"SP500 vs SMA200: {sp500.vs_sma200_pct:.1f}%")
+            summary_parts.append(f"{market_label} vs SMA200: {sp500.vs_sma200_pct:.1f}%")
 
         if vix:
             if vix.price > 30:
@@ -306,10 +335,11 @@ class MarketRegimeAgent(Agent):
                 summary_parts.append(f"Breadth strong ({(breadth.advancers_ratio*100):.0f}% advancers)")
 
         # Build summary
+        prefix = f"[{market}] "
         if risk_on:
-            summary = "Risk-on regime: " + "; ".join(summary_parts)
+            summary = prefix + "Risk-on: " + "; ".join(summary_parts)
         else:
-            summary = "Risk-off regime: " + "; ".join(summary_parts)
+            summary = prefix + "Risk-off: " + "; ".join(summary_parts)
 
         return MarketRegime(
             risk_on=risk_on,

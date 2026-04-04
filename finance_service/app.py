@@ -218,6 +218,7 @@ class MainOrchestratorAgent:
         await self.event_bus.subscribe(Events.POSITION_DEGRADED, self.handle_position_degraded)  # strategic exit
         await self.event_bus.subscribe(Events.PRICE_MONITOR_TRIGGER, self.handle_price_monitor)  # Tier 2
         await self.event_bus.subscribe(Events.APPROVAL_REQUIRED, self.handle_approval_required)
+        await self.event_bus.subscribe(Events.PRE_SCAN_CONTEXT_REFRESH, self.handle_pre_scan_context_refresh)
 
         # Start background agents (those with continuous loops)
         asyncio.create_task(self.scheduler_agent.run())
@@ -225,6 +226,22 @@ class MainOrchestratorAgent:
         logger.info("Orchestrator startup complete. All agents initialized and scheduled.")
 
     # Event handlers
+    async def handle_pre_scan_context_refresh(self, event: Event):
+        """Pre-warm MarketRegimeAgent and MacroNewsAgent caches before the discovery scan runs."""
+        market = event.data.get("market", "US")
+        logger.info(f"[PreWarm] Refreshing MarketRegimeAgent + MacroNewsAgent for {market} market...")
+        try:
+            regime_report, macro_report = await asyncio.gather(
+                self.market_regime_agent.run({"force_refresh": True}),
+                self.macro_news_agent.run({"force_refresh": True}),
+                return_exceptions=True,
+            )
+            regime_ok = not isinstance(regime_report, Exception) and regime_report and regime_report.status == "success"
+            macro_ok = not isinstance(macro_report, Exception) and macro_report and macro_report.status == "success"
+            logger.info(f"[PreWarm] Done — regime: {'✓' if regime_ok else '✗'}  macro: {'✓' if macro_ok else '✗'}")
+        except Exception as e:
+            logger.error(f"[PreWarm] Context refresh failed: {e}")
+
     async def handle_market_scan_trigger(self, event: Event):
         logger.info("Received MARKET_SCAN_TRIGGER")
         # Check market hours: if both US and HK closed, skip scan entirely
@@ -239,6 +256,8 @@ class MainOrchestratorAgent:
             event_data = report.payload.copy()
             event_data["status"] = report.status
             event_data["message"] = report.message
+            # Pass the market from the scan trigger if available
+            event_data["market"] = event.data.get("market", "US")
             await self.event_bus.publish(Event(event_type=Events.MARKET_SCANNED, data=event_data))
 
     async def handle_market_scanned(self, event: Event):
@@ -246,23 +265,27 @@ class MainOrchestratorAgent:
         # Event data is directly the payload from MarketScannerAgent, with possible additional fields
         symbols = event.data.get("symbols", [])
         rated_symbols = event.data.get("rated_symbols", [])
-        logger.info(f"Processing {len(symbols)} symbols: {symbols}")
+        market = event.data.get("market", "US")
+        logger.info(f"Processing {len(symbols)} symbols [{market}]: {symbols}")
 
         # Use SymbolSelectorAgent (LLM) to rank and filter candidates
         if (self.symbol_selector_agent and getattr(self.symbol_selector_agent, '_llm_manager', None)):
             try:
                 logger.info("Invoking SymbolSelectorAgent for ranking...")
-                selector_report = await self.symbol_selector_agent.run({"symbols": symbols})
+                selector_report = await self.symbol_selector_agent.run({"symbols": symbols, "market": market})
                 if selector_report.status == "success":
                     rankings = selector_report.payload.get("rankings", [])
                     llm_summary = selector_report.payload.get("llm_summary", "")
                     tokens_used = selector_report.payload.get("tokens_used", 0)
+                    market_context = selector_report.payload.get("market_context", {})
                     selected_symbols = [r["symbol"] for r in rankings[:20]]  # top 20
                     logger.info(f"SymbolSelector ranked {len(selected_symbols)} symbols (from {len(symbols)}) using {tokens_used} tokens")
                     symbols = selected_symbols  # override processing list
-                    # Send LLM analysis result to Telegram
+                    # Send LLM analysis result to Telegram (with regime + macro context)
                     if self.telegram_agent and self.telegram_agent.enabled:
-                        asyncio.create_task(self._send_llm_ranking_to_telegram(rankings, llm_summary, tokens_used))
+                        asyncio.create_task(self._send_llm_ranking_to_telegram(
+                            rankings, llm_summary, tokens_used, market_context, market
+                        ))
                 else:
                     logger.warning(f"SymbolSelector failed: {selector_report.message}; using original list")
             except Exception as e:
@@ -706,8 +729,15 @@ class MainOrchestratorAgent:
             return None
 
 
-    async def _send_llm_ranking_to_telegram(self, rankings: list, llm_summary: str, tokens_used: int = 0):
-        """Send LLM stock ranking analysis to Telegram."""
+    async def _send_llm_ranking_to_telegram(
+        self,
+        rankings: list,
+        llm_summary: str,
+        tokens_used: int = 0,
+        market_context: dict = None,
+        market: str = "US",
+    ):
+        """Send LLM stock ranking analysis to Telegram, including regime + macro context."""
         if not rankings:
             return
         if not (self.telegram_agent and self.telegram_agent.enabled):
@@ -717,82 +747,45 @@ class MainOrchestratorAgent:
             return
 
         try:
-            lines = ["🤖 LLM Stock Ranking Analysis"]
+            market_context = market_context or {}
+            market_flag = "🇺🇸" if market == "US" else "🇭🇰"
+            lines = [f"🤖 LLM Stock Ranking Analysis {market_flag} {market}"]
             if tokens_used:
                 lines.append(f"💰 Tokens used: {tokens_used:,}")
+
+            # --- Regime context block ---
+            regime = market_context.get("regime", {})
+            if regime:
+                risk_icon = "🟢" if regime.get("risk_on") else "🔴"
+                vol = regime.get("volatility_regime", "?")
+                trend = regime.get("trend_strength", "?")
+                lines.append("")
+                lines.append(f"🌐 Regime: {risk_icon} " + ("Risk-ON" if regime.get("risk_on") else "Risk-OFF") + f" | Vol: {vol} | Trend: {trend}")
+
+            # --- Macro sentiment block ---
+            macro_sent = market_context.get("macro_sentiment_score")
+            if macro_sent is not None:
+                sent_icon = "🟢" if macro_sent > 0.2 else ("🔴" if macro_sent < -0.2 else "🟡")
+                lines.append(f"📰 Macro Sentiment: {sent_icon} {macro_sent:+.2f}")
+
             if llm_summary:
-                lines.append("\n📝 " + llm_summary)
+                lines.append("")
+                lines.append("📝 " + llm_summary)
+
             lines.append("")
             lines.append("🏆 Top Picks:")
             for i, r in enumerate(rankings[:10], 1):
-                sym = r.get("symbol", "?")
-                score = r.get("total_score", 0)
-                pos = r.get("position_size_pct", 1.0)
-                stop = r.get("suggested_stop_pct", 8.0)
-                bd = r.get("breakdown", {})
-                rationale = r.get("rationale", "")
-                bd_str = " | ".join(
-                    f"{k[:3].title()}:{v}" for k, v in bd.items()
-                ) if bd else ""
-                lines.append(f"{i:2d}. {sym}  Score:{score:.0f}/100  Pos:{pos:.1f}%  Stop:{stop:.1f}%")
-                if bd_str:
-                    lines.append(f"    [{bd_str}]")
-                if rationale:
-                    lines.append(f"    💡 {rationale[:120]}")
+                symbol = r.get("symbol", "?")
+                action = r.get("action", "?")
+                price = r.get("price", 0.0) or 0.0
+                conf = r.get("confidence", 0.0) or 0.0
+                lines.append(f"{i}. {symbol}: {action} @ ${price:.2f} (conf: {conf:.2f})")
+
             message = "\n".join(lines)
             await self.telegram_agent.send_message(chat_id=chat_id, message=message)
-            logger.info("Sent LLM ranking analysis to Telegram")
+            logger.info(f"Sent LLM ranking to Telegram ({market})")
         except Exception as e:
             logger.error(f"Failed to send LLM ranking Telegram: {e}")
-
-    async def _send_top_analysis_summary(self, symbols: List[str]):
-        symbols_to_check = symbols[:20]
-        results = []
-        for sym in symbols_to_check:
-            try:
-                data_report = await self.data_agent.run(symbol=sym, interval="1d", start_date=None, end_date=None, emit_events=False)
-                if data_report.status != "success" or "dataframe" not in data_report.payload:
-                    continue
-                df = data_report.payload["dataframe"]
-                analysis_report = await self.analysis_agent.run(data_payload=data_report.payload, symbol=sym)
-                if analysis_report.status != "success":
-                    continue
-                strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=sym)
-                if strategy_report.status != "success":
-                    continue
-                proposals = strategy_report.payload.get("proposals", [])
-                if not proposals:
-                    continue
-                prop = proposals[0]
-                price = prop.get("price") or self._get_latest_price_from_df(df)
-                results.append({
-                    "symbol": sym,
-                    "action": prop.get("action", "WAIT"),
-                    "confidence": prop.get("confidence", 0.0),
-                    "price": price
-                })
-            except Exception as e:
-                logger.debug(f"Quick analysis skipped for {sym}: {e}")
-                continue
-
-        results.sort(key=lambda x: (0 if x["action"] == "BUY" else 1, -x.get("confidence", 0)))
-        top10 = results[:10]
-        if not top10:
-            return
-
-        lines = [f"🏆 Top {len(top10)} Candidates (quick analysis)"]
-        for r in top10:
-            lines.append(f"• {r['symbol']}: {r['action']} @ ${r['price']:.2f} (conf: {r['confidence']:.2f})")
-        message = "\n".join(lines)
-
-        if self.telegram_agent and self.telegram_agent.enabled:
-            chat_id = self.telegram_agent.chat_id
-            if chat_id:
-                try:
-                    await self.telegram_agent.send_message(chat_id=chat_id, message=message)
-                    logger.info("Sent top analysis summary to Telegram")
-                except Exception as e:
-                    logger.error(f"Failed to send top analysis Telegram: {e}")
 
     def _get_latest_price_from_df(self, df) -> float:
         try:

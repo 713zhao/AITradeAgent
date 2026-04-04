@@ -44,6 +44,11 @@ class MacroNewsReport:
     macro_sentiment_score: float
     macro_catalysts: List[str]
     risk_events: List[str]
+    # Per-market breakdowns
+    us_macro_news: List[Dict[str, Any]] = field(default_factory=list)
+    us_sentiment_score: float = 0.0
+    hk_macro_news: List[Dict[str, Any]] = field(default_factory=list)
+    hk_sentiment_score: float = 0.0
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
@@ -100,25 +105,37 @@ class MacroNewsAgent(Agent):
             )
 
         try:
-            # Fetch broad market news from Yahoo Finance
-            articles = await self._fetch_macro_news(lookback_hours, max_articles)
+            # Fetch from US and HK sources in parallel
+            us_articles_raw, hk_articles_raw = await asyncio.gather(
+                self._fetch_macro_news(lookback_hours, max_articles, market="US"),
+                self._fetch_macro_news(lookback_hours, max_articles, market="HK"),
+            )
 
-            # Filter for macro-relevant categories
-            filtered_articles = self._filter_macro_articles(articles)
+            # Filter and analyze per market
+            us_filtered = self._filter_macro_articles(us_articles_raw, market="US")
+            hk_filtered = self._filter_macro_articles(hk_articles_raw, market="HK")
 
-            # Analyze sentiment and extract catalysts
-            analyzed = [self._analyze_article(a) for a in filtered_articles]
+            us_analyzed = [self._analyze_article(a) for a in us_filtered]
+            hk_analyzed = [self._analyze_article(a) for a in hk_filtered]
 
-            # Aggregate
-            avg_sentiment = sum(a.sentiment for a in analyzed) / len(analyzed) if analyzed else 0.0
-            catalysts = self._extract_catalysts(analyzed)
-            risk_events = self._extract_risk_events(analyzed)
+            all_analyzed = us_analyzed + hk_analyzed
+
+            avg_sentiment = sum(a.sentiment for a in all_analyzed) / len(all_analyzed) if all_analyzed else 0.0
+            us_sentiment = sum(a.sentiment for a in us_analyzed) / len(us_analyzed) if us_analyzed else 0.0
+            hk_sentiment = sum(a.sentiment for a in hk_analyzed) / len(hk_analyzed) if hk_analyzed else 0.0
+
+            catalysts = self._extract_catalysts(all_analyzed)
+            risk_events = self._extract_risk_events(all_analyzed)
 
             report = MacroNewsReport(
-                macro_news=[asdict(a) for a in analyzed[:10]],
+                macro_news=[asdict(a) for a in all_analyzed[:10]],
                 macro_sentiment_score=round(avg_sentiment, 3),
                 macro_catalysts=catalysts,
-                risk_events=risk_events
+                risk_events=risk_events,
+                us_macro_news=[asdict(a) for a in us_analyzed[:5]],
+                us_sentiment_score=round(us_sentiment, 3),
+                hk_macro_news=[asdict(a) for a in hk_analyzed[:5]],
+                hk_sentiment_score=round(hk_sentiment, 3),
             )
 
             # Cache
@@ -127,7 +144,7 @@ class MacroNewsAgent(Agent):
             return AgentReport(
                 agent_id=self.agent_id,
                 status="success",
-                message=f"Macro news: {len(analyzed)} relevant articles",
+                message=f"Macro news: {len(us_analyzed)} US + {len(hk_analyzed)} HK relevant articles",
                 payload=asdict(report)
             )
 
@@ -140,7 +157,7 @@ class MacroNewsAgent(Agent):
                 payload={}
             )
 
-    async def _fetch_macro_news(self, lookback_hours: int, max_articles: int) -> List[Dict[str, Any]]:
+    async def _fetch_macro_news(self, lookback_hours: int, max_articles: int, market: str = "US") -> List[Dict[str, Any]]:
         """Fetch news from Yahoo Finance market category."""
         import yfinance as yf
         import aiohttp
@@ -150,7 +167,11 @@ class MacroNewsAgent(Agent):
         try:
             # yfinance doesn't have a direct "market news" endpoint; we use Yahoo's RSS-like feed
             # Alternative: fetch from multiple major ticker news (SPY, QQQ, DIA) and deduplicate
-            symbols = ["SPY", "QQQ", "DIA"]
+            # US: S&P 500, NASDAQ, Dow ETFs; HK: Tracker Fund, H-shares, China A50 ETF
+            if market == "HK":
+                symbols = ["2800.HK", "2823.HK", "2822.HK"]
+            else:
+                symbols = ["SPY", "QQQ", "DIA"]
             cutoff_time = datetime.utcnow() - timedelta(hours=lookback_hours)
 
             loop = asyncio.get_event_loop()
@@ -220,7 +241,7 @@ class MacroNewsAgent(Agent):
 
         return articles
 
-    def _filter_macro_articles(self, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _filter_macro_articles(self, articles: List[Dict[str, Any]], market: str = "US") -> List[Dict[str, Any]]:
         """Filter articles to those with macro-relevant keywords."""
         # Keywords that indicate macro relevance
         macro_keywords = [
@@ -235,6 +256,14 @@ class MacroNewsAgent(Agent):
             r'\bunemployment\b', r'\bjobless\b', r'\blayoff\b',
             r'\bsupply chain\b', r'\bchip shortage\b',
         ]
+        # Add HK/China-specific keywords
+        if market == "HK":
+            macro_keywords += [
+                r'\bHKMA\b', r'\bHang Seng\b', r'\bHSBC\b',
+                r'\bPBOC\b', r"\bpeople's bank\b", r'\bRMB\b', r'\brenminbi\b',
+                r'\bproperty.*HK\b', r'\bHK.*property\b',
+                r'\bUSD.*HKD\b', r'\bHKD\b', r'\bpeg\b',
+            ]
         pattern = re.compile('|'.join(macro_keywords), re.IGNORECASE)
 
         filtered = []
@@ -289,7 +318,8 @@ class MacroNewsAgent(Agent):
             "geopolitical": [r'\bwar\b', r'\belection\b', r'\btrade\b', r'\bsanction\b', r'\bconflict\b'],
             "economic_data": [r'\bCPI\b', r'\bNFP\b', r'\bGDP\b', r'\bunemployment\b', r'\binflation\b'],
             "regulatory": [r'\bSEC\b', r'\bregulation\b', r'\bcompliance\b', r'\blaw\b'],
-            "sector_rotation": [r'\btech\b', r'\benergy\b', r'\bfinancial\b', r'\bhealthcare\b', r'\brotation\b'],
+            "sector_rotation": [r'\btech\b', r'\benergy\b', r'\bfinancial\b', r'\bhealthcare\b', r'\brotation\b', r'\bproperty\b', r'\breal estate\b'],
+            "hk_china": [r'\bHKMA\b', r'\bHang Seng\b', r'\bPBOC\b', r'\brenminbi\b', r'\bRMB\b', r'\bHong Kong\b', r'\bShanghai\b'],
         }
         text_lower = text.lower()
         for cat, patterns in categories.items():

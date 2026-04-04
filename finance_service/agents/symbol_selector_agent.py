@@ -128,7 +128,8 @@ class SymbolSelectorAgent(Agent):
 
         Args:
             payload: {
-                "symbols": List[str]  (candidate symbols from discovery)
+                "symbols": List[str],  (candidate symbols from discovery)
+                "market": str,         (optional: "US" or "HK", default "US")
             }
 
         Returns:
@@ -149,6 +150,7 @@ class SymbolSelectorAgent(Agent):
             )
 
         candidate_symbols = payload.get("symbols", [])
+        market = payload.get("market", "US")
         if not candidate_symbols:
             return AgentReport(
                 agent_id=self.agent_id,
@@ -171,15 +173,31 @@ class SymbolSelectorAgent(Agent):
         try:
             logger.info(f"SymbolSelector evaluating {len(candidate_symbols)} candidates")
 
-            # 1. Gather market context (regime + macro)
+            # 1. Gather market context (regime + macro) for the specific market
             regime_report = await self.market_regime_agent.run()
             macro_report = await self.macro_news_agent.run()
 
+            # Select per-market regime and macro sentiment
+            regime_key = "regime_hk" if market == "HK" else "regime_us"
+            regime_data = regime_report.payload.get(regime_key) or regime_report.payload.get("regime", {})
+
+            macro_sentiment = (
+                macro_report.payload.get("hk_sentiment_score", 0.0) if market == "HK"
+                else macro_report.payload.get("us_sentiment_score", 0.0)
+                or macro_report.payload.get("macro_sentiment_score", 0.0)
+            )
+            macro_news_key = "hk_macro_news" if market == "HK" else "us_macro_news"
+            relevant_news = macro_report.payload.get(macro_news_key, macro_report.payload.get("macro_news", []))
+            catalysts = [n.get("headline", "")[:60] for n in relevant_news[:3]]
+
             market_context = {
-                "regime": regime_report.payload.get("regime", {}),
-                "macro_sentiment_score": macro_report.payload.get("macro_sentiment_score", 0.0),
-                "macro_catalysts": macro_report.payload.get("macro_catalysts", []),
-                "risk_events": macro_report.payload.get("risk_events", [])
+                "market": market,
+                "regime": regime_data,
+                "regime_us": regime_report.payload.get("regime_us", {}),
+                "regime_hk": regime_report.payload.get("regime_hk", {}),
+                "macro_sentiment_score": macro_sentiment,
+                "macro_catalysts": catalysts or macro_report.payload.get("macro_catalysts", []),
+                "risk_events": macro_report.payload.get("risk_events", []),
             }
 
             # 2. Gather candidate data in parallel
@@ -200,6 +218,7 @@ class SymbolSelectorAgent(Agent):
                 "rankings": rankings,
                 "rejected": self._filter_rejected(candidate_data_list, rankings),
                 "market_context": market_context,
+                "market": market,
                 "llm_summary": llm_summary,
                 "tokens_used": tokens_used,
                 "generated_at": datetime.utcnow().isoformat()
@@ -398,9 +417,16 @@ class SymbolSelectorAgent(Agent):
         breadth_text = f"Advancers ratio: {(breadth.get('advancers_ratio', 0)*100):.0f}%, " \
                        f"Symbols above SMA50: {(breadth.get('symbols_above_sma50_pct', 0)*100):.0f}%"
 
+        market = mc.get("market", "US")
         macro_sent = mc.get("macro_sentiment_score", 0.0)
         macro_cats = "; ".join(mc.get("macro_catalysts", [])[:5])
         risk_events = "; ".join(mc.get("risk_events", [])[:5])
+
+        # Build secondary regime context (the other market, for cross-market awareness)
+        other_regime_key = "regime_us" if market == "HK" else "regime_hk"
+        other_regime = mc.get(other_regime_key, {})
+        other_market = "US" if market == "HK" else "HK"
+        other_regime_line = f"- {other_market} regime: {other_regime.get('summary', 'unknown')}" if other_regime else ""
 
         # Build candidates JSON
         candidates_json = []
@@ -436,13 +462,15 @@ class SymbolSelectorAgent(Agent):
             }
             candidates_json.append(cand_dict)
 
-        prompt = f"""You are an expert equity analyst and portfolio manager. Your task is to rank a list of candidate stocks for a multi-strategy trading system.
+        prompt = f"""You are an expert equity analyst and portfolio manager. Your task is to rank a list of candidate stocks for the {market} market.
 
 ## System Context
-- Current market regime: {regime.get('summary', 'Unknown')}
+- Target market: {market}
+- Current {market} regime: {regime.get('summary', 'Unknown')}
 - Risk-on flag: {regime.get('risk_on', '?')}
 - Volatility regime: {regime.get('volatility_regime', '?')}
 - Trend strength: {regime.get('trend_strength', '?')}
+{other_regime_line}
 - Portfolio objective: Capture medium-term momentum (2-4 weeks) with risk management
 - Max concurrent positions: 5, max position size 2% each
 
