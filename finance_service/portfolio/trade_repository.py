@@ -132,6 +132,8 @@ class TradeRepository:
         qty = trade.quantity
         price = trade.price
         side = trade.side.upper()
+        stop_loss = trade.stop_loss
+        take_profit = trade.take_profit
         
         position = self.positions.get(symbol)
         if side == "BUY":
@@ -143,13 +145,20 @@ class TradeRepository:
                 new_cost = (old_cost * old_qty + price * qty) / new_qty
                 position.quantity = new_qty
                 position.avg_cost = new_cost
+                # Update stop_loss/take_profit to latest values if provided
+                if stop_loss is not None:
+                    position.stop_loss_price = stop_loss
+                if take_profit is not None:
+                    position.take_profit_price = take_profit
             else:
                 # New long position
                 position = Position(
                     symbol=symbol,
                     quantity=qty,
                     avg_cost=price,
-                    current_price=price
+                    current_price=price,
+                    stop_loss_price=stop_loss,
+                    take_profit_price=take_profit,
                 )
                 self.positions[symbol] = position
             position.trades.append(trade.trade_id)
@@ -164,6 +173,11 @@ class TradeRepository:
                         # For now, just set quantity negative (short)
                         position.quantity = new_qty
                         position.avg_cost = price  # avg cost for short?
+                        # For short, we might set stop_loss/take_profit as well?
+                        if stop_loss is not None:
+                            position.stop_loss_price = stop_loss
+                        if take_profit is not None:
+                            position.take_profit_price = take_profit
                     else:
                         # Exact zero close
                         del self.positions[symbol]
@@ -177,7 +191,9 @@ class TradeRepository:
                     symbol=symbol,
                     quantity=-qty,
                     avg_cost=price,
-                    current_price=price
+                    current_price=price,
+                    stop_loss_price=stop_loss,
+                    take_profit_price=take_profit,
                 )
                 self.positions[symbol] = position
                 position.trades.append(trade.trade_id)
@@ -346,6 +362,8 @@ class TradeRepository:
         quantity: float,
         avg_cost: float,
         trades: List[str] = None,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
     ) -> Position:
         """
         Create a new position.
@@ -355,6 +373,8 @@ class TradeRepository:
             quantity: Number of shares
             avg_cost: Average cost per share
             trades: List of trade IDs that make up position
+            stop_loss_price: Stop loss price
+            take_profit_price: Take profit price
         
         Returns:
             Created Position object
@@ -364,6 +384,8 @@ class TradeRepository:
             quantity=quantity,
             avg_cost=avg_cost,
             trades=trades or [],
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
         )
         self.positions[symbol] = position
         return position
@@ -383,6 +405,8 @@ class TradeRepository:
         avg_cost: float = None,
         current_price: float = None,
         add_trade: str = None,
+        stop_loss_price: float = None,
+        take_profit_price: float = None,
     ) -> Optional[Position]:
         """
         Update position.
@@ -407,6 +431,10 @@ class TradeRepository:
             position.avg_cost = avg_cost
         if current_price is not None:
             position.current_price = current_price
+        if stop_loss_price is not None:
+            position.stop_loss_price = stop_loss_price
+        if take_profit_price is not None:
+            position.take_profit_price = take_profit_price
         if add_trade:
             if add_trade not in position.trades:
                 position.trades.append(add_trade)

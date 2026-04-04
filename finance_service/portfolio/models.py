@@ -37,6 +37,8 @@ class Position:
         updated_at: Last update timestamp
         trades: List of Trade IDs that make up this position
         metadata: Additional data (decision_id, reason, etc.)
+        stop_loss_price: Stop loss price (from trade decision)
+        take_profit_price: Take profit price (from trade decision)
     """
     symbol: str
     quantity: float
@@ -46,6 +48,8 @@ class Position:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     trades: List[str] = field(default_factory=list)  # Trade IDs
     metadata: Dict[str, Any] = field(default_factory=dict)
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
     
     @property
     def entry_price(self) -> float:
@@ -94,6 +98,8 @@ class Position:
             "updated_at": self.updated_at.isoformat(),
             "trades": self.trades,
             "metadata": self.metadata,
+            "stop_loss_price": self.stop_loss_price,
+            "take_profit_price": self.take_profit_price,
         }
 
 

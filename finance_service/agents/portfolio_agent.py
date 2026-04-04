@@ -76,6 +76,9 @@ class PortfolioAgent(Agent):
         side = trade_info.get("side") or trade_info.get("action")
         quantity = trade_info.get("quantity")
         price = trade_info.get("price") or trade_info.get("filled_price")
+        # Extract stop_loss and take_profit if provided
+        stop_loss = trade_info.get("stop_loss")
+        take_profit = trade_info.get("take_profit")
         trade_id = trade_info.get("trade_id") or f"exec_{int(datetime.utcnow().timestamp()*1000)}"
 
         logger.info(f"[PORTFOLIO DEBUG] Parsed: symbol={symbol}, side={side}, quantity={quantity}, price={price}, trade_id={trade_id}")
@@ -93,15 +96,30 @@ class PortfolioAgent(Agent):
                 trade = self.repository.create_trade(
                     task_id=trade_id,
                     symbol=symbol, side="BUY", quantity=quantity, price=price,
-                    decision={}, confidence=1.0, reason="Executed Trade"
+                    decision={}, confidence=1.0, reason="Executed Trade",
+                    stop_loss=stop_loss, take_profit=take_profit
                 )
                 position = self.repository.get_position(symbol)
                 if position:
                     new_qty = position.quantity + quantity
                     new_cost = (position.cost_basis() + quantity * price) / new_qty
-                    self.repository.update_position(symbol, quantity=new_qty, avg_cost=new_cost, add_trade=trade_id)
+                    self.repository.update_position(
+                        symbol,
+                        quantity=new_qty,
+                        avg_cost=new_cost,
+                        add_trade=trade.trade_id,
+                        stop_loss_price=stop_loss,
+                        take_profit_price=take_profit,
+                    )
                 else:
-                    self.repository.create_position(symbol, quantity=quantity, avg_cost=price, trades=[trade_id])
+                    self.repository.create_position(
+                        symbol,
+                        quantity=quantity,
+                        avg_cost=price,
+                        trades=[trade.trade_id],
+                        stop_loss_price=stop_loss,
+                        take_profit_price=take_profit,
+                    )
                 # Set current_price to execution price (overwrites default 0.0 on new positions, updates existing)
                 self.repository.update_position(symbol, current_price=price)
             elif side == "SELL":
@@ -109,7 +127,8 @@ class PortfolioAgent(Agent):
                 trade = self.repository.create_trade(
                     task_id=trade_id,
                     symbol=symbol, side="SELL", quantity=quantity, price=price,
-                    decision={}, confidence=1.0, reason="Executed Trade"
+                    decision={}, confidence=1.0, reason="Executed Trade",
+                    stop_loss=stop_loss, take_profit=take_profit
                 )
                 position = self.repository.get_position(symbol)
                 if position:

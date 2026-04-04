@@ -54,7 +54,9 @@ class ExecutionAgent(Agent):
                 "quantity": trade_proposal.quantity or 1.0,
                 "filled_price": trade_proposal.target_price,  # mock: fill at target
                 "status": "FILLED",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "stop_loss": trade_proposal.stop_loss,   # NEW
+                "take_profit": trade_proposal.take_profit  # NEW
             }
 
             flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={trade_proposal.quantity} @ ${trade_proposal.target_price} → {execution_result['status']}")
