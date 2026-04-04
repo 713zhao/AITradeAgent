@@ -255,9 +255,13 @@ class MainOrchestratorAgent:
                 selector_report = await self.symbol_selector_agent.run({"symbols": symbols})
                 if selector_report.status == "success":
                     rankings = selector_report.payload.get("rankings", [])
+                    llm_summary = selector_report.payload.get("llm_summary", "")
                     selected_symbols = [r["symbol"] for r in rankings[:20]]  # top 20
                     logger.info(f"SymbolSelector ranked {len(selected_symbols)} symbols (from {len(symbols)})")
                     symbols = selected_symbols  # override processing list
+                    # Send LLM analysis result to Telegram
+                    if self.telegram_agent and self.telegram_agent.enabled:
+                        asyncio.create_task(self._send_llm_ranking_to_telegram(rankings, llm_summary))
                 else:
                     logger.warning(f"SymbolSelector failed: {selector_report.message}; using original list")
             except Exception as e:
@@ -699,6 +703,44 @@ class MainOrchestratorAgent:
         except Exception as e:
             logger.debug(f"Snapshot fetch failed for {symbol}: {e}")
             return None
+
+
+    async def _send_llm_ranking_to_telegram(self, rankings: list, llm_summary: str):
+        """Send LLM stock ranking analysis to Telegram."""
+        if not rankings:
+            return
+        if not (self.telegram_agent and self.telegram_agent.enabled):
+            return
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            return
+
+        try:
+            lines = ["🤖 LLM Stock Ranking Analysis"]
+            if llm_summary:
+                lines.append("\n📝 " + llm_summary)
+            lines.append("")
+            lines.append("🏆 Top Picks:")
+            for i, r in enumerate(rankings[:10], 1):
+                sym = r.get("symbol", "?")
+                score = r.get("total_score", 0)
+                pos = r.get("position_size_pct", 1.0)
+                stop = r.get("suggested_stop_pct", 8.0)
+                bd = r.get("breakdown", {})
+                rationale = r.get("rationale", "")
+                bd_str = " | ".join(
+                    f"{k[:3].title()}:{v}" for k, v in bd.items()
+                ) if bd else ""
+                lines.append(f"{i:2d}. {sym}  Score:{score:.0f}/100  Pos:{pos:.1f}%  Stop:{stop:.1f}%")
+                if bd_str:
+                    lines.append(f"    [{bd_str}]")
+                if rationale:
+                    lines.append(f"    💡 {rationale[:120]}")
+            message = "\n".join(lines)
+            await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+            logger.info("Sent LLM ranking analysis to Telegram")
+        except Exception as e:
+            logger.error(f"Failed to send LLM ranking Telegram: {e}")
 
     async def _send_top_analysis_summary(self, symbols: List[str]):
         symbols_to_check = symbols[:20]

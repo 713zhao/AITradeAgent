@@ -532,7 +532,7 @@ symbol_selector:
   max_input_symbols: 50
   top_n_per_theme: 5
   cache_ttl_hours: 24
-  model: openrouter/auto
+  model: openai/gpt-4o-mini
   temperature: 0.2
   position_size_pct: 2.0
 market_regime_agent:

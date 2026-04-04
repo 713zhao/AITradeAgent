@@ -94,7 +94,7 @@ class SymbolSelectorAgent(Agent):
                 default_model=self.config_engine.get("symbol_selector", "model",
                                                    default=self.config_engine.get("llm", "model", default="openrouter/auto")),
                 temperature=self.config_engine.get("symbol_selector", "temperature", default=0.2),
-                max_tokens=4000,
+                max_tokens=12000,
                 timeout=self.config_engine.get("llm", "timeout", default=30),
                 max_retries=self.config_engine.get("llm", "max_retries", default=3),
             )
@@ -192,13 +192,14 @@ class SymbolSelectorAgent(Agent):
             # Use provider.generate_async to avoid asyncio.run() inside async context
             llm_response = await self._llm_manager.provider.generate_async(prompt)
             llm_text = llm_response.content if hasattr(llm_response, "content") else str(llm_response)
-            rankings = self._parse_llm_response(llm_text)
+            rankings, llm_summary = self._parse_llm_response(llm_text)
 
             # 5. Cache and return
             result = {
                 "rankings": rankings,
                 "rejected": self._filter_rejected(candidate_data_list, rankings),
                 "market_context": market_context,
+                "llm_summary": llm_summary,
                 "generated_at": datetime.utcnow().isoformat()
             }
 
@@ -499,11 +500,23 @@ IMPORTANT:
 - total_score must be 0-100 (sum of 0-10 scores * 2)
 - position_size_pct between 0.5 and 2.0
 - suggested_stop_pct between 5 and 15
+- rationale must be ≤80 characters (be concise)
+- summary must be ≤120 characters
 """
         return prompt
 
-    def _parse_llm_response(self, response: str) -> List[Dict[str, Any]]:
-        """Parse LLM JSON response into ranking list."""
+    @staticmethod
+    def _clean_json_str(json_str: str) -> str:
+        """Remove common LLM JSON formatting issues before parsing."""
+        import re
+        # Remove single-line JS comments (// ...)
+        json_str = re.sub(r"//[^\n]*", "", json_str)
+        # Remove trailing commas before } or ]
+        json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
+        return json_str.strip()
+
+    def _parse_llm_response(self, response: str):
+        """Parse LLM JSON response into (rankings, summary) tuple."""
         try:
             # Extract JSON if wrapped in ```json blocks
             if "```json" in response:
@@ -513,8 +526,12 @@ IMPORTANT:
             else:
                 json_str = response.strip()
 
+            # Clean up common LLM JSON issues
+            json_str = self._clean_json_str(json_str)
+
             data = json.loads(json_str)
             rankings = data.get("rankings", [])
+            summary = data.get("summary", "")
 
             # Validate and sanitize
             for r in rankings:
@@ -528,10 +545,10 @@ IMPORTANT:
                 r["position_size_pct"] = max(0.5, min(2.0, float(r["position_size_pct"])))
                 r["suggested_stop_pct"] = max(5.0, min(15.0, float(r["suggested_stop_pct"])))
 
-            return rankings
+            return rankings, summary
         except Exception as e:
             logger.error(f"Failed to parse LLM response: {e}\nResponse: {response[:200]}")
-            return []
+            return [], ""
 
     def _filter_rejected(self, candidates: List[CandidateData], rankings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Identify symbols that were not ranked (likely filtered out by LLM)."""
