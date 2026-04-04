@@ -34,11 +34,13 @@ class ExitAgent(Agent):
         logger.info("ExitAgent initialized with enhanced re-analysis capability.")
         # Load exit strategy config
         if self.config:
-            self.exit_strategy = self.config.get("risk.exit_strategy", "atr")
-            self.partial_target_pct = self.config.get("risk.partial_target_pct", 0.02)
+            self.exit_strategy = self.config.get("finance", "risk/exit_strategy", default="atr")
+            self.partial_target_pct = self.config.get("finance", "risk/partial_target_pct", default=0.02)
+            self.trail_stop_multiplier = self.config.get("finance", "risk/trail_stop_multiplier", default=1.5)
         else:
             self.exit_strategy = "atr"
             self.partial_target_pct = 0.02
+            self.trail_stop_multiplier = 1.5
 
     async def run(self, positions: Optional[List[Dict[str, Any]]] = None, 
                   perform_strategy_check: bool = False,
