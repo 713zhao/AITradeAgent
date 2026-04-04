@@ -3,6 +3,7 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
+import numpy as np
 
 from finance_service.agents.market_regime_agent import MarketRegimeAgent, MarketRegime, IndexMetrics, MarketBreadth
 from finance_service.core.yaml_config import YAMLConfigEngine
@@ -38,13 +39,13 @@ def market_regime_agent(mock_config_engine, mock_data_agent):
 def create_mock_index_df(days: int = 90, start_price: float = 100.0) -> pd.DataFrame:
     """Create a mock OHLCV DataFrame for index testing."""
     dates = pd.date_range(end=datetime.now().date(), periods=days, freq='D')
-    prices = start_price * (1 + 0.001 * pd.np.random.randn(days))  # small random walk
+    prices = start_price * (1 + 0.001 * np.random.randn(days))  # small random walk
     df = pd.DataFrame({
-        'open': prices * 0.99,
-        'high': prices * 1.01,
-        'low': prices * 0.98,
+        'open': prices * (1 - 0.005),
+        'high': prices * (1 + 0.01),
+        'low': prices * (1 - 0.01),
         'close': prices,
-        'volume': pd.np.random.randint(1000000, 5000000, size=days)
+        'volume': np.random.randint(1_000_000, 5_000_000, size=days)
     }, index=dates)
     return df
 
@@ -157,11 +158,12 @@ def test_market_regime_agent_derive_regime_with_weak_breadth(market_regime_agent
 
 def test_market_regime_agent_cache_returns_cached(market_regime_agent):
     """Test that cached result is returned when not expired."""
+    import asyncio
     # Set a valid cache
     market_regime_agent._cache = {"test": "data"}
     market_regime_agent._cache_expiry = datetime.utcnow() + timedelta(hours=1)
 
-    report = market_regime_agent.run_sync()  # use sync wrapper for test
+    report = asyncio.run(market_regime_agent.run())
 
     assert report.status == "success"
     assert report.payload == {"test": "data"}
@@ -169,6 +171,7 @@ def test_market_regime_agent_cache_returns_cached(market_regime_agent):
 
 def test_market_regime_agent_cache_expired(market_regime_agent, mock_data_agent):
     """Test that expired cache triggers recompute."""
+    import asyncio
     df = create_mock_index_df()
     mock_data_agent._fetch_data_for_symbol.return_value = df
 
@@ -176,7 +179,7 @@ def test_market_regime_agent_cache_expired(market_regime_agent, mock_data_agent)
     market_regime_agent._cache = {"old": "data"}
     market_regime_agent._cache_expiry = datetime.utcnow() - timedelta(hours=1)
 
-    report = market_regime_agent.run_sync()
+    report = asyncio.run(market_regime_agent.run())
 
     assert report.status == "success"
     assert report.payload != {"old": "data"}
