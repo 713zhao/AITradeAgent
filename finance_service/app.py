@@ -249,7 +249,7 @@ class MainOrchestratorAgent:
         logger.info(f"Processing {len(symbols)} symbols: {symbols}")
 
         # Use SymbolSelectorAgent (LLM) to rank and filter candidates
-        if self.symbol_selector_agent and self.symbol_selector_agent._llm_manager:
+        if (self.symbol_selector_agent and getattr(self.symbol_selector_agent, '_llm_manager', None)):
             try:
                 logger.info("Invoking SymbolSelectorAgent for ranking...")
                 selector_report = await self.symbol_selector_agent.run({"symbols": symbols})
