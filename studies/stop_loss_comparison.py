@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import yfinance as yf
-from typing import Dict, List, Tuple
+from typing import Dict
 
 # Universe (same as previous backtests)
 UNIVERSE = [
@@ -20,35 +20,28 @@ UNIVERSE = [
 # Config
 START_DATE = "2023-01-01"
 END_DATE = "2024-12-31"
-INITIAL_CAPITAL = 100_000
-COMMISSION = 0.001  # 0.1% per trade
 
-# SMA20 trend entry
 def compute_sma20(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure lowercase column names and compute SMA20."""
     df = df.copy()
-    # Handle possible MultiIndex columns from yfinance
-    if isinstance(df.columns, pd.MultiIndex):
-        # flatten: ('Adj Close', '') -> 'adj_close'
-        df.columns = ['_'.join([str(c) for c in col if c]).strip().lower() for col in df.columns.values]
-    else:
-        df.columns = [c.lower() for c in df.columns]
-    # Ensure required columns exist
+    # Map common yFinance column names to lowercase standardized
+    col_map = {
+        'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close',
+        'Adj Close': 'adj_close', 'Volume': 'volume'
+    }
+    df.rename(columns=lambda c: col_map.get(c, c.lower()), inplace=True)
+    # If 'close' missing but 'adj_close' present, use adj_close
     if 'close' not in df.columns and 'adj_close' in df.columns:
         df['close'] = df['adj_close']
-    if 'high' not in df.columns and 'high' not in df.columns:
-        raise ValueError(f"Missing high column: {df.columns}")
-    if 'low' not in df.columns and 'low' not in df.columns:
-        raise ValueError(f"Missing low column: {df.columns}")
     df['sma20'] = df['close'].rolling(20).mean()
     return df
 
-# Strategies simulation functions
 def simulate_fixed_pct(entry_price: float, future_df: pd.DataFrame, sl_pct=0.015, tp_pct=0.03) -> Dict:
     stop_price = entry_price * (1 - sl_pct)
     take_price = entry_price * (1 + tp_pct)
     exit_idx = None
     exit_reason = None
-    for i, (idx, row) in enumerate(future_df.iterrows()):
+    for i, (_, row) in enumerate(future_df.iterrows()):
         if row['low'] <= stop_price:
             exit_idx = i
             exit_reason = "stop"
@@ -77,7 +70,6 @@ def simulate_fixed_pct(entry_price: float, future_df: pd.DataFrame, sl_pct=0.015
 
 def simulate_atr(entry_price: float, hist_df: pd.DataFrame, future_df: pd.DataFrame,
                 atr_mult_sl=2.0, atr_mult_tp=4.0) -> Dict:
-    # Compute ATR from hist_df (includes entry bar)
     high = hist_df['high']
     low = hist_df['low']
     close = hist_df['close']
@@ -93,7 +85,7 @@ def simulate_atr(entry_price: float, hist_df: pd.DataFrame, future_df: pd.DataFr
     take_price = entry_price + atr_mult_tp * atr
     exit_idx = None
     exit_reason = None
-    for i, (idx, row) in enumerate(future_df.iterrows()):
+    for i, (_, row) in enumerate(future_df.iterrows()):
         if row['low'] <= stop_price:
             exit_idx = i
             exit_reason = "stop"
@@ -123,7 +115,6 @@ def simulate_atr(entry_price: float, hist_df: pd.DataFrame, future_df: pd.DataFr
 def simulate_partial_trail(entry_price: float, hist_df: pd.DataFrame, future_df: pd.DataFrame,
                           partial_pct=0.02, trail_atr_mult=1.5) -> Dict:
     partial_target = entry_price * (1 + partial_pct)
-    # Compute ATR for trailing stop
     high = hist_df['high']
     low = hist_df['low']
     close = hist_df['close']
@@ -136,16 +127,16 @@ def simulate_partial_trail(entry_price: float, hist_df: pd.DataFrame, future_df:
     if pd.isna(atr) or atr <= 0:
         return None
     trail_stop = entry_price - trail_atr_mult * atr
-    # Find partial exit day
+    # Find partial target day
     partial_day = None
-    for i, (idx, row) in enumerate(future_df.iterrows()):
+    for i, (_, row) in enumerate(future_df.iterrows()):
         if row['high'] >= partial_target:
             partial_day = i + 1
             break
-    # For remainder, check trail_stop
+    # Find remainder exit
     exit_price_rem = None
     exit_reason_rem = None
-    for i, (idx, row) in enumerate(future_df.iterrows()):
+    for i, (_, row) in enumerate(future_df.iterrows()):
         if row['low'] <= trail_stop:
             exit_price_rem = trail_stop
             exit_reason_rem = "trail_stop"
@@ -153,7 +144,6 @@ def simulate_partial_trail(entry_price: float, hist_df: pd.DataFrame, future_df:
     if exit_price_rem is None:
         exit_price_rem = future_df['close'].iloc[-1]
         exit_reason_rem = "end"
-    # Blended P&L: 50% at partial, 50% at final
     pnl_partial = (partial_target - entry_price) / entry_price
     pnl_rem = (exit_price_rem - entry_price) / entry_price
     blended_pnl = 0.5 * pnl_partial + 0.5 * pnl_rem
@@ -165,7 +155,6 @@ def simulate_partial_trail(entry_price: float, hist_df: pd.DataFrame, future_df:
         'pnl_pct': float(blended_pnl)
     }
 
-# Main
 def run_study():
     all_results = []
     for symbol in UNIVERSE:
@@ -175,7 +164,10 @@ def run_study():
                 print(f"No data for {symbol}")
                 continue
             df = compute_sma20(df)
-            # Entry signals
+            # Need at least 20 days for SMA
+            if len(df) < 30:
+                continue
+            # Entry signals: price crosses above SMA20 from below
             df['prev_close'] = df['close'].shift(1)
             df['prev_sma20'] = df['sma20'].shift(1)
             df['signal'] = (df['close'] > df['sma20']) & (df['prev_close'] <= df['prev_sma20'])
@@ -183,8 +175,9 @@ def run_study():
             print(f"{symbol}: {len(entry_dates)} entry signals")
             for entry_date in entry_dates:
                 entry_idx = df.index.get_loc(entry_date)
+                # Need enough history for ATR (14 periods) plus SMA buffer
                 if entry_idx < 20:
-                    continue  # not enough history for SMA/ATR
+                    continue
                 entry_price = df['close'].iloc[entry_idx]
                 # future data for exit simulation
                 future = df.iloc[entry_idx+1:]
@@ -221,12 +214,11 @@ def run_study():
     with open(raw_path, 'w') as f:
         json.dump(all_results, f, indent=2)
 
-    # Summary
     if not all_results:
         print("No results to summarize.")
         return
+    # Summary DataFrame
     df_res = pd.DataFrame(all_results)
-    # Group by strategy
     summary = df_res.groupby('strategy')['pnl_pct'].agg(['mean','std','count','sum','min','max'])
     summary['win_rate'] = df_res.groupby('strategy')['pnl_pct'].apply(lambda x: (x>0).mean())
     summary['avg_holding_days'] = df_res.groupby('strategy')['exit_day'].mean()
