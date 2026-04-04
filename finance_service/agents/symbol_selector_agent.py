@@ -192,6 +192,7 @@ class SymbolSelectorAgent(Agent):
             # Use provider.generate_async to avoid asyncio.run() inside async context
             llm_response = await self._llm_manager.provider.generate_async(prompt)
             llm_text = llm_response.content if hasattr(llm_response, "content") else str(llm_response)
+            tokens_used = llm_response.tokens_used if hasattr(llm_response, "tokens_used") else 0
             rankings, llm_summary = self._parse_llm_response(llm_text)
 
             # 5. Cache and return
@@ -200,6 +201,7 @@ class SymbolSelectorAgent(Agent):
                 "rejected": self._filter_rejected(candidate_data_list, rankings),
                 "market_context": market_context,
                 "llm_summary": llm_summary,
+                "tokens_used": tokens_used,
                 "generated_at": datetime.utcnow().isoformat()
             }
 

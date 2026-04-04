@@ -191,34 +191,25 @@ TA_DEEP_THINK_MODEL=gemini-1.5-pro      # Slower, expensive (for News/Regime)
 - [x] Add env var overrides to agents
 - [x] Push to `improve/llm-regime-phase1`
 
-### Phase 2: Local Validation
+### Phase 2: Local Validation ✅
 - [x] Pull latest branch on deployment server
-- [x] Verify `config/finance.yaml` contains new sections
-- [ ] Update `.env` with LLM credentials
-- [ ] Set `llm.enabled: true` and `symbol_selector.enabled: true`
-- [ ] Clear pycache: `find . -type d -name __pycache__ -exec rm -rf {} +`
-- [ ] Restart AITradeAgent service
-- [ ] Check logs for:
-  ```
-  MarketRegimeAgent initialized
-  MacroNewsAgent initialized
-  SymbolSelectorAgent LLM initialized
-  Orchestrator startup complete
-  ```
-- [ ] Trigger manual discovery: `curl http://localhost:8801/trigger`
-- [ ] Verify logs:
-  ```
-  SymbolSelector evaluating X candidates
-  SymbolSelector ranked Y symbols
-  ```
+- [x] Verify `config/finance.yaml` contains new sections (17 top-level sections)
+- [x] `.env` configured with LLM credentials (Google API key, Gemini models)
+- [x] `llm.enabled: true` and `symbol_selector.enabled: true` in finance.yaml
+- [x] Clear pycache between restarts
+- [x] AITradeAgent service running on port 8801
+- [x] Logs confirm: `SymbolSelectorAgent LLM initialized`, `Orchestrator startup complete`
+- [x] Added `/admin/force_scan` endpoint to bypass market-hours check
+- [x] Verified logs: `SymbolSelector evaluating 50 candidates`, `SymbolSelector ranked 5 symbols (from 50) using 12795 tokens`
 
-### Phase 3: Smoke Tests
-- [ ] Confirm watchlist shrinks from ~45 to ~15-20 symbols
-- [ ] Check Telegram notification includes ranked list
-- [ ] Wait for first analysis → strategy → risk flow
+### Phase 3: Smoke Tests 🔄
+- [x] Confirmed watchlist shrinks from 50 candidates → 5-10 LLM-ranked symbols
+- [x] Telegram notification includes: ranked list, scores, breakdown, rationale, token count
+- [x] LLM token usage visible in service logs: ~12,795 tokens/scan
+- [ ] Wait for first analysis → strategy → risk flow (market hours required)
 - [ ] Verify at least 1 trade executes (paper broker)
 - [ ] Check portfolio table for open positions
-- [ ] Review LLM token usage via OpenRouter/Google dashboard
+- [ ] Review LLM costs via OpenRouter dashboard
 
 ### Phase 4: Monitoring
 - [ ] Set up daily cost alert (if > $5/day)
@@ -330,14 +321,15 @@ If LLM integration causes issues:
 
 - [x] All 22 new tests passing
 - [x] 3 agent files created without syntax errors
-- [x] `config/finance.yaml` has new sections (not overwritten)
+- [x] `config/finance.yaml` has new sections (17 top-level sections restored + merged)
 - [x] `app.py` imports and instantiates new agents correctly
-- [x] Env var overrides work (test by setting dummy values)
-- [ ] No trailing whitespace or formatting issues in YAML
+- [x] Env var overrides work (LLM_PROVIDER=google, GOOGLE_API_KEY, TA_*_MODEL)
+- [x] YAML formatting validated (no parse errors on service startup)
 - [x] Git status shows only intended changes (no accidental deletions)
 - [x] Branch pushed to origin
 - [x] TODO file updated with actual progress
+- [x] LLM ranking Telegram report with token usage implemented and tested
 
 ---
 
-**Status:** Phase 1 Complete ✅ | Phase 2 In Progress 🔄
+**Status:** Phase 1 Complete ✅ | Phase 2 Complete ✅ | Phase 3 In Progress 🔄

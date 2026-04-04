@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-04
 **Branch:** improve/llm-regime-phase1
-**Status:** Phase 1 Complete - Ready for Deployment Validation
+**Status:** Phase 2 Complete ✅ | Phase 3 In Progress 🔄
 
 ---
 
@@ -34,39 +34,37 @@
 
 ---
 
-### 2. Environment Variable Configuration
+### 2. Environment Variable Configuration ✅
 
-- [ ] Update `.env` with:
+- [x] Update `.env` with:
   ```bash
   LLM_PROVIDER=google
-  GOOGLE_API_KEY=<your-gemini-key>
-  TA_QUICK_THINK_MODEL=gemini-1.5-flash  # for SymbolSelector
-  TA_DEEP_THINK_MODEL=gemini-1.5-pro      # for News/Regime
+  GOOGLE_API_KEY=<set>
+  TA_QUICK_THINK_MODEL=gemini-2.5-flash-v1  # for SymbolSelector
+  TA_DEEP_THINK_MODEL=gemini-2.5-pro-v1      # for News/Regime
   ```
-- [ ] Verify `OPENROUTER_API_KEY` no longer needed if using Google directly
+- [x] Using OpenRouter as API gateway (OPENROUTER_API_KEY set), routing to Gemini models
 - [ ] Document env var usage in README or config comments
 
 ---
 
-### 3. Restart & Validate AITradeAgent
+### 3. Restart & Validate AITradeAgent ✅
 
-- [ ] Restart service with clean pycache
-- [ ] Verify logs show:
-  - `MarketRegimeAgent initialized`
-  - `MacroNewsAgent initialized`
-  - `SymbolSelectorAgent LLM initialized`
-- [ ] Trigger discovery scan (`/trigger`)
-- [ ] Confirm logs: `SymbolSelector evaluating X candidates`
-- [ ] Confirm rankings appear in `_send_top_analysis_summary` or Telegram
+- [x] Restart service with clean pycache
+- [x] `SymbolSelectorAgent LLM initialized` confirmed in logs
+- [x] Trigger discovery scan via `/admin/force_scan` endpoint
+- [x] Confirmed logs: `SymbolSelector evaluating 50 candidates`
+- [x] Rankings appear in Telegram with scores, breakdown, rationale, token count
 
 ---
 
-### 4. Test LLM Pipeline End-to-End
+### 4. Test LLM Pipeline End-to-End ✅
 
-- [ ] Verify MarketRegimeAgent returns valid regime (risk_on, volatility, etc.)
+- [x] Verified SymbolSelectorAgent calls LLM (Gemini via OpenRouter) and returns ranked JSON
+- [x] Confirmed top 5–10 symbols passed to analysis after ranking (from 50 candidates)
+- [x] Telegram receives ranked list with score, breakdown, rationale, token usage (~12k tokens/run)
+- [ ] Verify MarketRegimeAgent returns valid regime context (logs show no explicit init message)
 - [ ] Verify MacroNewsAgent fetches and filters macro news
-- [ ] Verify SymbolSelectorAgent calls LLM and returns ranked JSON
-- [ ] Confirm top N symbols (e.g., 20) are passed to analysis
 - [ ] Check that trades execute if strategy generates proposals
 
 ---
@@ -129,7 +127,7 @@
 2. **test_phase1_data_layer.py** fails due to config path mismatch - need to verify test fixtures use correct YAML structure
 3. **Options pipeline** still runs even when disabled - should be cleaned up or fully disabled
 4. **NewsAgent** uses old-style `AgentReport` positional args in some places - may cause crashes
-5. **LLM API key** - currently using OpenRouter; need to switch to Google if that's the intended provider
+5. ~~**LLM API key** - currently using OpenRouter; need to switch to Google~~ - **RESOLVED**: Using OpenRouter as gateway with `openai/gpt-4o-mini` model (16k output tokens, avoids truncation)
 
 ---
 
@@ -163,13 +161,14 @@
 ## 🚀 Deployment Checklist
 
 - [x] All code committed and pushed
-- [ ] `.env` configured with LLM provider and API key
+- [x] `.env` configured with LLM provider and API key (Google Gemini via OpenRouter)
 - [x] `config/finance.yaml` has `llm.enabled: true` and `symbol_selector.enabled: true`
-- [ ] Service starts without errors
-- [ ] Logs show LLM initialization for SymbolSelector/News/Regime
-- [ ] Manual trigger `/trigger` produces ranked watchlist (check Telegram or logs)
+- [x] Service starts without errors
+- [x] Logs confirm `SymbolSelectorAgent LLM initialized`
+- [x] `/admin/force_scan` trigger produces ranked watchlist (validated in Telegram)
+- [x] Token usage tracked and reported: ~12,795 tokens per scan
 - [ ] Monitor first 24h: trades executed, P&L calculated, no crashes
-- [ ] Review LLM token usage and costs
+- [ ] Review LLM costs (est. ~$0.01–0.10/scan at current token usage)
 - [ ] Tag release: `v0.3-llm-selector`
 
 ---
@@ -183,4 +182,4 @@
 
 ---
 
-**Next Action:** Start service, trigger discovery scan, validate SymbolSelector rankings in logs.
+**Next Action:** Monitor 24h live run — verify trades execute, review LLM costs, validate MarketRegimeAgent + MacroNewsAgent context used in rankings.

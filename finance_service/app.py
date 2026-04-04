@@ -256,12 +256,13 @@ class MainOrchestratorAgent:
                 if selector_report.status == "success":
                     rankings = selector_report.payload.get("rankings", [])
                     llm_summary = selector_report.payload.get("llm_summary", "")
+                    tokens_used = selector_report.payload.get("tokens_used", 0)
                     selected_symbols = [r["symbol"] for r in rankings[:20]]  # top 20
-                    logger.info(f"SymbolSelector ranked {len(selected_symbols)} symbols (from {len(symbols)})")
+                    logger.info(f"SymbolSelector ranked {len(selected_symbols)} symbols (from {len(symbols)}) using {tokens_used} tokens")
                     symbols = selected_symbols  # override processing list
                     # Send LLM analysis result to Telegram
                     if self.telegram_agent and self.telegram_agent.enabled:
-                        asyncio.create_task(self._send_llm_ranking_to_telegram(rankings, llm_summary))
+                        asyncio.create_task(self._send_llm_ranking_to_telegram(rankings, llm_summary, tokens_used))
                 else:
                     logger.warning(f"SymbolSelector failed: {selector_report.message}; using original list")
             except Exception as e:
@@ -705,7 +706,7 @@ class MainOrchestratorAgent:
             return None
 
 
-    async def _send_llm_ranking_to_telegram(self, rankings: list, llm_summary: str):
+    async def _send_llm_ranking_to_telegram(self, rankings: list, llm_summary: str, tokens_used: int = 0):
         """Send LLM stock ranking analysis to Telegram."""
         if not rankings:
             return
@@ -717,6 +718,8 @@ class MainOrchestratorAgent:
 
         try:
             lines = ["🤖 LLM Stock Ranking Analysis"]
+            if tokens_used:
+                lines.append(f"💰 Tokens used: {tokens_used:,}")
             if llm_summary:
                 lines.append("\n📝 " + llm_summary)
             lines.append("")
