@@ -98,6 +98,18 @@ class SymbolSelectorAgent(Agent):
                 max_retries=self.config_engine.get("llm", "max_retries", default=3),
             )
 
+            # Override from environment variables if present
+            if os.getenv("LLM_PROVIDER"):
+                llm_config.provider = os.getenv("LLM_PROVIDER")
+            if os.getenv("GOOGLE_API_KEY"):
+                # Use GOOGLE_API_KEY directly as the environment variable name for the API key
+                llm_config.api_key_env = "GOOGLE_API_KEY"
+            # Model selection: TA_QUICK_THINK_MODEL for SymbolSelector (fast), fallback to TA_DEEP_THINK_MODEL
+            if os.getenv("TA_QUICK_THINK_MODEL"):
+                llm_config.default_model = os.getenv("TA_QUICK_THINK_MODEL")
+            elif os.getenv("TA_DEEP_THINK_MODEL"):
+                llm_config.default_model = os.getenv("TA_DEEP_THINK_MODEL")
+
             manager = LLMManager(llm_config)
             if manager.validate():
                 logger.info("SymbolSelectorAgent LLM initialized")

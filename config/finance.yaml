@@ -10,7 +10,7 @@ telegram:
 
 # LLM Configuration (OpenRouter)
 llm:
-  enabled: false
+  enabled: true
   provider: "openrouter"
   api_key_env: "OPENROUTER_API_KEY"
   base_url: null
@@ -29,7 +29,7 @@ llm:
 
 # Symbol Selector Agent (LLM-powered ranking)
 symbol_selector:
-  enabled: false
+  enabled: true
   max_input_symbols: 50
   top_n_per_theme: 5
   cache_ttl_hours: 24
@@ -68,7 +68,7 @@ macro_news_agent:
 
 # LLM Configuration (OpenRouter)
 llm:
-  enabled: false
+  enabled: true
   provider: "openrouter"
   api_key_env: "OPENROUTER_API_KEY"
   base_url: null
@@ -87,7 +87,7 @@ llm:
 
 # Symbol Selector Agent (LLM-powered ranking)
 symbol_selector:
-  enabled: false
+  enabled: true
   max_input_symbols: 50
   top_n_per_theme: 5
   cache_ttl_hours: 24
