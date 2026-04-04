@@ -13,7 +13,7 @@ from finance_service.core.yaml_config import YAMLConfigEngine
 def mock_config_engine():
     """Mock YAMLConfigEngine with required methods."""
     cfg = MagicMock(spec=YAMLConfigEngine)
-    cfg.get.return_value = None
+    cfg.get.side_effect = lambda *args, default=None: default
     return cfg
 
 

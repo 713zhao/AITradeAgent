@@ -4,6 +4,7 @@ Classifies current market conditions to enable strategy adaptation.
 Disabled by default; enable via configuration.
 """
 import logging
+import os
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
@@ -74,6 +75,14 @@ class RegimeAgent(Agent):
                 timeout=self.config_engine.get("llm", "timeout", default=30),
                 max_retries=self.config_engine.get("llm", "max_retries", default=3),
             )
+
+            # Override from environment variables if present
+            if os.getenv("LLM_PROVIDER"):
+                llm_config.provider = os.getenv("LLM_PROVIDER")
+            if os.getenv("GOOGLE_API_KEY"):
+                llm_config.api_key_env = "GOOGLE_API_KEY"
+            if os.getenv("TA_DEEP_THINK_MODEL"):
+                llm_config.default_model = os.getenv("TA_DEEP_THINK_MODEL")
 
             self._llm_manager = LLMManager(llm_config)
             if self._llm_manager.validate():

@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 import asyncio
+import os
 import pandas as pd
 
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -420,7 +421,7 @@ class SymbolSelectorAgent(Agent):
                     "catalysts": c.news_sentiment.get("catalysts", [])[:3]
                 },
                 "liquidity": {
-                    "avg_dollar_volume_20d": c.liquidity_metrics.get("avg_dollar_volume_20d"),
+                    "avg_dollar_volume_20d": "${:,.0f}".format(c.liquidity_metrics.get("avg_dollar_volume_20d") or 0),
                     "tier": c.liquidity_metrics.get("liquidity_tier")
                 },
                 "risk": {

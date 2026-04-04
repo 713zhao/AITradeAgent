@@ -10,10 +10,11 @@ Monitors general financial news (not symbol-specific) to identify:
 
 Provides aggregate macro sentiment and risk event tracking for high-level strategy.
 """
+import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 import re
 
 from finance_service.agents.agent_interface import Agent, AgentReport
@@ -43,7 +44,7 @@ class MacroNewsReport:
     macro_sentiment_score: float
     macro_catalysts: List[str]
     risk_events: List[str]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
 class MacroNewsAgent(Agent):
@@ -90,7 +91,7 @@ class MacroNewsAgent(Agent):
 
         cache_key = f"macro_{lookback_hours}h"
         cached = self._cache.get(cache_key)
-        if cached and not payload and not payload.get("force_refresh"):
+        if cached and not (payload and payload.get("force_refresh", False)):
             return AgentReport(
                 agent_id=self.agent_id,
                 status="success",
@@ -258,7 +259,7 @@ class MacroNewsAgent(Agent):
 
         return MacroNewsItem(
             headline=article["headline"],
-            source=article["source"],
+            source=article.get("source", "Unknown"),
             published_at=article["published_at"],
             sentiment=sentiment,
             category=category,
@@ -269,7 +270,7 @@ class MacroNewsAgent(Agent):
     def _categorize_article(self, text: str) -> str:
         """Categorize article into macro theme."""
         categories = {
-            "monetary_policy": [r'\bfed\b', r'\binterest rate\b', r'\bmonetary policy\b', r'\bFOMC\b', r'\byield\b'],
+            "monetary_policy": [r'\bfed\b', r'\binterest rate\b', r'\bmonetary policy\b', r'\bFOMC\b', r'\byield\b', r'\becb\b', r'\bcentral bank\b', r'\bbond purchase\b', r'\bquantitative\b'],
             "geopolitical": [r'\bwar\b', r'\belection\b', r'\btrade\b', r'\bsanction\b', r'\bconflict\b'],
             "economic_data": [r'\bCPI\b', r'\bNFP\b', r'\bGDP\b', r'\bunemployment\b', r'\binflation\b'],
             "regulatory": [r'\bSEC\b', r'\bregulation\b', r'\bcompliance\b', r'\blaw\b'],
@@ -288,7 +289,7 @@ class MacroNewsAgent(Agent):
             "rates": [r'\brate hike\b', r'\brate cut\b', r'\byield\b'],
             "inflation": [r'\binflation\b', r'\bCPI\b', r'\bprices\b'],
             "dollar": [r'\bdollar\b', r'\bUSD\b', r'\bDXY\b'],
-            "stocks": [r'\bstock\b', r'\bequity\b', r'\bmarket\b'],
+            "stocks": [r'\bstock\b', r'\bequity\b', r'\bmarket\b', r'\binstitutional\b'],
             "crypto": [r'\bbitcoin\b', r'\bcrypto\b', r'\bethereum\b'],
             "commodities": [r'\boil\b', r'\bgold\b', r'\bcommodity\b'],
         }
