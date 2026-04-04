@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 import asyncio
+import pandas as pd
 
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import get_event_bus
@@ -21,7 +22,7 @@ from finance_service.agents.market_regime_agent import MarketRegimeAgent
 from finance_service.agents.macro_news_agent import MacroNewsAgent
 from finance_service.agents.analysis_agent import AnalysisAgent
 from finance_service.agents.news_agent import NewsAgent
-from finance_service.core.models import IndicatorsSnapshot
+
 
 logger = logging.getLogger(__name__)
 
@@ -306,7 +307,7 @@ class SymbolSelectorAgent(Agent):
             # Quick try: if NewsAgent has cached data for this symbol, we could extract
             # For now, request via news_agent.run
             try:
-                news_report = asyncio.run(self.news_agent.run(symbol))
+                news_report = await self.news_agent.run(symbol)
                 news_sentiment = {
                     "sentiment_score": news_report.payload.get("sentiment_score", 0.0),
                     "sentiment_label": news_report.payload.get("sentiment_label", "neutral"),
