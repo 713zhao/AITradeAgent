@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import Event, Events, get_event_bus
+from skills.exit.exit import ExitStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,13 @@ class ExitAgent(Agent):
         self.analysis_agent = analysis_agent
         self.strategy_agent = strategy_agent
         logger.info("ExitAgent initialized with enhanced re-analysis capability.")
+        # Load exit strategy config
+        if self.config:
+            self.exit_strategy = self.config.get("risk.exit_strategy", "atr")
+            self.partial_target_pct = self.config.get("risk.partial_target_pct", 0.02)
+        else:
+            self.exit_strategy = "atr"
+            self.partial_target_pct = 0.02
 
     async def run(self, positions: Optional[List[Dict[str, Any]]] = None, 
                   perform_strategy_check: bool = False,
@@ -79,7 +87,7 @@ class ExitAgent(Agent):
 
     async def _check_reactive_exits(self, positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Check for stop-loss and take-profit exit conditions.
+        Check for stop-loss and take-profit exit conditions based on configured strategy.
         
         Returns:
             List of triggered exits
@@ -92,6 +100,7 @@ class ExitAgent(Agent):
             current_price = pos.get("current_price")
             stop_loss = pos.get("stop_loss_price")
             take_profit = pos.get("take_profit_price")
+            entry_price = pos.get("avg_cost") or pos.get("entry_price")
 
             # Fetch fresh price if missing
             if current_price is None and self.data_agent:
@@ -111,15 +120,41 @@ class ExitAgent(Agent):
                 except Exception as e:
                     logger.warning(f"Failed to fetch price for {symbol}: {e}")
 
-            if current_price is None:
-                logger.debug(f"Skipping {symbol}: no price available")
+            if current_price is None or entry_price is None or quantity is None:
+                logger.debug(f"Skipping {symbol}: missing essential data (price/entry/qty)")
                 continue
 
             reason = None
-            if stop_loss and current_price <= stop_loss:
-                reason = f"Stop loss triggered: price ${current_price:.2f} <= ${stop_loss:.2f}"
-            elif take_profit and current_price >= take_profit:
-                reason = f"Take profit triggered: price ${current_price:.2f} >= ${take_profit:.2f}"
+            exit_qty = quantity  # default full exit
+            # Determine exit based on strategy
+            if self.exit_strategy == "atr":
+                # Use stored stop_loss and take_profit (set at trade execution)
+                if stop_loss and current_price <= stop_loss:
+                    reason = f"ATR stop triggered: price ${current_price:.2f} <= ${stop_loss:.2f}"
+                elif take_profit and current_price >= take_profit:
+                    reason = f"ATR take profit triggered: price ${current_price:.2f} >= ${take_profit:.2f}"
+            elif self.exit_strategy == "fixed_pct":
+                # Use configured fixed percentages (stop_loss_default_pct, take_profit_default_pct) if not stored
+                sl_pct = self.config.get("risk.stop_loss_default_pct", 0.015) if self.config else 0.015
+                tp_pct = self.config.get("risk.take_profit_default_pct", 0.03) if self.config else 0.03
+                stop = entry_price * (1 - sl_pct)
+                take = entry_price * (1 + tp_pct)
+                if current_price <= stop:
+                    reason = f"Fixed % stop triggered ({sl_pct*100:.1f}%): price ${current_price:.2f} <= ${stop:.2f}"
+                elif current_price >= take:
+                    reason = f"Fixed % take profit triggered ({tp_pct*100:.1f}%): price ${current_price:.2f} >= ${take:.2f}"
+            elif self.exit_strategy == "partial_trail":
+                # Use ATR-based stop (from position) and a partial target
+                partial_target = entry_price * (1 + self.partial_target_pct)
+                if stop_loss and current_price <= stop_loss:
+                    reason = f"ATR stop (partial_trail mode): price ${current_price:.2f} <= ${stop_loss:.2f}"
+                elif current_price >= partial_target:
+                    # For now, exit full position at partial target (simplified)
+                    reason = f"Partial target ({self.partial_target_pct*100:.0f}%) reached: price ${current_price:.2f} >= ${partial_target:.2f} → exit full"
+                else:
+                    reason = None
+            else:
+                logger.warning(f"Unknown exit_strategy: {self.exit_strategy}")
 
             if reason:
                 exit_record = {
