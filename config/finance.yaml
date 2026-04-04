@@ -4,8 +4,14 @@ risk:
   max_daily_loss_pct: 2.0
   max_drawdown_pct: 15.0
   default_risk_budget_pct: 10
-  stop_loss_default_pct: 1.5
-  take_profit_default_pct: 3.0
+  # Exit strategy configuration
+  exit_strategy: "atr"  # "fixed_pct", "atr", "partial_trail"
+  stop_loss_default_pct: 1.5  # used only if exit_strategy == "fixed_pct"
+  take_profit_default_pct: 3.0  # used only if exit_strategy == "fixed_pct"
+  atr_multiplier_sl: 2.0  # for atr strategy
+  atr_multiplier_tp: 4.0  # for atr strategy
+  partial_target_pct: 0.02  # for partial_trail strategy (2% gain)
+  trail_stop_multiplier: 1.5  # for partial_trail, ATR multiplier for trailing stop
   max_concurrent_positions: 25
   min_position_size_usd: 100
   approval_required_pct: 0.75
