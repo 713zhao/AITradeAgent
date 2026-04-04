@@ -1,7 +1,7 @@
 # AITradeAgent - Full System Architecture
 
-**Version:** 3.0  
-**Last Updated:** 2026-03-30  
+**Version:** 4.0  
+**Last Updated:** 2026-04-04  
 **Source:** `finance_service/agents/` + `finance_service/app.py`
 
 ---
@@ -11,6 +11,8 @@
 AITradeAgent is an **autonomous multi-agent trading research system** built around an event-driven architecture. A central `MainOrchestratorAgent` wires together 13 specialized agents, each with a single responsibility. Agents communicate via an async **Event Bus** — no agent directly calls another; they publish and subscribe to named events.
 
 The system continuously scans markets, analyzes candidates, generates trade proposals, enforces risk rules, executes orders, monitors positions, and reports everything to Telegram.
+
+**Phase 3 addition:** An LLM-powered pre-selection layer sits between discovery and analysis. After `MarketScannerAgent` discovers up to 50+ candidates, `SymbolSelectorAgent` uses `MarketRegimeAgent` and `MacroNewsAgent` context to rank them via LLM and return the top 5–10 highest-conviction symbols. Only these proceed to deep analysis — reducing cost and noise.
 
 ---
 
@@ -50,7 +52,24 @@ The system continuously scans markets, analyzes candidates, generates trade prop
     │   MarketScannerAgent              │       │                       │
     │   Emits: MARKET_SCANNED           │       │         ┌─────────────┴─────────┐
     └──────────┬───────────────────────┘       │         │(if check fails)       │
-               │ (per symbol)                  │         │                       │
+               │ (50+ candidates)              │         │                       │
+    ┌──────────────────────────────────────────────────────────┐
+    │         LLM Pre-Selection Pipeline (Phase 3) ✅          │
+    │                                                          │
+    │  ┌─────────────────┐   ┌────────────────────────┐       │
+    │  │MarketRegimeAgent│   │MacroNewsAgent           │       │
+    │  │ 5 indices, 90d  │   │ SPY/QQQ/DIA news feeds  │       │
+    │  │ SMA20/50/200    │   │ VADER sentiment scoring │       │
+    │  │ Risk-on/off flag│   │ categories + catalysts  │       │
+    │  └────────┬────────┘   └──────────┬─────────────┘       │
+    │           └────────────┬──────────┘                      │
+    │                        ▼                                 │
+    │       SymbolSelectorAgent (LLM ranking)                  │
+    │       50 candidates → top 5–10 picks                    │
+    │       gpt-4o-mini via OpenRouter (~13k tokens)           │
+    └──────────────┬───────────────────────────────────────────┘
+                   │ (top N symbols)
+               │ (per ranked symbol)                  │         │                       │
     ┌──────────▼────────────────────────┐      │    ┌────▼──────────────────┐
     │    RankingAgent (Phase 2)          │      │    │ POSITION_DEGRADED     │
     │  • 5-factor re-ranking             │      │    │ (sent back through    │
@@ -139,6 +158,16 @@ The system continuously scans markets, analyzes candidates, generates trade prop
 | # | Agent | `agent_id` | File | Purpose |
 |---|-------|-----------|------|---------|
 | 17 | RankingAgent | `ranking_agent` | `ranking_agent.py` | ✅ Multi-factor symbol ranking with explainability and scoring breakdown |
+
+### LLM Symbol Selection Agents (Phase 3 ✅)
+
+| # | Agent | `agent_id` | File | Purpose |
+|---|-------|-----------|------|---------|
+| 18 | MarketRegimeAgent | `market_regime_agent` | `market_regime_agent.py` | ✅ Broad market context from 5 indices (SP500/NASDAQ/DOW/VIX/RUSSELL2000); risk-on/off flag, volatility regime, trend strength |
+| 19 | MacroNewsAgent | `macro_news_agent` | `macro_news_agent.py` | ✅ Macro news aggregation from SPY/QQQ/DIA feeds; VADER sentiment; categories: monetary_policy, geopolitical, economic_data, regulatory, sector_rotation |
+| 20 | SymbolSelectorAgent | `symbol_selector_agent` | `symbol_selector_agent.py` | ✅ LLM-powered symbol ranking; 50 candidates → top 5–10 high-conviction picks; 5-dimension scoring; Telegram report with token usage |
+
+> **Docs:** [MARKET_REGIME_AGENT.md](MARKET_REGIME_AGENT.md) · [MACRO_NEWS_AGENT.md](MACRO_NEWS_AGENT.md) · [SYMBOL_SELECTOR_AGENT.md](SYMBOL_SELECTOR_AGENT.md)
 
 ---
 
@@ -1039,6 +1068,9 @@ Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
 | TradingAgentsAnalyzer | Per-symbol after analysis ready | `ANALYSIS_COMPLETE` |
 | TradingAgentsAPI | Per LLM request | REST API (`POST /analyze`) |
 | RankingAgent | Per discovery batch | `MARKET_SCANNED` (re-ranking) |
+| MarketRegimeAgent | Per LLM selection run (60-min cache) | Called by `SymbolSelectorAgent` |
+| MacroNewsAgent | Per LLM selection run (6-hour cache) | Called by `SymbolSelectorAgent` |
+| SymbolSelectorAgent | Per discovery batch | `MARKET_SCANNED` (after scanner, before per-symbol pipeline) |
 | TelegramAgent | Always on | User commands + incoming messages |
 
 ---
@@ -1149,6 +1181,7 @@ See [NEXT_STEPS.md](NEXT_STEPS.md) for the full roadmap. Top items:
 | ~~High~~ | ~~Integrate Gemini LLM for regime analysis~~ | ✅ Done — TradingAgentsAnalyzer + Gemini 2.5 (Flash/Pro) |
 | ~~Medium~~ | ~~Add TradingAgents framework integration~~ | ✅ Done — LLM multi-agent analysis engine + REST API |
 | ~~Medium~~ | ~~Add `RankingAgent` as separate agent~~ | ✅ Done — Multi-factor ranking with 5-factor scoring (liquidity, momentum, value, growth, quality) |
+| ~~High~~ | ~~Add LLM-powered symbol pre-selection~~ | ✅ Done — `SymbolSelectorAgent` (Phase 3): 50→5-10 picks via gpt-4o-mini, enriched with market regime + macro context |
 | Medium | Implement position degradation alerts | Re-analyze held positions for thesis invalidation (via ExitAgent) |
 | Low | Add backtest harness for strategy evaluation | Historical performance validation |
 | Low | Add options analytics agent | Volatility surface analysis, pricing models |

@@ -125,15 +125,18 @@ class MarketRegimeAgent(Agent):
                 symbol = cfg["symbol"]
                 name = cfg["name"]
                 try:
-                    # Fetch 90 days of data to compute moving averages
+                    # Fetch 300 days of data to compute SMA200 (needs 200+ trading days)
                     end_dt = datetime.now().date()
-                    start_dt = end_dt - timedelta(days=90)
+                    start_dt = end_dt - timedelta(days=300)
                     df = await self.data_agent._fetch_data_for_symbol(
                         symbol, start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), "1d"
                     )
                     if df is None or len(df) < 20:
                         logger.warning(f"Insufficient data for index {symbol}")
                         continue
+
+                    # Normalize column names to lowercase (DataAgent may return mixed case)
+                    df.columns = [c.lower() for c in df.columns]
 
                     # Get latest close
                     latest = df.iloc[-1]
@@ -159,9 +162,10 @@ class MarketRegimeAgent(Agent):
                     sma50 = float(df["close"].rolling(50).mean().iloc[-1])
                     sma200 = float(df["close"].rolling(200).mean().iloc[-1])
 
-                    vs_sma20_pct = (close - sma20) / sma20 * 100
-                    vs_sma50_pct = (close - sma50) / sma50 * 100
-                    vs_sma200_pct = (close - sma200) / sma200 * 100
+                    import math
+                    vs_sma20_pct = (close - sma20) / sma20 * 100 if sma20 and not math.isnan(sma20) else 0.0
+                    vs_sma50_pct = (close - sma50) / sma50 * 100 if sma50 and not math.isnan(sma50) else 0.0
+                    vs_sma200_pct = (close - sma200) / sma200 * 100 if sma200 and not math.isnan(sma200) else 0.0
 
                     # Volume ratio (last day vs 20-day avg)
                     vol = float(latest["volume"])

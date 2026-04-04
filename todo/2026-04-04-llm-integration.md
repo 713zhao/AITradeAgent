@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-04
 **Branch:** improve/llm-regime-phase1
-**Status:** Phase 2 Complete ✅ | Phase 3 In Progress 🔄
+**Status:** Phase 2 Complete ✅ | Phase 3 Complete ✅
 
 ---
 
@@ -63,8 +63,8 @@
 - [x] Verified SymbolSelectorAgent calls LLM (Gemini via OpenRouter) and returns ranked JSON
 - [x] Confirmed top 5–10 symbols passed to analysis after ranking (from 50 candidates)
 - [x] Telegram receives ranked list with score, breakdown, rationale, token usage (~12k tokens/run)
-- [ ] Verify MarketRegimeAgent returns valid regime context (logs show no explicit init message)
-- [ ] Verify MacroNewsAgent fetches and filters macro news
+- [x] Verify MarketRegimeAgent returns valid regime context (fixed: 300-day lookback, col normalization, SMA200 NaN guard; yfinance confirmed 206 rows)
+- [x] Verify MacroNewsAgent fetches and filters macro news (fixed: yfinance new API format; confirmed 3 relevant articles, sentiment 0.107)
 - [ ] Check that trades execute if strategy generates proposals
 
 ---

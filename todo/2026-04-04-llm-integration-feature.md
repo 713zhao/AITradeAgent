@@ -202,10 +202,14 @@ TA_DEEP_THINK_MODEL=gemini-1.5-pro      # Slower, expensive (for News/Regime)
 - [x] Added `/admin/force_scan` endpoint to bypass market-hours check
 - [x] Verified logs: `SymbolSelector evaluating 50 candidates`, `SymbolSelector ranked 5 symbols (from 50) using 12795 tokens`
 
-### Phase 3: Smoke Tests 🔄
+### Phase 3: Smoke Tests ✅
 - [x] Confirmed watchlist shrinks from 50 candidates → 5-10 LLM-ranked symbols
 - [x] Telegram notification includes: ranked list, scores, breakdown, rationale, token count
 - [x] LLM token usage visible in service logs: ~12,795 tokens/scan
+- [x] Fixed MarketRegimeAgent: 300-day lookback for SMA200 (was 90d), column normalization, NaN guard
+- [x] Fixed MacroNewsAgent: yfinance new API format (nested content dict vs flat dict)
+- [x] Created docs: MARKET_REGIME_AGENT.md, MACRO_NEWS_AGENT.md, SYMBOL_SELECTOR_AGENT.md
+- [x] Updated AGENT_ARCHITECTURE.md to v4.0 with Phase 3 diagram and agents
 - [ ] Wait for first analysis → strategy → risk flow (market hours required)
 - [ ] Verify at least 1 trade executes (paper broker)
 - [ ] Check portfolio table for open positions
@@ -332,4 +336,4 @@ If LLM integration causes issues:
 
 ---
 
-**Status:** Phase 1 Complete ✅ | Phase 2 Complete ✅ | Phase 3 In Progress 🔄
+**Status:** Phase 1 Complete ✅ | Phase 2 Complete ✅ | Phase 3 Complete ✅

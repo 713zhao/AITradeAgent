@@ -168,20 +168,35 @@ class MacroNewsAgent(Agent):
             # Deduplicate by title (case-insensitive)
             seen_titles = set()
             for item in all_news:
-                title = item.get("title", "").strip()
+                # Handle both old API format {title, providerPublishTime, ...}
+                # and new API format {id, content: {title, pubDate, summary, provider: {displayName}}}
+                if "content" in item and isinstance(item["content"], dict):
+                    c = item["content"]
+                    title = c.get("title", "").strip()
+                    summary = c.get("summary", "") or c.get("description", "")
+                    pub_time_raw = c.get("pubDate") or c.get("displayTime")
+                    source = (c.get("provider") or {}).get("displayName", "Yahoo Finance")
+                    url = (c.get("canonicalUrl") or c.get("clickThroughUrl") or {}).get("url", "")
+                else:
+                    title = item.get("title", "").strip()
+                    summary = item.get("summary", "")
+                    pub_time_raw = item.get("providerPublishTime")
+                    source = item.get("publisher", "Yahoo Finance")
+                    url = item.get("link", "")
+
                 if not title or title.lower() in seen_titles:
                     continue
                 seen_titles.add(title.lower())
 
-                # Parse published time (could be epoch ms or ISO)
-                pub_time = item.get("providerPublishTime")
-                if pub_time:
-                    if isinstance(pub_time, (int, float)):
-                        pub_dt = datetime.fromtimestamp(pub_time)
+                # Parse published time (epoch ms or ISO string)
+                if pub_time_raw:
+                    if isinstance(pub_time_raw, (int, float)):
+                        pub_dt = datetime.fromtimestamp(pub_time_raw)
                     else:
                         try:
-                            pub_dt = datetime.fromisoformat(pub_time.replace("Z", "+00:00"))
-                        except:
+                            pub_dt = datetime.fromisoformat(str(pub_time_raw).replace("Z", "+00:00"))
+                            pub_dt = pub_dt.replace(tzinfo=None)  # strip tz for comparison
+                        except Exception:
                             pub_dt = datetime.utcnow()
                 else:
                     pub_dt = datetime.utcnow()
@@ -191,10 +206,10 @@ class MacroNewsAgent(Agent):
 
                 articles.append({
                     "headline": title,
-                    "summary": item.get("summary", ""),
-                    "source": item.get("publisher", "Yahoo Finance"),
+                    "summary": summary,
+                    "source": source,
                     "published_at": pub_dt.isoformat(),
-                    "url": item.get("link", "")
+                    "url": url
                 })
 
                 if len(articles) >= max_articles:
