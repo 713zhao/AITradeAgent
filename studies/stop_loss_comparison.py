@@ -10,12 +10,14 @@ START_DATE = "2023-01-01"
 END_DATE = "2024-12-31"
 
 def compute_arrays(df):
-    # Flatten columns if MultiIndex (yfinance sometimes returns MultiIndex)
+    # yFinance may return MultiIndex columns; flatten to single-level
     if isinstance(df.columns, pd.MultiIndex):
+        # Keep only first level ('Close', 'High', etc.) and drop second (ticker)
         df.columns = df.columns.get_level_values(0)
-    close = np.ravel(df['Close'].to_numpy(dtype=float))
-    high = np.ravel(df['High'].to_numpy(dtype=float))
-    low = np.ravel(df['Low'].to_numpy(dtype=float))
+    # Extract 1D arrays; use .squeeze() to remove any extra dimensions
+    close = df['Close'].to_numpy(dtype=float).squeeze()
+    high = df['High'].to_numpy(dtype=float).squeeze()
+    low = df['Low'].to_numpy(dtype=float).squeeze()
     # Compute SMA20 using numpy
     sma20 = np.full_like(close, np.nan, dtype=float)
     if len(close) >= 20:
