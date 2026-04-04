@@ -26,8 +26,19 @@ COMMISSION = 0.001  # 0.1% per trade
 # SMA20 trend entry
 def compute_sma20(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # Normalize column names to lowercase
-    df.columns = [c.lower() for c in df.columns]
+    # Handle possible MultiIndex columns from yfinance
+    if isinstance(df.columns, pd.MultiIndex):
+        # flatten: ('Adj Close', '') -> 'adj_close'
+        df.columns = ['_'.join([str(c) for c in col if c]).strip().lower() for col in df.columns.values]
+    else:
+        df.columns = [c.lower() for c in df.columns]
+    # Ensure required columns exist
+    if 'close' not in df.columns and 'adj_close' in df.columns:
+        df['close'] = df['adj_close']
+    if 'high' not in df.columns and 'high' not in df.columns:
+        raise ValueError(f"Missing high column: {df.columns}")
+    if 'low' not in df.columns and 'low' not in df.columns:
+        raise ValueError(f"Missing low column: {df.columns}")
     df['sma20'] = df['close'].rolling(20).mean()
     return df
 
@@ -76,7 +87,7 @@ def simulate_atr(entry_price: float, hist_df: pd.DataFrame, future_df: pd.DataFr
     tr['l-pc'] = abs(low - close.shift(1))
     atr_series = tr.max(axis=1).rolling(14).mean()
     atr = atr_series.iloc[-1]
-    if pd.isna(atr):
+    if pd.isna(atr) or atr <= 0:
         return None
     stop_price = entry_price - atr_mult_sl * atr
     take_price = entry_price + atr_mult_tp * atr
@@ -111,7 +122,6 @@ def simulate_atr(entry_price: float, hist_df: pd.DataFrame, future_df: pd.DataFr
 
 def simulate_partial_trail(entry_price: float, hist_df: pd.DataFrame, future_df: pd.DataFrame,
                           partial_pct=0.02, trail_atr_mult=1.5) -> Dict:
-    # Partial target at entry*(1+partial_pct)
     partial_target = entry_price * (1 + partial_pct)
     # Compute ATR for trailing stop
     high = hist_df['high']
@@ -123,16 +133,18 @@ def simulate_partial_trail(entry_price: float, hist_df: pd.DataFrame, future_df:
     tr['l-pc'] = abs(low - close.shift(1))
     atr_series = tr.max(axis=1).rolling(14).mean()
     atr = atr_series.iloc[-1]
-    if pd.isna(atr):
+    if pd.isna(atr) or atr <= 0:
         return None
-    # Trail stop: entry - trail_atr_mult * ATR (static for simplicity; could update as price rises)
     trail_stop = entry_price - trail_atr_mult * atr
-    # Sim: first hit partial_target -> sell half at that price, then remainder hit trail_stop or end
-    # For simplicity as a single trade metric: we track overall P&L assuming 50% sold at partial, 50% at final exit
-    half_qty = 0.5
+    # Find partial exit day
+    partial_day = None
+    for i, (idx, row) in enumerate(future_df.iterrows()):
+        if row['high'] >= partial_target:
+            partial_day = i + 1
+            break
+    # For remainder, check trail_stop
     exit_price_rem = None
     exit_reason_rem = None
-    # For remainder, check trail_stop and final price
     for i, (idx, row) in enumerate(future_df.iterrows()):
         if row['low'] <= trail_stop:
             exit_price_rem = trail_stop
@@ -141,17 +153,10 @@ def simulate_partial_trail(entry_price: float, hist_df: pd.DataFrame, future_df:
     if exit_price_rem is None:
         exit_price_rem = future_df['close'].iloc[-1]
         exit_reason_rem = "end"
-    # Overall blended return
+    # Blended P&L: 50% at partial, 50% at final
     pnl_partial = (partial_target - entry_price) / entry_price
     pnl_rem = (exit_price_rem - entry_price) / entry_price
     blended_pnl = 0.5 * pnl_partial + 0.5 * pnl_rem
-    # Determine which exit day occurs first for reporting (partial day)
-    # Find day of partial_target hit
-    partial_day = None
-    for i, (idx, row) in enumerate(future_df.iterrows()):
-        if row['high'] >= partial_target:
-            partial_day = i + 1
-            break
     exit_day = partial_day if partial_day is not None else len(future_df)
     return {
         'exit_price': float(exit_price_rem),
@@ -224,7 +229,6 @@ def run_study():
     # Group by strategy
     summary = df_res.groupby('strategy')['pnl_pct'].agg(['mean','std','count','sum','min','max'])
     summary['win_rate'] = df_res.groupby('strategy')['pnl_pct'].apply(lambda x: (x>0).mean())
-    # Average holding days
     summary['avg_holding_days'] = df_res.groupby('strategy')['exit_day'].mean()
     summary = summary.round(4)
     summary_path = Path('studies/stop_loss_comparison_summary.csv')
