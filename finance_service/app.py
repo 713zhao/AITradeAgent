@@ -16,6 +16,9 @@ from finance_service.core.event_bus import get_event_bus, Event, Events
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.scheduler_agent import SchedulerAgent
 from finance_service.agents.market_scanner_agent import MarketScannerAgent
+from finance_service.agents.market_regime_agent import MarketRegimeAgent
+from finance_service.agents.macro_news_agent import MacroNewsAgent
+from finance_service.agents.symbol_selector_agent import SymbolSelectorAgent
 from finance_service.agents.data_agent import DataAgent
 from finance_service.agents.fundamentals_agent import FundamentalsAgent
 from finance_service.agents.options_data_agent import OptionsDataAgent
@@ -57,6 +60,9 @@ class MainOrchestratorAgent:
         # Agents will be initialized in startup_orchestrator
         self.scheduler_agent: Optional[SchedulerAgent] = None
         self.market_scanner_agent: Optional[MarketScannerAgent] = None
+        self.market_regime_agent: Optional[MarketRegimeAgent] = None
+        self.macro_news_agent: Optional[MacroNewsAgent] = None
+        self.symbol_selector_agent: Optional[SymbolSelectorAgent] = None
         self.data_agent: Optional[DataAgent] = None
         self.news_agent: Optional[NewsAgent] = None
         self.analysis_agent: Optional[AnalysisAgent] = None
@@ -126,6 +132,9 @@ class MainOrchestratorAgent:
         self.scheduler_agent = SchedulerAgent(simple_config)
         self.market_scanner_agent = MarketScannerAgent(config_engine)
         self.data_agent = DataAgent(config_engine)
+        # New LLM-powered context agents
+        self.market_regime_agent = MarketRegimeAgent(config_engine, data_agent=self.data_agent, market_scanner=self.market_scanner_agent)
+        self.macro_news_agent = MacroNewsAgent(config_engine)
         self.news_agent = NewsAgent(config_engine)
         # FundamentalsAgent: fetch fundamental metrics (Phase 4)
         self.fundamentals_agent = FundamentalsAgent(config_engine)
@@ -137,6 +146,16 @@ class MainOrchestratorAgent:
         self.regime_agent = RegimeAgent(config_engine)
         # AnalysisAgent: uses default indicator periods; no config needed
         self.analysis_agent = AnalysisAgent()
+        # SymbolSelectorAgent: LLM-powered ranking with market context (Phase X)
+        self.symbol_selector_agent = SymbolSelectorAgent(
+            config_engine=config_engine,
+            data_agent=self.data_agent,
+            market_scanner=self.market_scanner_agent,
+            market_regime_agent=self.market_regime_agent,
+            macro_news_agent=self.macro_news_agent,
+            analysis_agent=self.analysis_agent,
+            news_agent=self.news_agent
+        )
         # StrategyAgent: needs config_engine and portfolio_agent (injected after)
         self.strategy_agent = StrategyAgent(config_engine, portfolio_agent=None)
         # RiskAgent: uses simple_config with policy dict
@@ -228,6 +247,23 @@ class MainOrchestratorAgent:
         symbols = event.data.get("symbols", [])
         rated_symbols = event.data.get("rated_symbols", [])
         logger.info(f"Processing {len(symbols)} symbols: {symbols}")
+
+        # Use SymbolSelectorAgent (LLM) to rank and filter candidates
+        if self.symbol_selector_agent and self.symbol_selector_agent._llm_manager:
+            try:
+                logger.info("Invoking SymbolSelectorAgent for ranking...")
+                selector_report = await self.symbol_selector_agent.run({"symbols": symbols})
+                if selector_report.status == "success":
+                    rankings = selector_report.payload.get("rankings", [])
+                    selected_symbols = [r["symbol"] for r in rankings[:20]]  # top 20
+                    logger.info(f"SymbolSelector ranked {len(selected_symbols)} symbols (from {len(symbols)})")
+                    symbols = selected_symbols  # override processing list
+                else:
+                    logger.warning(f"SymbolSelector failed: {selector_report.message}; using original list")
+            except Exception as e:
+                logger.error(f"SymbolSelector error: {e}; proceeding with unfiltered list")
+        else:
+            logger.info("SymbolSelector not available; proceeding with unfiltered list")
 
         # Send market scan summary to Telegram (always; includes details and ranked scores)
         if self.telegram_agent and self.telegram_agent.enabled:
