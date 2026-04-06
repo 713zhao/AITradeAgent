@@ -12,6 +12,7 @@ from finance_service.core.config import Config
 from finance_service.portfolio.models import Position, Trade, Portfolio, TradeStatus
 from finance_service.portfolio.trade_repository import TradeRepository
 from finance_service.portfolio.equity_calculator import EquityCalculator
+from finance_service.core.fx_rates import fx_rate_service
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class PortfolioAgent(Agent):
         self._last_price_update = datetime(1970, 1, 1)  # Never updated initially
         self._price_update_interval = 300  # seconds (5 minutes); match scheduler frequency
         self.last_price_fetch_error: Optional[str] = None  # Latest yFinance error, for health checks
+        self._last_fx_refresh = datetime(1970, 1, 1)  # Never refreshed initially
         logger.info("PortfolioAgent initialized.")
 
     async def run(self, **kwargs) -> AgentReport:
@@ -160,83 +162,68 @@ class PortfolioAgent(Agent):
 
 
     async def update_prices_from_data_agent(self):
-        """Fetch latest prices for all positions in a single batch to avoid rate limiting."""
+        """Fetch live intraday prices for all positions (bypasses 24h daily cache)."""
         if not self.data_agent:
             return
-        
+
         async with self._price_update_lock:
             symbols = list(self.repository.positions.keys())
             if not symbols:
                 return
-            
-            logger.info(f"Updating prices for {len(symbols)} positions (cache-first)")
 
-            # Step 1: serve from cache where possible
-            cache_hits = {}
-            stale_symbols = []
-            for symbol in symbols:
-                cached_df = self.data_agent.cache.get(symbol, "1d")
-                if cached_df is not None and not cached_df.empty:
+            logger.info(f"Updating prices for {len(symbols)} positions (live intraday)")
+
+            try:
+                # Always call fetch_live_prices — it uses 1-minute bars so prices
+                # reflect the current market value, not yesterday's EOD close.
+                live = await asyncio.to_thread(
+                    self.data_agent.provider.fetch_live_prices,
+                    symbols,
+                )
+
+                updated_count = 0
+                for symbol, price in live.items():
+                    if price and price > 0:
+                        self.repository.update_position(symbol, current_price=price)
+                        updated_count += 1
+                        logger.debug(f"Updated {symbol} price to {price:.4f}")
+
+                logger.info(f"Live price update: {updated_count}/{len(symbols)} positions refreshed")
+                self.last_price_fetch_error = None
+            except Exception as e:
+                self.last_price_fetch_error = f"Live price fetch failed: {e}"
+                logger.error(f"Live price fetch failed: {e}", exc_info=True)
+                # Fallback: serve from 1d cache so the service doesn't break
+                logger.info("Falling back to cached daily prices")
+                for symbol in symbols:
                     try:
-                        close_col = 'Close' if 'Close' in cached_df.columns else 'close'
-                        latest_price = float(cached_df[close_col].iloc[-1])
-                        if latest_price > 0:
-                            cache_hits[symbol] = latest_price
-                            continue
-                    except Exception as e:
-                        logger.debug(f"Cache price extraction failed for {symbol}: {e}")
-                stale_symbols.append(symbol)
+                        cached_df = self.data_agent.cache.get(symbol, "1d")
+                        if cached_df is not None and not cached_df.empty:
+                            close_col = "Close" if "Close" in cached_df.columns else "close"
+                            price = float(cached_df[close_col].iloc[-1])
+                            if price > 0:
+                                self.repository.update_position(symbol, current_price=price)
+                    except Exception:
+                        pass
 
-            logger.info(f"Price update: {len(cache_hits)} from cache, {len(stale_symbols)} stale/missing")
-
-            # Apply cached prices immediately (no network I/O)
-            for symbol, price in cache_hits.items():
-                self.repository.update_position(symbol, current_price=price)
-
-            # Step 2: only fetch stale symbols from yFinance
-            if stale_symbols:
-                try:
-                    from datetime import datetime, timedelta
-                    end_date = datetime.now().strftime("%Y-%m-%d")
-                    start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-
-                    results = await asyncio.to_thread(
-                        self.data_agent.provider.fetch_ohlcv,
-                        stale_symbols,
-                        start_date=start_date,
-                        end_date=end_date,
-                        interval="1d"
-                    )
-
-                    updated_count = 0
-                    for symbol, df in results.items():
-                        if df is not None and not df.empty:
-                            # Correctly store in cache using set(symbol, df, interval)
-                            try:
-                                self.data_agent.cache.set(symbol, df, "1d")
-                            except Exception as e:
-                                logger.debug(f"Cache store failed for {symbol}: {e}")
-
-                            try:
-                                latest_price = float(df['Close'].iloc[-1])
-                                if latest_price > 0:
-                                    self.repository.update_position(symbol, current_price=latest_price)
-                                    updated_count += 1
-                                    logger.debug(f"Updated {symbol} price to {latest_price}")
-                                else:
-                                    logger.warning(f"Invalid price fetched for {symbol}: {latest_price}")
-                            except Exception as e:
-                                logger.warning(f"Failed to extract price from data for {symbol}: {e}")
-
-                    logger.info(f"Fetched {updated_count}/{len(stale_symbols)} stale prices from yFinance")
-                except Exception as e:
-                    self.last_price_fetch_error = f"Batch yFinance fetch failed: {e}"
-                    logger.error(f"Batch price fetch failed: {e}", exc_info=True)
-                    logger.info("Falling back to individual fetch method")
-                    await self._update_prices_individual()
-
-            self.last_price_fetch_error = None  # Clear error on successful run
             self._last_price_update = datetime.utcnow()
+            await self._refresh_fx_rates_if_stale()
+
+    async def _refresh_fx_rates_if_stale(self) -> None:
+        """Refresh FX rates once per calendar day (UTC) for all non-USD positions."""
+        today = datetime.utcnow().date()
+        if self._last_fx_refresh.date() >= today:
+            return
+        try:
+            success = await asyncio.to_thread(fx_rate_service.refresh_now)
+            self.repository.update_position_fx_rates()
+            self._last_fx_refresh = datetime.utcnow()
+            if success:
+                logger.info("FX rates refreshed and applied to all positions")
+            else:
+                logger.warning("FX rate refresh failed; using cached/fallback rates")
+        except Exception as e:
+            logger.error(f"FX rate refresh error: {e}", exc_info=True)
 
     async def _update_prices_individual(self):
         """Fallback: fetch prices individually with limited concurrency."""

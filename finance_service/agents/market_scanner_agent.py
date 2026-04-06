@@ -282,53 +282,58 @@ class MarketScannerAgent(Agent):
         prices: List[Dict[str, Any]] = []
         if data_agent:
             try:
-                # Batch fetch all symbols in one go to avoid rate limiting (was 401 errors)
+                # Use fetch_live_prices() to get real intraday prices (1-min bars),
+                # falling back to daily EOD if intraday is unavailable.
+                logger.info(f"[PriceMonitor] Fetching live prices for {len(symbols_to_check)} symbols")
+
+                live_prices = await asyncio.to_thread(
+                    data_agent.provider.fetch_live_prices,
+                    symbols_to_check,
+                )
+
+                # Also fetch recent daily bars for change_pct calculation
                 end_date = datetime.now().strftime("%Y-%m-%d")
-                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-                logger.info(f"[PriceMonitor] Batch fetching {len(symbols_to_check)} symbols via provider (start={start_date}, end={end_date})")
-                
-                # Call provider.fetch_ohlcv directly (uses batching and delays)
-                results = await asyncio.to_thread(
+                start_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+                daily_results = await asyncio.to_thread(
                     data_agent.provider.fetch_ohlcv,
                     symbols_to_check,
                     start_date=start_date,
                     end_date=end_date,
                     interval="1d"
                 )
-                
-                # Extract latest prices and optionally store in cache
-                for symbol, df in results.items():
-                    if df is not None and not df.empty:
-                        # Cache the fetched data for future single-symbol requests
+
+                for symbol in symbols_to_check:
+                    latest_close = live_prices.get(symbol)
+                    if latest_close is None or latest_close <= 0:
+                        continue
+
+                    # Compute change_pct vs previous daily close
+                    change_pct = None
+                    volume = None
+                    daily_df = daily_results.get(symbol)
+                    if daily_df is not None and not daily_df.empty and len(daily_df) >= 2:
+                        prev_close = float(daily_df["Close"].iloc[-2])
+                        if prev_close and prev_close != 0:
+                            change_pct = ((latest_close - prev_close) / prev_close) * 100
+                        if "Volume" in daily_df.columns:
+                            volume = int(daily_df["Volume"].iloc[-1])
+                        # Refresh daily cache with latest data
                         try:
-                            data_agent.cache.store(symbol, df, "1d")
-                        except Exception as e:
-                            logger.debug(f"Cache store failed for {symbol}: {e}")
-                        
-                        # Extract latest close price, volume, and change
-                        if len(df) >= 2 and 'Close' in df.columns:
-                            latest_close = float(df['Close'].iloc[-1])
-                            prev_close = float(df['Close'].iloc[-2])
-                            volume = int(df['Volume'].iloc[-1]) if 'Volume' in df.columns else None
-                            change_pct = ((latest_close - prev_close) / prev_close) * 100 if prev_close and prev_close != 0 else None
-                        elif not df.empty and 'Close' in df.columns:
-                            latest_close = float(df['Close'].iloc[-1])
-                            volume = int(df['Volume'].iloc[-1]) if 'Volume' in df.columns else None
-                            change_pct = None
-                        else:
-                            continue
-                        
-                        prices.append({
-                            "symbol": symbol,
-                            "price": latest_close,
-                            "volume": volume,
-                            "change_pct": change_pct,
-                            "timestamp": datetime.utcnow().isoformat(),
-                        })
-                logger.info(f"[PriceMonitor] Batch fetch produced {len(prices)}/{len(symbols_to_check)} valid price updates")
+                            data_agent.cache.store(symbol, daily_df, "1d")
+                        except Exception:
+                            pass
+
+                    prices.append({
+                        "symbol": symbol,
+                        "price": latest_close,
+                        "volume": volume,
+                        "change_pct": change_pct,
+                        "timestamp": datetime.utcnow().isoformat(),
+                    })
+
+                logger.info(f"[PriceMonitor] Live price fetch produced {len(prices)}/{len(symbols_to_check)} updates")
             except Exception as e:
-                logger.error(f"[PriceMonitor] Batch fetch failed: {e}", exc_info=True)
-                # Fallback to individual fetches if batch fails entirely
+                logger.error(f"[PriceMonitor] Live price fetch failed: {e}", exc_info=True)
                 logger.info("[PriceMonitor] Falling back to individual fetch method")
                 prices = []
                 for symbol in symbols_to_check:

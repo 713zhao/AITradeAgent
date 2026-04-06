@@ -227,6 +227,67 @@ class YfinanceProvider:
         
         return results
 
+    def fetch_live_prices(self, symbols: List[str]) -> Dict[str, float]:
+        """
+        Fetch real-time (intraday) last traded prices for a list of symbols.
+
+        Uses 1-minute bars for the current session so the price reflects what
+        is happening *right now*, not yesterday's EOD close.  Falls back to
+        the most-recent 1d close for any symbol where the intraday fetch fails.
+
+        Args:
+            symbols: List of ticker symbols
+
+        Returns:
+            Dict of {symbol: current_price}
+        """
+        if not symbols:
+            return {}
+
+        results: Dict[str, float] = {}
+        fallback: List[str] = []
+
+        # Batch into groups to respect rate limits
+        for i in range(0, len(symbols), self.config.batch_size):
+            batch = symbols[i:i + self.config.batch_size]
+            try:
+                self._add_jitter()
+                # period="1d" + interval="1m" gives today's 1-minute bars;
+                # the last row is the most recent traded price.
+                data = yf.download(
+                    " ".join(batch),
+                    period="1d",
+                    interval="1m",
+                    progress=False,
+                    auto_adjust=True,
+                    timeout=self.config.timeout_sec,
+                )
+                parsed = self._parse_yfinance_data(data, batch)
+                for sym, df in parsed.items():
+                    if df is not None and not df.empty and "Close" in df.columns:
+                        price = float(df["Close"].dropna().iloc[-1])
+                        if price > 0:
+                            results[sym] = price
+                            continue
+                    fallback.append(sym)
+            except Exception as e:
+                logger.warning(f"[fetch_live_prices] intraday batch failed: {e}")
+                fallback.extend(batch)
+
+            if i + self.config.batch_size < len(symbols):
+                self._enforce_batch_delay()
+
+        # Fall back to daily EOD close for any symbol that failed intraday
+        if fallback:
+            logger.info(f"[fetch_live_prices] Falling back to daily close for {fallback}")
+            daily = self.fetch_ohlcv(fallback, interval="1d")
+            for sym, df in daily.items():
+                if df is not None and not df.empty:
+                    results[sym] = float(df["Close"].iloc[-1])
+
+        logger.info(f"[fetch_live_prices] Got live prices for {len(results)}/{len(symbols)} symbols")
+        return results
+
     def fetch_fundamentals(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Fetch fundamental data for symbols using yfinance info.

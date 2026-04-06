@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from .models import Trade, Position, Portfolio, TradeStatus
 from finance_service.storage import get_portfolio_db
+from finance_service.core.fx_rates import fx_rate_service
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,10 @@ class TradeRepository:
                     pass
             self._trade_counter = max_num
             
+            # Apply current FX rates to all loaded positions
+            for sym, pos in self.positions.items():
+                pos.usd_fx_rate = fx_rate_service.get_usd_rate_for_symbol(sym)
+
             logger.info(f"TradeRepository loaded {len(self.trades)} trades and {len(self.positions)} positions from DB")
         except Exception as e:
             logger.error(f"Error loading trades from DB: {e}")
@@ -159,6 +164,7 @@ class TradeRepository:
                     current_price=price,
                     stop_loss_price=stop_loss,
                     take_profit_price=take_profit,
+                    usd_fx_rate=fx_rate_service.get_usd_rate_for_symbol(symbol),
                 )
                 self.positions[symbol] = position
             position.trades.append(trade.trade_id)
@@ -194,6 +200,7 @@ class TradeRepository:
                     current_price=price,
                     stop_loss_price=stop_loss,
                     take_profit_price=take_profit,
+                    usd_fx_rate=fx_rate_service.get_usd_rate_for_symbol(symbol),
                 )
                 self.positions[symbol] = position
                 position.trades.append(trade.trade_id)
@@ -449,8 +456,8 @@ class TradeRepository:
     
     def update_position_prices(self, prices: Dict[str, float]) -> None:
         """
-        Update current prices for all positions.
-        
+        Update current prices for all positions (and refresh FX rates for non-USD symbols).
+
         Args:
             prices: Dict of symbol → current_price
         """
@@ -458,7 +465,13 @@ class TradeRepository:
             position = self.get_position(symbol)
             if position:
                 position.current_price = price
+                position.usd_fx_rate = fx_rate_service.get_usd_rate_for_symbol(symbol)
                 position.updated_at = datetime.utcnow()
+
+    def update_position_fx_rates(self) -> None:
+        """Refresh USD conversion rates for all non-USD positions."""
+        for symbol, position in self.positions.items():
+            position.usd_fx_rate = fx_rate_service.get_usd_rate_for_symbol(symbol)
     
     def calculate_portfolio(self, initial_cash: float) -> Portfolio:
         """
@@ -470,15 +483,16 @@ class TradeRepository:
         Returns:
             Portfolio object with current state
         """
-        # Calculate current cash (initial - spent on open positions)
+        # Calculate current cash in USD.
+        # Use cost_basis_usd() so HK positions are properly converted (not treated as USD 1:1).
         spent = sum(
-            pos.cost_basis()
+            pos.cost_basis_usd()
             for pos in self.positions.values()
             if pos.quantity > 0  # Long positions only
         )
         # Shorts reduce cash available (margin requirement)
         short_margin = sum(
-            abs(pos.market_value())
+            abs(pos.market_value_usd())
             for pos in self.positions.values()
             if pos.quantity < 0  # Short positions
         )
