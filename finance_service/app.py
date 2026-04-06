@@ -869,23 +869,23 @@ def create_app():
             # Sort by rank and take top 10
             watchlist = sorted(watchlist, key=lambda x: x.get("rank", 9999))[:10]
             symbols = [item["symbol"] for item in watchlist]
-            # Fetch latest prices using DataAgent (async)
-            data_agent = _orchestrator.data_agent
-            if not data_agent:
-                return jsonify({"error": "DataAgent not available"}), 500
-            # Build a dict of symbol -> price
+            # Fetch latest prices directly via yfinance (simple and reliable)
+            import yfinance as yf
             prices = {}
             for sym in symbols:
                 try:
-                    report = await data_agent.run(symbol=sym, interval="1d", use_cache=True, cache_only=True)
-                    if report.status == "success" and "dataframe" in report.payload:
-                        import pandas as pd
-                        df = pd.DataFrame.from_dict(report.payload["dataframe"])
-                        if not df.empty:
-                            # Use latest close
-                            prices[sym] = float(df.iloc[-1]["close"])
+                    ticker = yf.Ticker(sym)
+                    # Try to get a recent quote; use fast info if available
+                    info = ticker.info
+                    price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+                    if price is None:
+                        # Fallback to 1-day history
+                        hist = ticker.history(period="1d")
+                        if not hist.empty:
+                            price = hist['Close'].iloc[-1]
+                    prices[sym] = price
                 except Exception as e:
-                    logger.warning(f"Failed to fetch price for {sym}: {e}")
+                    logger.warning(f"yfinance failed for {sym}: {e}")
                     prices[sym] = None
             # Combine
             result = []
