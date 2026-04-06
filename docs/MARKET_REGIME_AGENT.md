@@ -8,7 +8,7 @@
 
 ## Overview
 
-`MarketRegimeAgent` analyzes five major US market indices to assess the current risk regime, trend strength, and volatility environment. Its output is consumed by `SymbolSelectorAgent` to weight candidate symbols with macro-aware context.
+`MarketRegimeAgent` analyzes market indices to assess the current risk regime, trend strength, and volatility environment. It supports **dual-market analysis**: US indices (S&P 500, NASDAQ, Dow Jones) and Hong Kong indices (Hang Seng, H-Shares, Shanghai Composite). Regional regime reports are generated independently via `_derive_regime(market="HK"|"US")`, and a combined risk-off flag is computed (risk-off = either market in risk-off state). Output is consumed by `SymbolSelectorAgent` (market-specific) and ExitAgent (combined regime) to weight candidate symbols with macro-aware context.
 
 ---
 
@@ -56,40 +56,61 @@
 
 ## Tracked Indices
 
-| Key | Symbol | Name |
-|---|---|---|
-| `SP500` | `^GSPC` | S&P 500 |
-| `NASDAQ` | `^IXIC` | NASDAQ Composite |
-| `DOW` | `^DJI` | Dow Jones Industrial |
-| `VIX` | `^VIX` | CBOE Volatility Index |
-| `RUSSELL2000` | `^RUT` | Russell 2000 |
+### US Market Indices
+
+| Key | Symbol | Name | Market |
+|---|---|---|---|
+| `SP500` | `^GSPC` | S&P 500 | US |
+| `NASDAQ` | `^IXIC` | NASDAQ Composite | US |
+| `DOW` | `^DJI` | Dow Jones Industrial | US |
+| `VIX` | `^VIX` | CBOE Volatility Index | US |
+| `RUSSELL2000` | `^RUT` | Russell 2000 | US |
+
+### Hong Kong Market Indices
+
+| Key | Symbol | Name | Market |
+|---|---|---|---|
+| `HSI` | `^HSI` | Hang Seng Index | HK |
+| `HSCE` | `^HSCE` | H-Shares Index | HK |
+| `SHANGHAI` | `000001.SS` | Shanghai Composite | HK |
+| `VHSI` | `^VHSI` | CBOE Hang Seng VIX | HK |
 
 ---
 
 ## Regime Derivation Logic
 
-### Trend Strength (from SP500 vs SMA200)
+### Per-Market Regime Computation
 
-| SP500 vs SMA200 | `trend_strength` | `risk_on` effect |
+When `_derive_regime(market="HK"|"US")` is called:
+
+- **US Regime**: Uses SP500/VIX/NASDAQ indices
+- **HK Regime**: Uses HSI/VHSI/HSCE indices  
+- **Combined Regime**: Risk-off if **either** US or HK is risk-off; momentum-off if either is momentum-off
+
+### Trend Strength (Primary Index vs SMA200)
+
+| Primary Index vs SMA200 | `trend_strength` | `risk_on` effect |
 |---|---|---|
 | > +2% | `"strong"` | unchanged |
 | −2% to +2% | `"moderate"` | unchanged |
 | < −2% | `"weak"` | → `False`, momentum → `False` |
 
-### Volatility Regime (from VIX)
+### Volatility Regime (from VIX / VHSI)
 
-| VIX Level | `volatility_regime` | `risk_on` effect |
+| Index / Level | `volatility_regime` | `risk_on` effect |
 |---|---|---|
-| > 30 | `"high"` | → `False` |
+| **US VIX** > 30 or **VHSI** > 30 | `"high"` | → `False` |
 | 15–30 | `"normal"` | unchanged |
 | < 15 | `"low"` | unchanged |
 
-### Momentum (from NASDAQ 1D change)
+### Momentum (from NASDAQ 1D change or HSI 1D change)
 
-| NASDAQ 1D Change | `momentum_favoring` |
+| Primary Index 1D Change | `momentum_favoring` |
 |---|---|
 | > +1% | `True` |
 | < −1% | `False`, `risk_on` → `False` |
+
+**Note:** Uses NASDAQ for US regime, HSI for HK regime.
 
 ### Breadth (from watchlist scanner, if available)
 
@@ -153,10 +174,27 @@ print(report.payload["regime"]["summary"])
 | NaN guard for SMA if insufficient rows | ✅ Fixed | Returns `0.0` when SMA is NaN (safe fallback) |
 | Market breadth is placeholder | ⚠️ Partial | Returns hardcoded `0.60` advancers_ratio; real computation not yet implemented |
 
----
+## Agent Report Structure
 
+The output `AgentReport.payload` contains:
+
+```json
+{
+  "regime": { ... },          // Combined risk-off flag
+  "regime_us": { ... },       // US-only regime (SP500/VIX/NASDAQ)
+  "regime_hk": { ... },       // HK-only regime (HSI/VHSI/HSCE)
+  "indices": { ... },         // IndexMetrics for all 9 indices
+  "breadth": { ... },         // Market breadth data (if available)
+  "timestamp": "2026-04-04T..."
+}
+```
+
+Each regime object includes: `risk_on`, `momentum_favoring`, `volatility_regime`, `trend_strength`, `summary`.
+
+---
 ## Related Agents
 
-- **`SymbolSelectorAgent`** — consumes `MarketRegime` as market context for LLM prompt
-- **`MacroNewsAgent`** — provides news context alongside regime context
-- **`DataAgent`** — fetches OHLCV data for all 5 indices
+- **`SymbolSelectorAgent`** — consumes per-market `regime_us` or `regime_hk` + combined `regime` for LLM prompt
+- **`MacroNewsAgent`** — provides regional news context (US or HK sources) alongside regime context
+- **`ExitAgent`** — uses combined regime for position exit decisions
+- **`DataAgent`** — fetches OHLCV data for all 9 indices

@@ -33,40 +33,44 @@ The system continuously scans markets, analyzes candidates, generates trade prop
                                     │
         ┌───────────────────────────┼───────────────────────────┐
         │                           │                           │
-┌───────▼───────┐        ┌──────────▼────────┐      ┌──────────▼──────────┐
-│SchedulerAgent │        │ Trading Pipeline  │      │  Monitoring Loop    │
-│(clock/trigger)│        │ (main workflow)   │      │(continuous exit/    │
-└───────┬───────┘        └──────────┬────────┘      │ reanalysis checks) │
-        │                           │                └──────────┬──────────┘
-   Emits:                    See pipeline below              │
-   • MARKET_SCAN             (per symbol discovery)  Emits: EXIT_CHECK_TRIGGER
-   • DATA_REFRESH            & strategy analysis    (every 5 min)
-   • DAILY_REPORT                   │                       │
-   • SCHEDULE                       │          ┌────────────▼────────┐
-                                    │          │    ExitAgent         │
-                                    │          │  • Monitor exits     │
-                    ┌───────────────┼──────────┤  • Re-analyze held   │
-                    │               │          │    positions         │
-                    ▼               │          │  • Emit signals      │
-    ┌──────────────────────────────────┐       │          └────────────┬────────┘
-    │   MarketScannerAgent              │       │                       │
-    │   Emits: MARKET_SCANNED           │       │         ┌─────────────┴─────────┐
-    └──────────┬───────────────────────┘       │         │(if check fails)       │
-               │ (50+ candidates)              │         │                       │
+┌──────────────────────┐ ┌──────────▼────────┐      ┌──────────▼──────────┐
+│  SchedulerAgent      │ │ Trading Pipeline  │      │  Monitoring Loop    │
+│ (continuous loop)    │ │ (main workflow)   │      │(continuous exit/    │
+└──────────┬──────────┘  └──────────┬────────┘      │ reanalysis checks) │
+           │                        │                └──────────┬──────────┘
+    Emits (on schedule):    See pipeline below              │
+    • MARKET_SCAN          (per symbol discovery)  Emits: EXIT_CHECK_TRIGGER
+      (daily @ 01:00/13:00)  & strategy analysis  (every 5 min)
+    • DATA_REFRESH (every 30 min)  │                      │
+    • DAILY_REPORT (EOD)           │        ┌─────────────▼─────────┐
+    • EXIT_CHECK (every 5 min)     │        │    ExitAgent          │
+                                   │        │  (every 5 minutes)    │
+                 ┌─────────────────┼────────┤  • Monitor exits      │
+                 │                 │        │  • Re-analyze held    │
+                 ▼                 │        │    positions          │
+    ┌────────────────────────────────┐     │  • Emit signals       │
+    │   MarketScannerAgent            │     │          └─────────────┬────────┘
+    │   Tier 1: Daily discovery       │     │                       │
+    │   Tier 2: Every 15 min prices   │     │     ┌─────────────────┴────────┐
+    │   Emits: MARKET_SCANNED         │     │     │(if thesis degrades)     │
+    └──────────┬─────────────────────┘     │     │                         │
+               │ (50+ candidates)           │     │                         │
     ┌──────────────────────────────────────────────────────────┐
-    │         LLM Pre-Selection Pipeline (Phase 3) ✅          │
+    │    LLM Pre-Selection Pipeline (Phase 3) ✅ (Daily)       │
     │                                                          │
-    │  ┌─────────────────┐   ┌────────────────────────┐       │
-    │  │MarketRegimeAgent│   │MacroNewsAgent           │       │
-    │  │ 5 indices, 90d  │   │ SPY/QQQ/DIA news feeds  │       │
-    │  │ SMA20/50/200    │   │ VADER sentiment scoring │       │
-    │  │ Risk-on/off flag│   │ categories + catalysts  │       │
-    │  └────────┬────────┘   └──────────┬─────────────┘       │
-    │           └────────────┬──────────┘                      │
+    │  ┌──────────────────────┐  ┌────────────────────────┐   │
+    │  │ MarketRegimeAgent    │  │ MacroNewsAgent         │   │
+    │  │ (Daily per-market)   │  │ (Daily per-market)     │   │
+    │  │ 9 indices: US + HK   │  │ US + HK news feeds     │   │
+    │  │ SMA20/50/200         │  │ VADER sentiment        │   │
+    │  │ Risk-on/off + regime │  │ categories + catalysts │   │
+    │  └────────┬─────────────┘  └──────────┬─────────────┘   │
+    │           └────────────┬──────────────┘                  │
     │                        ▼                                 │
-    │       SymbolSelectorAgent (LLM ranking)                  │
-    │       50 candidates → top 5–10 picks                    │
-    │       gpt-4o-mini via OpenRouter (~13k tokens)           │
+    │    SymbolSelectorAgent (LLM ranking)                     │
+    │    (Daily per-market: 01:00 HK, 13:00 US)              │
+    │    50 candidates → top 5–10 picks                      │
+    │    gpt-4o-mini via OpenRouter (~13k tokens)             │
     └──────────────┬───────────────────────────────────────────┘
                    │ (top N symbols)
                │ (per ranked symbol)                  │         │                       │
@@ -120,6 +124,36 @@ The system continuously scans markets, analyzes candidates, generates trade prop
          │   Updates holdings         │
          └────────────────────────────┘
 ```
+
+### Agent Run Frequencies (Illustrated Above)
+
+The diagram shows the event-driven pipeline with these key timing patterns:
+
+| Layer | Agents | Frequency | Trigger | Purpose |
+|-------|--------|-----------|---------|---------|
+| **Scheduler** | SchedulerAgent | Continuous | Self-loop | Emit periodic triggers |
+| **Pre-Market Setup** | MarketRegimeAgent, MacroNewsAgent | Daily per-market | PRE_SCAN_CONTEXT_REFRESH | Pre-warm regime & macro context 5 min before scan |
+| **Discovery (Tier 1)** | MarketScannerAgent | Daily @ 01:00 & 13:00 UTC+8 | MARKET_SCAN_TRIGGER | Discover 50+ HK/US candidates |
+| **Pre-Selection (Phase 3)** | SymbolSelectorAgent | Daily per-market | MARKET_SCANNED | LLM rank 50→5-10 high-conviction picks |
+| **Re-Ranking (Phase 2)** | RankingAgent | Per discovery | MARKET_SCANNED | Multi-factor scoring of all candidates |
+| **Data Fetch** | DataAgent | Per-symbol | RANKING_COMPLETE | Fetch OHLCV + fundamentals |
+| **Parallel Analysis** | NewsAgent, AnalysisAgent, TradingAgentsAnalyzer | Per-symbol | DATA_FETCH_COMPLETE | News sentiment + technical indicators + LLM analysis |
+| **Strategy** | StrategyAgent | Per-symbol | NEWS + ANALYSIS ready | Generate BUY/SELL proposals |
+| **Risk Check** | RiskAgent | Per proposal | TRADE_PROPOSAL_GENERATED | Validate against risk limits |
+| **Execution** | ExecutionAgent | Per approved trade | RISK_CHECK_COMPLETE | Submit orders |
+| **Post-Trade** | PortfolioAgent, LearningAgent, HealthAgent | Per execution | TRADE_EXECUTED | Update holdings; learn; notify |
+| **Continuous Monitoring (Tier 3)** | ExitAgent | Every 5 min | EXIT_CHECK_TRIGGER | Check stops/profits & strategic degradation |
+| **Intraday Refresh (Tier 2)** | MarketScannerAgent | Every 15 min | PRICE_MONITOR_TRIGGER | Refresh watchlist prices |
+| **Periodic Health** | HealthAgent | Every 4 hours | HEALTH_CHECK_TRIGGER | System health check |
+| **Daily Summary** | HealthAgent, TelegramAgent | Once daily @ 08:05 UTC | DAILY_REPORT_TRIGGER | Portfolio P&L report |
+| **Always-On** | TelegramAgent | Real-time | User commands + events | Handle user interactions + broadcast alerts |
+
+**Key Timing Insights:**
+- **01:00 UTC+8**: HK pre-market scan starts (regime + macro pre-warmed)
+- **13:00 UTC+8**: US pre-market scan starts (regime + macro pre-warmed)
+- **Every 5 min**: ExitAgent monitors positions for stop-loss/take-profit
+- **Every 15 min**: Price refresh for watchlist symbols
+- **Per-symbol parallelism**: News + Analysis + LLM analysis run in parallel to minimize latency
 
 ----
 
@@ -1053,7 +1087,7 @@ Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
 | Agent | Frequency | Trigger |
 |-------|-----------|---------|
 | SchedulerAgent | Continuous background loop | Self |
-| MarketScannerAgent (Tier 1) | Daily | `MARKET_SCAN_TRIGGER` (discovery) |
+| MarketScannerAgent (Tier 1) | Daily (Discovery) | `MARKET_SCAN_TRIGGER` at pre-market (01:00 HK / 13:00 HK for US) |
 | MarketScannerAgent (Tier 2) | Every 15 min | `PRICE_MONITOR_TRIGGER` (price refresh) |
 | DataAgent | Per-symbol after each scan | `MARKET_SCANNED` / `DATA_REFRESH_TRIGGER` |
 | NewsAgent | Per-symbol after data fetch | `DATA_FETCH_COMPLETE` |
@@ -1068,13 +1102,133 @@ Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
 | TradingAgentsAnalyzer | Per-symbol after analysis ready | `ANALYSIS_COMPLETE` |
 | TradingAgentsAPI | Per LLM request | REST API (`POST /analyze`) |
 | RankingAgent | Per discovery batch | `MARKET_SCANNED` (re-ranking) |
-| MarketRegimeAgent | Per LLM selection run (60-min cache) | Called by `SymbolSelectorAgent` |
-| MacroNewsAgent | Per LLM selection run (6-hour cache) | Called by `SymbolSelectorAgent` |
-| SymbolSelectorAgent | Per discovery batch | `MARKET_SCANNED` (after scanner, before per-symbol pipeline) |
+| MarketRegimeAgent | **Daily per-market** (60-min cache) | `PRE_SCAN_CONTEXT_REFRESH` (5 min pre-market) + On-demand from SymbolSelector |
+| MacroNewsAgent | **Daily per-market** (6-hour cache) | `PRE_SCAN_CONTEXT_REFRESH` (5 min pre-market) + On-demand from SymbolSelector |
+| SymbolSelectorAgent | **Daily per-market** (post-discovery) | `MARKET_SCANNED` with market param (after scanner, before per-symbol pipeline) |
 | TelegramAgent | Always on | User commands + incoming messages |
 
 ---
 
+---
+
+## Agent Run Frequencies and Scheduling
+
+### Overview
+
+AITradeAgent uses a **dual-market pre-market scan model** (Hong Kong + US) with cache pre-warming:
+
+1. **HK Pre-Market Scan** — 01:00 UTC+8 (30 min before HK market open at 09:30 HKT)
+2. **US Pre-Market Scan** — 13:00 UTC+8 (evening before US market open at 21:30 UTC / 09:30 EST next day)
+
+Both market scans follow the same **3-step workflow** with pre-warming:
+
+```
+Scheduler publishes PRE_SCAN_CONTEXT_REFRESH (market="HK"/"US")
+    ↓
+MarketRegimeAgent + MacroNewsAgent run in parallel (cache refresh)
+    ↓ [5-second delay for cache to warm]
+    ↓
+MarketScannerAgent triggers market scan (50+ symbols)
+    ↓
+SymbolSelectorAgent ranks candidates (LLM pre-selection → top 5-10)
+    ↓
+Per-symbol pipeline (DataAgent → NewsAgent + AnalysisAgent → etc.)
+```
+
+### Detailed Timing
+
+#### **Morning: HK Pre-Market Scan (01:00 UTC+8)**
+
+| Time | Event | Agents | Purpose |
+|------|-------|--------|---------|
+| 01:00 | PRE_SCAN_CONTEXT_REFRESH published | SchedulerAgent | Trigger cache pre-warm |
+| 01:00–01:02 | MarketRegimeAgent + MacroNewsAgent run (parallel) | MarketRegimeAgent, MacroNewsAgent | Compute `regime_hk`, `hk_sentiment_score`, cache results |
+| 01:02 | MARKET_SCAN_TRIGGER published | SchedulerAgent | Trigger HK symbol discovery |
+| 01:02–01:08 | MarketScannerAgent scans (~50 HK candidates) | MarketScannerAgent | Discover HK listing symbols matching themes |
+| 01:08 | MARKET_SCANNED event published | MarketScannerAgent | Publish candidates list with `market="HK"` |
+| 01:08–01:15 | SymbolSelectorAgent ranks top 5-10 via LLM | SymbolSelectorAgent | Use `regime_hk` + `hk_sentiment_score` for ranking |
+| 01:15–01:30 | Per-symbol pipeline (top 10 symbols) | DataAgent, NewsAgent, AnalysisAgent | Fetch data, fetch news, compute scores |
+| 01:30+ | Telegram report sent | TelegramAgent | Publish "\[HK\] Top Stock Rankings" to Telegram |
+
+**Result**: HK symbols ready for trading 30 min before market open; regime + macro context pre-cached.
+
+#### **Evening: US Pre-Market Scan (13:00 UTC+8 / 21:30 UTC)**
+
+Same workflow as HK scan:
+
+| Time (UTC+8) | Time (EST) | Event | Agents |
+|---|---|---|---|
+| 13:00 | 21:30 (Fri) | PRE_SCAN_CONTEXT_REFRESH published | SchedulerAgent |
+| 13:00–13:02 | 21:30–21:32 | MarketRegimeAgent + MacroNewsAgent run (parallel) | MarketRegimeAgent, MacroNewsAgent |
+| 13:02 | 21:32 | MARKET_SCAN_TRIGGER published | SchedulerAgent |
+| 13:02–13:08 | 21:32–21:38 | MarketScannerAgent scans (~50 US candidates) | MarketScannerAgent |
+| 13:08 | 21:38 | MARKET_SCANNED event published | MarketScannerAgent |
+| 13:08–13:15 | 21:38–21:45 | SymbolSelectorAgent ranks top 5-10 via LLM | SymbolSelectorAgent |
+| 13:15–13:30 | 21:45–22:00 | Per-symbol pipeline (top 10 symbols) | DataAgent, NewsAgent, AnalysisAgent |
+| 13:30+ | 22:00+ | Telegram report sent | TelegramAgent |
+
+**Result**: US symbols ready for trading 7+ hours before market open (overnight analysis); regime + macro context ready before market open.
+
+#### **Continuous Monitoring (24/7)**
+
+| Interval | Event | Agents | Purpose |
+|----------|-------|--------|---------|
+| Every 5 min | EXIT_CHECK_TRIGGER | ExitAgent | Monitor open positions, check exit conditions |
+| Every 15 min | PRICE_MONITOR_TRIGGER | MarketScannerAgent | Price refresh on top 50 symbols (intraday) |
+| Every 30 min | DATA_REFRESH_TRIGGER | DataAgent | Refresh OHLCV cache for all tracked symbols |
+| Every 4 hours | HEALTH_CHECK_TRIGGER | HealthAgent | System health monitoring, resource check |
+| Daily (08:05 UTC) | DAILY_REPORT_TRIGGER | HealthAgent | End-of-day portfolio summary + metrics |
+
+### Pre-Scan Context Refresh Mechanism (PRE_SCAN_CONTEXT_REFRESH)
+
+**New in Phase 4**: A new event `PRE_SCAN_CONTEXT_REFRESH` is published **5 minutes before** each pre-market scan to pre-warm the agent caches:
+
+```python
+# Example: SchedulerAgent._trigger_pre_market_scan_hk()
+await self.event_bus.publish(Event(
+    event_type=Events.PRE_SCAN_CONTEXT_REFRESH,
+    data={"market": "HK"}
+))
+logger.info("PRE_SCAN_CONTEXT_REFRESH published for HK")
+
+# MainOrchestratorAgent subscribes and routes to:
+# 1. MarketRegimeAgent.run({"market": "HK", "force_refresh": True})
+# 2. MacroNewsAgent.run({"market": "HK", "force_refresh": True})
+# Both run in parallel and update agent-level caches
+
+# After 5 sec delay, MARKET_SCAN_TRIGGER is published
+await asyncio.sleep(5)
+await self.event_bus.publish(Event(
+    event_type=Events.MARKET_SCAN_TRIGGER,
+    data={"market": "HK", "interval": "pre_market"}
+))
+```
+
+**Benefits**:
+- Regime + macro context already computed when SymbolSelector runs
+- No time wasted on LLM call waiting for regime/macro data
+- Cache hit rates improve (60-min and 6-hour TTLs respected)
+
+### Agent Run Schedule Summary
+
+**Daily Pre-Market Triggers**:
+- HK: 01:00 UTC+8 (every trading day)
+- US: 13:00 UTC+8 / 21:30 UTC (every trading day)
+
+**Per-Market Regime Run Frequency**:
+- `regime_us`: Computed daily at 13:00 UTC+8 (pre-warm) + on-demand when SymbolSelector needs it
+- `regime_hk`: Computed daily at 01:00 UTC+8 (pre-warm) + on-demand when SymbolSelector needs it
+
+**Per-Market Macro News Run Frequency**:
+- `us_sentiment_score`: Updated daily at 13:00 UTC+8 (pre-warm) + cached for 6 hours; re-fetched on-demand from SymbolSelector if cache miss
+- `hk_sentiment_score`: Updated daily at 01:00 UTC+8 (pre-warm) + cached for 6 hours; re-fetched on-demand from SymbolSelector if cache miss
+
+**Per-Market SymbolSelector (LLM Ranking) Run Frequency**:
+- Runs once per pre-market scan: 01:00 UTC+8 (HK) + 13:00 UTC+8 (US)
+- Returns top 5–10 symbols per market
+- LLM invocation cost: ~13k tokens per run
+
+---
 ## Configuration Reference
 
 **`finance.yaml` — key sections:**

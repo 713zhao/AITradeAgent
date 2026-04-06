@@ -8,7 +8,12 @@
 
 ## Overview
 
-`MacroNewsAgent` fetches broad-market financial news from Yahoo Finance (via SPY, QQQ, DIA tickers) and filters/classifies articles for macro relevance. It computes aggregate sentiment and extracts catalysts/risk events, which are passed to `SymbolSelectorAgent` for regime-aware ranking.
+`MacroNewsAgent` fetches broad-market financial news from Yahoo Finance and filters/classifies articles for macro relevance. It supports **dual-market news analysis**: 
+
+- **US Market**: News via SPY (S&P 500 ETF), QQQ (NASDAQ ETF), DIA (Dow ETF)
+- **Hong Kong Market**: News via 2800.HK (Tracker Fund), 2823.HK (iShares Hang Seng ETF), 2822.HK (iShares China Large-Cap ETF)
+
+Regional reports are generated independently, with US-specific and HK-specific filters (HK filter includes HKMA, Hang Seng, PBOC, RMB, HKD, currency peg keywords). Aggregate sentiment and catalysts/risk events are extracted per market and passed to `SymbolSelectorAgent` for market-specific regime-aware ranking.
 
 ---
 
@@ -30,15 +35,19 @@
 
 | Field | Type | Description |
 |---|---|---|
-| `macro_news` | List[dict] | Filtered & analyzed articles as dicts |
-| `macro_sentiment_score` | float | Average VADER sentiment across articles |
-| `macro_catalysts` | List[str] | Top catalyst keywords from headlines |
-| `risk_events` | List[str] | Articles with urgency=high |
+| `us_macro_news` | List[dict] | Filtered & analyzed US articles |
+| `us_sentiment_score` | float | Average VADER sentiment (US sources) |
+| `hk_macro_news` | List[dict] | Filtered & analyzed HK articles |
+| `hk_sentiment_score` | float | Average VADER sentiment (HK sources) |
+| `macro_catalysts` | List[str] | Top catalyst keywords from all headlines |
+| `risk_events` | List[str] | Articles with urgency=high (combined) |
 | `timestamp` | str | ISO timestamp of report generation |
 
 ---
 
 ## News Categories
+
+### US Categories
 
 | Category | Key Keywords |
 |---|---|
@@ -47,6 +56,17 @@
 | `economic_data` | CPI, NFP, GDP, unemployment, inflation |
 | `regulatory` | SEC, regulation, compliance, law |
 | `sector_rotation` | tech, energy, financial, healthcare, rotation |
+| `other` | (fallback) |
+
+### HK/China Categories
+
+| Category | Key Keywords |
+|---|---|
+| `monetary_policy` | HKMA, rate, yield, PBOC, interest |
+| `hk_china` | Hang Seng, Hong Kong, RMB, HKD, currency peg, China policy |
+| `geopolitical` | US-China trade, tariff, sanctions, tech restriction |
+| `economic_data` | China GDP, manufacturing, property, PMI |
+| `regulatory` | HKMA, SFC, China regulation |
 | `other` | (fallback) |
 
 ---
@@ -84,9 +104,17 @@ Articles are kept only if their headline + summary matches at least one keyword 
 
 ## Data Sources
 
+### US News Sources
+
 - **SPY** (S&P 500 ETF), **QQQ** (NASDAQ ETF), **DIA** (Dow ETF)
 - News fetched via `yfinance` ticker news API
-- Articles deduplicated by headline across the 3 ETF feeds
+- Articles deduplicated by headline across the 3 US feeds
+
+### HK News Sources
+
+- **2800.HK** (Tracker Fund of Hong Kong), **2823.HK** (iShares Hang Seng ETF), **2822.HK** (iShares China Large-Cap ETF)
+- News fetched via `yfinance` ticker news API
+- Articles deduplicated by headline across the 3 HK/China feeds
 
 ---
 
@@ -141,10 +169,28 @@ yfinance changed its news API format. Both old and new formats are supported:
 | VADER not installed | Graceful | Returns sentiment=0.0 without VADER; log warning emitted |
 | No direct macro news API | Design choice | Uses ETF ticker feeds (SPY/QQQ/DIA) as proxy for broad market news |
 
----
+## Agent Report Structure
 
-## Related Agents
+The output `AgentReport.payload` contains regional sentiment scores:
 
-- **`SymbolSelectorAgent`** — consumes macro sentiment + catalysts for LLM prompt
-- **`MarketRegimeAgent`** — provides complementary index-based regime context
+```json
+{
+  "us_macro_news": [...],
+  "us_sentiment_score": 0.12,
+  "hk_macro_news": [...],
+  "hk_sentiment_score": 0.05,
+  "macro_catalysts": ["Fed", "China inflation", "chip shortage"],
+  "risk_events": ["...high urgency article..."],
+  "timestamp": "2026-04-04T..."
+}
+```
+
+`SymbolSelectorAgent` selects per-market sentiment via:
+- `macro_sentiment_score = payload["hk_sentiment_score"]` for HK market
+- `macro_sentiment_score = payload["us_sentiment_score"]` for US market
+
+---## Related Agents
+
+- **`SymbolSelectorAgent`** — consumes per-market macro sentiment (us/hk_sentiment_score) + catalysts for LLM prompt
+- **`MarketRegimeAgent`** — provides complementary regional index-based regime context (regime_us / regime_hk)
 - **`NewsAgent`** — symbol-specific news (different from this agent's scope)
