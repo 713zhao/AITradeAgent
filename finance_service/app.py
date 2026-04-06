@@ -863,28 +863,42 @@ def create_app():
             return jsonify({"error": "Orchestrator not initialized"}), 503
         try:
             scanner = _orchestrator.market_scanner_agent
-            data_agent = _orchestrator.data_agent
             watchlist = scanner.get_watchlist()  # [{symbol, theme, rating, rank}, ...]
             if not watchlist:
                 return jsonify({"status": "success", "data": [], "message": "Watchlist empty"})
+            # Sort by rank and take top 10
+            watchlist = sorted(watchlist, key=lambda x: x.get("rank", 9999))[:10]
             symbols = [item["symbol"] for item in watchlist]
-            # Fetch latest prices (blocking I/O -> run in thread)
-            prices = await asyncio.to_thread(data_agent.fetch_latest_prices, symbols)
+            # Fetch latest prices using DataAgent (async)
+            data_agent = _orchestrator.data_agent
+            if not data_agent:
+                return jsonify({"error": "DataAgent not available"}), 500
+            # Build a dict of symbol -> price
+            prices = {}
+            for sym in symbols:
+                try:
+                    report = await data_agent.run(symbol=sym, interval="1d", use_cache=True, cache_only=True)
+                    if report.status == "success" and "dataframe" in report.payload:
+                        import pandas as pd
+                        df = pd.DataFrame.from_dict(report.payload["dataframe"])
+                        if not df.empty:
+                            # Use latest close
+                            prices[sym] = float(df.iloc[-1]["close"])
+                except Exception as e:
+                    logger.warning(f"Failed to fetch price for {sym}: {e}")
+                    prices[sym] = None
             # Combine
-            combined = []
+            result = []
             for item in watchlist:
                 sym = item["symbol"]
-                combined.append({
+                result.append({
                     "symbol": sym,
                     "theme": item.get("theme"),
                     "rating": item.get("rating"),
                     "rank": item.get("rank"),
                     "current_price": prices.get(sym)
                 })
-            # Sort by rank (ascending) and take top 10
-            combined.sort(key=lambda x: x["rank"] if isinstance(x["rank"], (int, float)) else 9999)
-            top10 = combined[:10]
-            return jsonify(_sanitize_floats({"status": "success", "data": top10}))
+            return jsonify(_sanitize_floats({"status": "success", "data": result}))
         except Exception as e:
             logger.exception("Error fetching watchlist")
             return jsonify({"error": str(e)}), 500
