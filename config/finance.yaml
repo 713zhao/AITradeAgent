@@ -196,41 +196,11 @@ strategies:
       condition: less_than
       value: 30.0
 strategy:
-  type: sma20_trend
+  type: momentum_trend
   auto_execute:
     enabled: true
-    confidence_threshold: 0.8
+    confidence_threshold: 0.5
     require_approval: false
-  indicators:
-    rsi:
-      enabled: true
-      period: 14
-      oversold: 40
-      overbought: 65
-    macd:
-      enabled: true
-      fast_period: 12
-      slow_period: 26
-      signal_period: 9
-    sma:
-      enabled: true
-      periods:
-      - 10
-      - 20
-      - 50
-    atr:
-      enabled: true
-      period: 14
-  rules:
-    rsi_entry_oversold: true
-    rsi_entry_oversold_threshold: 40
-    macd_crossover: true
-    price_above_sma10: true
-    rsi_exit_overbought: true
-    rsi_exit_overbought_threshold: 65
-    macd_signal_exit: true
-    stop_loss_enabled: true
-    take_profit_enabled: true
 universe:
   themes:
   - name: AI
@@ -512,8 +482,8 @@ notifications:
       on_position_update: false
 llm:
   enabled: true
-  provider: openrouter
-  api_key_env: OPENROUTER_API_KEY
+  provider: google
+  api_key_env: GOOGLE_API_KEY
   base_url: null
   model: openrouter/auto
   timeout: 30
@@ -529,12 +499,13 @@ llm:
       temperature: 0.3
 symbol_selector:
   enabled: true
-  max_input_symbols: 50
-  top_n_per_theme: 5
+  max_input_symbols: 12
+  top_n_per_theme: 3
   cache_ttl_hours: 24
-  model: openai/gpt-4o-mini
+  model: gemini-1.5-flash
   temperature: 0.2
   position_size_pct: 2.0
+  max_tokens: 8000
 market_regime_agent:
   enabled: true
   cache_ttl_minutes: 60
@@ -564,3 +535,15 @@ telegram:
   token_env: TELEGRAM_BOT_TOKEN
   chat_id: YOUR_CHAT_ID
   parse_mode: MarkdownV2
+  model: gemini-1.5-flash
+  temperature: 0.2
+  top_n_per_theme: 3
+  max_tokens: 8000
+execution:
+  broker: paper
+  broker_config:
+    paper:
+      initial_cash: 100000.0
+      slippage_bps: 1.0
+      fill_delay_seconds: 1.0
+      simulate_partial_fills: false

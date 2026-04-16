@@ -243,6 +243,75 @@ class AnthropicProvider(LLMProvider):
             return False
 
 
+class GeminiProvider(LLMProvider):
+    """Google Gemini provider"""
+
+    def __init__(self, config: LLMConfig):
+        super().__init__(config)
+        self._client = None
+        self._init_client()
+
+    def _init_client(self):
+        import google.generativeai as genai
+        genai.configure(api_key=self._api_key)
+        self._genai = genai
+
+    async def generate_async(self, prompt: str, system_prompt: Optional[str] = None,
+                           temperature: Optional[float] = None, model: Optional[str] = None) -> LLMResponse:
+        import time
+        start = time.time()
+
+        model_name = model or self.config.default_model
+        genai_model = self._genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=system_prompt if system_prompt else None
+        )
+
+        try:
+            response = await genai_model.generate_content_async_enhanced(
+                prompt,
+                generation_config=self._genai.types.GenerationConfig(
+                    temperature=temperature or self.config.temperature,
+                    max_output_tokens=self.config.max_tokens,
+                )
+            )
+        except AttributeError:
+            # Fallback if generate_content_async_enhanced not available
+            response = await genai_model.generate_content_async(
+                prompt,
+                generation_config=self._genai.types.GenerationConfig(
+                    temperature=temperature or self.config.temperature,
+                    max_output_tokens=self.config.max_tokens,
+                )
+            )
+
+        latency = (time.time() - start) * 1000
+
+        content = response.text if hasattr(response, 'text') else ""
+        tokens_used = 0
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            tokens_used = response.usage_metadata.total_token_count
+
+        return LLMResponse(
+            content=content,
+            model=model_name,
+            tokens_used=tokens_used,
+            latency_ms=latency,
+            raw_response=response,
+        )
+
+    def validate_connection(self) -> bool:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=self._api_key)
+            # Simple test: list models (limited free tier, so we just check auth)
+            models = genai.list_models()
+            return any(m for m in models if "generateContent" in m.supported_generation_methods)
+        except Exception as e:
+            logger.error(f"Gemini connection test failed: {e}")
+            return False
+
+
 class OllamaProvider(LLMProvider):
     """Ollama local LLM provider"""
 
@@ -312,6 +381,7 @@ class LLMFactory:
         "openai": OpenAIProvider,
         "anthropic": AnthropicProvider,
         "ollama": OllamaProvider,
+        "google": GeminiProvider,
     }
 
     @classmethod

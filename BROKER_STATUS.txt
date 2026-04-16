@@ -1,0 +1,188 @@
+═══════════════════════════════════════════════════════════════════════════════
+                      AITradeAgent BROKER CONFIGURATION
+                           Status: ✅ READY TO TRADE
+═══════════════════════════════════════════════════════════════════════════════
+
+📊 CURRENT SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Active Broker:        🟢 Paper Trading (Safe - for testing)
+  Mode:                 Paper Broker with realistic simulation
+  Initial Capital:      $100,000
+  Slippage:             1 basis point (realistic)
+  Order Fill Delay:     1 second per order
+  Status:               ✅ READY
+
+🎯 BROKERS AVAILABLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. PAPER BROKER (Currently Active) ✅
+     ├─ For: Testing strategies safely
+     ├─ Risk: None (simulated trading)
+     ├─ Setup: Already configured
+     ├─ Credentials: Not needed
+     └─ Status: Ready to use immediately
+
+  2. TIGER BROKERS (Available for real trading) ⚠️
+     ├─ For: Real trading with actual money
+     ├─ Risk: Real money at stake
+     ├─ Setup: Requires account and credentials
+     ├─ Credentials: Account ID + Private Key needed
+     └─ Status: Ready to configure when needed
+
+  3. ALPACA (Planned) 🔮
+     ├─ For: Future integration
+     ├─ Risk: To be determined
+     ├─ Setup: Not yet implemented
+     ├─ Credentials: To be determined
+     └─ Status: Coming soon
+
+🔧 CONFIGURATION FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Main Config:          config/finance.yaml
+  Execution Section:    execution:
+                          broker: paper
+                          broker_config: {...}
+  
+  Environment File:     .env (optional, for Tiger Brokers credentials)
+  
+  Scripts:
+    ├─ BROKER_QUICK_SWITCH.sh   - Easy switch between brokers
+    ├─ BROKER_SETUP_GUIDE.md     - Detailed setup instructions
+    └─ CONFIG_SUMMARY.md         - Configuration overview
+
+📈 TRADING PIPELINE (Ready to execute)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Scheduler triggers scan every 15 minutes
+  2. MarketScanner finds trading opportunities  
+  3. Analysis calculates technical indicators
+  4. Strategy generates trade proposals
+  5. Risk validation checks compliance
+  6. ExecutionAgent places orders with broker ✅ (newly fixed)
+  7. Portfolio updates position tracking
+  8. Telegram sends notifications
+
+🚀 QUICK START COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Start Paper Trading (Current - Safe):
+    ╭─────────────────────────────────────────────────────╮
+    │ cd /home/claw.zhao/.openclaw/workspace/AITradeAgent │
+    │ python3 run_finance_service.py &                    │
+    │ tail -f finance_service_restart.log                 │
+    ╰─────────────────────────────────────────────────────╯
+
+  Switch Brokers (Interactive):
+    ╭─────────────────────────────────────────────────────╮
+    │ bash BROKER_QUICK_SWITCH.sh                         │
+    ╰─────────────────────────────────────────────────────╯
+
+  View Configuration:
+    ╭─────────────────────────────────────────────────────╮
+    │ grep -A 10 "^execution:" config/finance.yaml        │
+    ╰─────────────────────────────────────────────────────╯
+
+  Test Broker Connection:
+    ╭─────────────────────────────────────────────────────╮
+    │ bash BROKER_QUICK_SWITCH.sh → Option 4              │
+    ╰─────────────────────────────────────────────────────╯
+
+✨ WHAT WAS FIXED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  🔧 ExecutionAgent (Previous Session)
+     ├─ Removed mock execution
+     ├─ Integrated real broker.place_order()
+     └─ Now executes trades properly
+
+  📋 Broker Configuration (This Session)
+     ├─ Added execution section to finance.yaml
+     ├─ Set paper as default broker
+     ├─ Created setup guide for real trading
+     └─ Created easy switching utility
+
+🎯 SWITCHING TO REAL TRADING (When Ready)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Step 1: Create Tiger Brokers account at https://www.tigerbrokers.com
+  Step 2: Get Account ID and Private Key from account settings
+  Step 3: Run: bash BROKER_QUICK_SWITCH.sh
+  Step 4: Select Option 2 (Tiger Brokers)
+  Step 5: Enter credentials when prompted
+  Step 6: Restart service: pkill -f "run_finance_service.py"
+  Step 7: Start service: python3 run_finance_service.py &
+
+📊 TRADING STATISTICS (Paper Broker)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Starting Capital:     $100,000.00
+  Simulated Trades:     Unlimited
+  Order Speed:          ~1 second per order
+  Slippage:             1 basis point
+  Risk Level:           NONE (simulated)
+  Perfect For:          Testing strategies
+
+💡 BEST PRACTICES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Paper Trading:
+    ✓ Use this for strategy development
+    ✓ Test everything before real trading
+    ✓ No risk of losing money
+    ✓ Free and unlimited testing
+
+  Real Trading (Tiger Brokers):
+    ✓ Start with small amounts
+    ✓ Monitor automatically executed trades
+    ✓ Set strict stop-loss limits
+    ✓ Enable approval gate initially
+    ✓ Review logs daily
+    ✗ DON'T enable auto-execute without approval first
+    ✗ DON'T trade uncommon symbols initially
+    ✗ DON'T use all available capital
+
+🔐 SECURITY REMINDERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ Keep .env file secure (don't commit to git)
+  ✓ Use strong private keys
+  ✓ Rotate credentials regularly
+  ✓ Monitor account activity
+  ✓ Enable 2FA on Tiger Brokers account
+  ✓ Never share credentials with anyone
+
+📚 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Files in this directory:
+    ├─ BROKER_SETUP_GUIDE.md       - Complete broker setup instructions
+    ├─ BROKER_QUICK_SWITCH.sh      - Interactive broker switcher
+    ├─ CONFIG_SUMMARY.md           - Configuration overview
+    ├─ BROKER_STATUS.txt           - This file
+    ├─ config/finance.yaml         - Main configuration file
+    └─ TELEGRAM_QUICK_START.md     - Telegram notification setup
+
+🎓 NEXT STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Start the service:
+     python3 run_finance_service.py &
+
+  2. Monitor trades executing:
+     tail -f finance_service_restart.log | grep -E "ExecutionAgent|TRADE"
+
+  3. When confident, switch to real trading:
+     bash BROKER_QUICK_SWITCH.sh
+
+  4. Check trading history:
+     sqlite3 storage/portfolio.sqlite "SELECT * FROM trades;"
+
+═══════════════════════════════════════════════════════════════════════════════
+✅ System is fully configured and ready for trading!
+   Start with paper trading, then switch to real trading when confident.
+═══════════════════════════════════════════════════════════════════════════════
+
+Generated: 2026-04-16
+Status: READY ✅

@@ -4,11 +4,12 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.models import TradeProposal
+from finance_service.brokers import OrderRequest, OrderType, OrderSide
 
 logger = logging.getLogger(__name__)
 
 class ExecutionAgent(Agent):
-    """Execution Agent - Executes approved trade proposals with optimal algorithms."""
+    """Execution Agent - Executes approved trade proposals with real broker integration."""
 
     @property
     def agent_id(self) -> str:
@@ -18,21 +19,22 @@ class ExecutionAgent(Agent):
     def goal(self) -> str:
         return "Execute approved trade proposals efficiently and optimally in the market."
 
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        logger.info(f"ExecutionAgent initialized with config: {self.config}")
+    def __init__(self, broker):
+        """Initialize with broker instance to actually place trades."""
+        self.broker = broker
+        logger.info(f"✅ ExecutionAgent initialized with broker: {type(broker).__name__}")
 
     async def run(self, approval_report: AgentReport) -> Optional[AgentReport]:
         """
-        Receives an approved trade proposal and executes it.
+        Receives an approved trade proposal and executes it via the broker.
         The approval_report.payload contains:
         - trade_proposals: list of proposals (usually single item)
         - risk_assessments: list of assessments (matching proposals)
         - all_passed: bool
         - any_approval_required: bool
         """
-        logger.info("ExecutionAgent run: Executing approved trade proposal.")
-        flow("ExecutionAgent", "START", "executing approved proposal")
+        logger.info("🚀 ExecutionAgent: Executing approved trade proposal via broker")
+        flow("ExecutionAgent", "START", "executing approved proposal via broker")
 
         try:
             # Extract the first trade proposal (single-proposal flow)
@@ -46,19 +48,50 @@ class ExecutionAgent(Agent):
             risk_assessments = approval_report.payload.get("risk_assessments", [])
             risk_assessment = risk_assessments[0] if risk_assessments else {}
 
-            # Mock execution result
-            execution_result = {
-                "trade_id": f"trade_{trade_proposal.symbol}_{datetime.utcnow().timestamp()}",
-                "symbol": trade_proposal.symbol,
-                "action": trade_proposal.action,
-                "quantity": trade_proposal.quantity or 1.0,
-                "filled_price": trade_proposal.target_price,  # mock: fill at target
-                "status": "FILLED",
-                "timestamp": datetime.utcnow().isoformat()
-            }
+            # REAL BROKER EXECUTION: Place the order on the broker
+            logger.info(f"📊 Placing {trade_proposal.action.upper()} order: {trade_proposal.quantity} × {trade_proposal.symbol} @ ${trade_proposal.target_price}")
+            
+            try:
+                # Create OrderRequest for broker
+                order_side = OrderSide.BUY if trade_proposal.action.lower() == "buy" else OrderSide.SELL
+                
+                order_request = OrderRequest(
+                    symbol=trade_proposal.symbol,
+                    quantity=trade_proposal.quantity or 1.0,
+                    side=order_side,
+                    order_type=OrderType.LIMIT,
+                    price=trade_proposal.target_price,
+                    time_in_force="DAY"
+                )
+                
+                # Call broker to place the order (synchronous)
+                order_result = self.broker.place_order(order_request)
+                
+                logger.info(f"✅ Order placed successfully: {order_result}")
+                
+                # Extract execution details from broker response
+                execution_result = {
+                    "trade_id": order_result.order_id if hasattr(order_result, 'order_id') else f"trade_{trade_proposal.symbol}_{datetime.utcnow().timestamp()}",
+                    "symbol": trade_proposal.symbol,
+                    "action": trade_proposal.action,
+                    "quantity": order_result.quantity if hasattr(order_result, 'quantity') else trade_proposal.quantity or 1.0,
+                    "filled_price": order_result.fill_price if hasattr(order_result, 'fill_price') else trade_proposal.target_price,
+                    "status": order_result.status.value if hasattr(order_result, 'status') else "SUBMITTED",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={trade_proposal.quantity} @ ${trade_proposal.target_price} → {execution_result['status']}")
+                message = f"✅ Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
+                
+            except Exception as broker_error:
+                logger.error(f"❌ Broker execution failed: {broker_error}", exc_info=True)
+                # Return error report instead of silent failure
+                return AgentReport(
+                    agent_id=self.agent_id,
+                    status="error",
+                    message=f"Broker execution failed: {broker_error}"
+                )
 
-            flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={trade_proposal.quantity} @ ${trade_proposal.target_price} → {execution_result['status']}")
-            message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
             payload = {"execution_result": execution_result}
 
             report = AgentReport(
@@ -68,8 +101,9 @@ class ExecutionAgent(Agent):
                 payload=payload
             )
             return report
+            
         except Exception as e:
-            logger.error(f"Error in ExecutionAgent run: {e}")
+            logger.error(f"❌ Error in ExecutionAgent run: {e}", exc_info=True)
             return AgentReport(
                 agent_id=self.agent_id,
                 status="error",
@@ -77,4 +111,4 @@ class ExecutionAgent(Agent):
             )
 
     def __repr__(self) -> str:
-        return f"<ExecutionAgent(id='{self.agent_id}')>"
+        return f"<ExecutionAgent(id='{self.agent_id}', broker={type(self.broker).__name__})>"

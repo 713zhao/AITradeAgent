@@ -577,7 +577,24 @@ IMPORTANT:
 
             return rankings, summary
         except Exception as e:
-            logger.error(f"Failed to parse LLM response: {e}\nResponse: {response[:200]}")
+            # Log full response for debugging (truncated to 500 chars)
+            logger.error(f"Failed to parse LLM response: {e}\nFull response (first 500 chars): {response[:500]}")
+            # Attempt fallback: look for JSON array in response manually
+            try:
+                import re
+                # Look for something that looks like [{"symbol": ...}]
+                match = re.search(r'\[.*\}\s*\]', response, re.DOTALL)
+                if match:
+                    possible_json = match.group(0)
+                    possible_json = self._clean_json_str(possible_json)
+                    data = json.loads(possible_json)
+                    if isinstance(data, list) and len(data) > 0 and "symbol" in data[0]:
+                        rankings = data
+                        summary = "Extracted from partial output"
+                        logger.info(f"Fallback parser extracted {len(rankings)} rankings")
+                        return rankings, summary
+            except Exception as e2:
+                logger.debug(f"Fallback parsing also failed: {e2}")
             return [], ""
 
     def _filter_rejected(self, candidates: List[CandidateData], rankings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

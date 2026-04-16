@@ -278,7 +278,7 @@ class MainOrchestratorAgent:
                     llm_summary = selector_report.payload.get("llm_summary", "")
                     tokens_used = selector_report.payload.get("tokens_used", 0)
                     market_context = selector_report.payload.get("market_context", {})
-                    selected_symbols = [r["symbol"] for r in rankings[:20]]  # top 20
+                    selected_symbols = [r["symbol"] for r in rankings[:5]]  # top 5 per market
                     logger.info(f"SymbolSelector ranked {len(selected_symbols)} symbols (from {len(symbols)}) using {tokens_used} tokens")
                     symbols = selected_symbols  # override processing list
                     # Send LLM analysis result to Telegram (with regime + macro context)
@@ -329,7 +329,8 @@ class MainOrchestratorAgent:
                 except Exception as e:
                     logger.error(f"Failed to send market scan Telegram: {e}")
                 # Also send top analysis summary in background (does not block)
-                asyncio.create_task(self._send_top_analysis_summary(symbols))
+                # Temporarily disabled until method is implemented
+                # asyncio.create_task(self._send_top_analysis_summary(symbols))
 
         # Use 365-day lookback (1 year) to ensure enough trading days for SMA200
         from datetime import datetime, timedelta

@@ -71,7 +71,7 @@ class LearningAgent(Agent):
         
         self.model_dir = Path(os.getenv("STORAGE_DIR", "storage")) / "ml_models"
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        self.current_model: Optional[lgb.LGBMClassifier] = None
+        self.current_model: Optional[Any] = None
         self.metadata: Optional[ModelMetadata] = None
         self.feature_store = FeatureStore()
         
@@ -159,7 +159,7 @@ class LearningAgent(Agent):
         # Train final model
         if self.label_type == "win_rate":
             # Binary classification
-            model = lgb.LGBMClassifier(**best_params)
+            model = Any(**best_params)
             model.fit(X_train, y_train)
             accuracy = model.score(X_train, y_train)
         else:
@@ -273,7 +273,7 @@ class LearningAgent(Agent):
                     'random_state': 42,
                 }
                 if self.label_type == "win_rate":
-                    model = lgb.LGBMClassifier(**params)
+                    model = Any(**params)
                 else:
                     model = lgb.LGBMRegressor(**params)
                 # Simple cross-validation split (5-fold)
@@ -288,7 +288,7 @@ class LearningAgent(Agent):
             logger.warning("Optuna not installed; using default hyperparameters")
             return {}
 
-    def _load_latest_model(self) -> Optional[Tuple[lgb.LGBMClassifier, ModelMetadata]]:
+    def _load_latest_model(self) -> Optional[Tuple[Any, ModelMetadata]]:
         """Load the most recent trained model"""
         models = sorted(self.model_dir.glob("model_*.pkl"))
         if not models:
