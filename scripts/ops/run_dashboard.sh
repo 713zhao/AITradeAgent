@@ -24,7 +24,7 @@ fi
 
 # Check if dependencies are installed
 echo "📦 Checking dependencies..."
-pip install -r requirements_ui.txt > /dev/null 2>&1 && echo "✅ Dependencies installed" || echo "❌ Failed to install dependencies"
+pip install -r requirements.txt > /dev/null 2>&1 && echo "✅ Dependencies installed" || echo "❌ Failed to install dependencies"
 
 # Check if API backend is accessible
 echo ""
