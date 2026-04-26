@@ -224,7 +224,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pytest
       - name: Start Finance Service
-        run: python3 run_finance_service.py &
+        run: python3 finance_service/run_finance_service.py &
       - name: Run E2E Tests
         run: bash tests/run_e2e_tests.sh
 ```
@@ -373,7 +373,7 @@ netstat -tuln | grep 8801
 
 # Restart service
 pkill -f "run_finance_service"
-python3 run_finance_service.py
+python3 finance_service/run_finance_service.py
 ```
 
 ### Slow Tests

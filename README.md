@@ -1,5 +1,23 @@
 # PicoClaw Trading Agent - picotradeagent
 
+## Minimal Startup
+
+Use one of these:
+
+```bash
+./start.sh
+```
+
+or
+
+```bash
+python3 finance_service/finance_service/run_finance_service.py
+```
+
+Detailed steps: [docs/STARTUP.md](docs/STARTUP.md)
+
+Root cleanup mapping: [docs/ROOT_FILE_PURPOSES.md](docs/ROOT_FILE_PURPOSES.md)
+
 A sophisticated AI-powered trading assistant that integrates with PicoClaw framework, providing automated market analysis, trading signals, risk management, and portfolio tracking. Built on Flask backend with paper trading simulation and real-time market data via yfinance.
 
 ## Quick Start
@@ -10,7 +28,7 @@ The Finance Service is the backend that handles all market data, analysis, and t
 
 ```bash
 cd /home/eric/.picoclaw/workspace/picotradeagent
-python3 run_finance_service.py
+python3 finance_service/finance_service/run_finance_service.py
 ```
 
 The service will start on `http://localhost:8801` and is ready to accept requests.
@@ -24,12 +42,12 @@ Expected response: `{"service":"finance","status":"ok"}`
 
 ### 2. Key Entry Points
 
-#### Finance Service (run_finance_service.py)
+#### Finance Service (finance_service/run_finance_service.py)
 - **Purpose**: Main Flask backend for all trading operations
 - **Runs on**: `http://localhost:8801`
 - **Provides**: Market data, analysis, portfolio management, trade execution
 
-#### PicoClaw Connector (picoclaw_connector.py)
+#### PicoClaw Connector (scripts/integration/picoclaw_connector.py)
 - **Purpose**: Bridge between PicoClaw agents and Finance Service
 - **Usage**: Import and use in PicoClaw agent definitions
 - **Features**: Health checks, analysis, quotes, portfolio, performance, trade execution
@@ -83,10 +101,10 @@ Expected response: `{"service":"finance","status":"ok"}`
 
 ## PicoClaw Integration
 
-The picotradeagent is designed to work with PicoClaw agents. Use the `picoclaw_connector.py` module:
+The picotradeagent is designed to work with PicoClaw agents. Use the `scripts/integration/picoclaw_connector.py` module:
 
 ```python
-from picoclaw_connector import get_connector
+from scripts.integration.picoclaw_connector import get_connector
 
 # Get connector instance
 connector = get_connector()
@@ -132,8 +150,8 @@ print(f"Sharpe: {perf['sharpe_ratio']:.2f}")
 
 ```
 picotradeagent/
-├── run_finance_service.py      ← Main entry point
-├── picoclaw_connector.py       ← Integration helper
+├── finance_service/run_finance_service.py      ← Main entry point
+├── scripts/integration/picoclaw_connector.py       ← Integration helper
 │
 ├── finance_service/            ← Core backend
 │   ├── app.py                  Main Flask application
@@ -281,8 +299,8 @@ netstat -tuln | grep 8801
 
 ## Project Structure
 
-- **run_finance_service.py** - Service launcher (START HERE)
-- **picoclaw_connector.py** - Agent integration library
+- **finance_service/run_finance_service.py** - Service launcher (START HERE)
+- **scripts/integration/picoclaw_connector.py** - Agent integration library
 - **finance_service/** - Core backend implementation
 - **picoclaw_config/** - PicoClaw integration configuration
 - **tests/** - Test suite and validation scripts
@@ -301,7 +319,7 @@ lsof -i :8801
 pkill -f run_finance_service
 
 # Start fresh
-python3 run_finance_service.py
+python3 finance_service/finance_service/run_finance_service.py
 ```
 
 ### Connection refused when accessing from another machine
@@ -320,7 +338,7 @@ rm -rf storage/cache/*
 
 # Restart service
 pkill -f run_finance_service
-python3 run_finance_service.py
+python3 finance_service/finance_service/run_finance_service.py
 ```
 
 ## Performance Tips

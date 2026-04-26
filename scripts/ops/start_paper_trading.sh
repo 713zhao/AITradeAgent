@@ -17,4 +17,4 @@ echo "Mode: Paper (no real money)"
 echo "=========================================="
 echo ""
 
-python3 run_finance_service.py
+python3 finance_service/run_finance_service.py

@@ -5,7 +5,7 @@ import asyncio
 import logging
 
 # Add project root to path BEFORE any imports of finance_service
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(
     level=logging.INFO,

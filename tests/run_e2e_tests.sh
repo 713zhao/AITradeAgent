@@ -15,7 +15,7 @@ echo ""
 echo "📋 Checking Finance Service..."
 if ! curl -s http://localhost:8801/health > /dev/null 2>&1; then
     echo "❌ Finance Service not running!"
-    echo "   Start with: python3 run_finance_service.py"
+    echo "   Start with: python3 finance_service/run_finance_service.py"
     exit 1
 fi
 echo "✅ Finance Service is running"

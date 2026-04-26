@@ -464,6 +464,7 @@ fundamentals:
   - alphavantage
   alphavantage_api_key: plMOu5bijgq_Dci68wl0vk5mZvAyysxF
 scanner:
+  enforce_market_hours_for_scan: true
   discovery_top_n_per_theme: 10
   price_monitor_top_n: 50
   price_monitor_interval_minutes: 15

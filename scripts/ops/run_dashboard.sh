@@ -35,7 +35,7 @@ if timeout 2 bash -c "echo | nc -q1 localhost 8801" 2>/dev/null; then
 else
     echo "⚠️  API backend not detected at $API_URL"
     echo "   Please start the API backend first:"
-    echo "   python3 run_finance_service.py"
+    echo "   python3 finance_service/run_finance_service.py"
     echo ""
 fi
 

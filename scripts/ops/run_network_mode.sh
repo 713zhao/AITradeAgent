@@ -31,7 +31,7 @@ if timeout 2 curl -s http://127.0.0.1:8801/health > /dev/null 2>&1; then
     streamlit run finance_service/ui/dashboard.py
 else
     echo "⚠️  API backend not running. Please start it first:"
-    echo "   python3 run_finance_service.py"
+    echo "   python3 finance_service/run_finance_service.py"
     echo ""
     echo "Then run this script again to start the dashboard."
 fi

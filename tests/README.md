@@ -286,7 +286,7 @@ All met, except trading operations:
 
 ## 🔗 Related Files
 
-- Main service: `run_finance_service.py`
+- Main service: `finance_service/run_finance_service.py`
 - Dashboard: `finance_service/ui/dashboard_simple.py`
 - Config: `config/` directory
 - Logs: `logs/` directory

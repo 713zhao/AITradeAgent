@@ -73,6 +73,13 @@ class MainOrchestratorAgent:
         self.health_agent: Optional[HealthAgent] = None
         self.telegram_agent: Optional[TelegramAgent] = None
         self.exit_agent: Optional[ExitAgent] = None
+        self.last_scan_meta: Dict[str, Any] = {
+            "status": "never",
+            "triggered_at": None,
+            "market": None,
+            "debug_bypass_market_hours": False,
+            "as_of_date": None,
+        }
 
     async def run(self):
         """Main run loop - not used; agents run as background tasks."""
@@ -244,20 +251,48 @@ class MainOrchestratorAgent:
 
     async def handle_market_scan_trigger(self, event: Event):
         logger.info("Received MARKET_SCAN_TRIGGER")
-        # Check market hours: if both US and HK closed, skip scan entirely
+        event_data_in = event.data or {}
+        triggered_at = datetime.utcnow().isoformat()
+        self.last_scan_meta = {
+            "status": "triggered",
+            "triggered_at": triggered_at,
+            "market": event_data_in.get("market", "US"),
+            "debug_bypass_market_hours": bool(event_data_in.get("debug_bypass_market_hours", False)),
+            "as_of_date": event_data_in.get("as_of_date"),
+            "enforce_market_hours_for_scan": None,
+        }
+
+        # Configurable market-hours gate (can be disabled for debug scans)
+        enforce_market_hours = self.config_engine.get(
+            "finance", "scanner/enforce_market_hours_for_scan", default=True
+        )
+        self.last_scan_meta["enforce_market_hours_for_scan"] = bool(enforce_market_hours)
+        debug_bypass_market_hours = bool(event_data_in.get("debug_bypass_market_hours", False))
+
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
-        if not (is_us_market_open() or is_hk_market_open()):
+        if enforce_market_hours and not debug_bypass_market_hours and not (is_us_market_open() or is_hk_market_open()):
             logger.info("Markets closed (US and HK). Skipping market scan.")
+            self.last_scan_meta["status"] = "skipped"
+            self.last_scan_meta["reason"] = "markets_closed"
             return
+
+        if debug_bypass_market_hours:
+            logger.info("Debug bypass enabled: running market scan even though markets may be closed.")
+
         # Trigger scanner with DataAgent for proper ranking
         report = await self.market_scanner_agent.run(data_agent=self.data_agent)
+        self.last_scan_meta["scanner_report_status"] = report.status
+        self.last_scan_meta["scanner_message"] = report.message
+        self.last_scan_meta["symbols_discovered"] = len((report.payload or {}).get("symbols", []))
         if report.status == "success" or report.status == "opportunity":
             # Publish the payload as event data; include status in payload if needed
             event_data = report.payload.copy()
             event_data["status"] = report.status
             event_data["message"] = report.message
-            # Pass the market from the scan trigger if available
-            event_data["market"] = event.data.get("market", "US")
+            # Pass optional trigger context downstream
+            event_data["market"] = event_data_in.get("market", "US")
+            if event_data_in.get("as_of_date"):
+                event_data["as_of_date"] = event_data_in.get("as_of_date")
             await self.event_bus.publish(Event(event_type=Events.MARKET_SCANNED, data=event_data))
 
     async def handle_market_scanned(self, event: Event):
@@ -298,20 +333,28 @@ class MainOrchestratorAgent:
             chat_id = self.telegram_agent.chat_id
             if chat_id:
                 # Build detailed ranked summary with composite scores
+                import html as _html
                 preview_symbols = rated_symbols[:50] if rated_symbols else []
                 details = []
-                
+
                 for item in preview_symbols:
                     sym = item.get("symbol", "")
                     score = item.get("rating", 0)
                     rank = item.get("rank", 0)
                     snap = await self._get_symbol_snapshot(sym)
+                    yf_symbol = sym.replace(".", "-")
+                    quote_url = f"https://finance.yahoo.com/quote/{yf_symbol}"
                     if snap:
-                        price = snap.get('price', 0)
-                        details.append(f"{rank:2d}. {sym:6s}  ${price:7.2f} (score={score:.3f})")
+                        price = snap.get("price", 0)
+                        full_name = _html.escape(snap.get("full_name") or sym)
+                        details.append(
+                            f'{rank:2d}. <a href="{quote_url}">{_html.escape(sym)}</a> [{full_name}]  ${price:7.2f} (score={score:.3f})'
+                        )
                     else:
-                        details.append(f"{rank:2d}. {sym:6s}  N/A (score={score:.3f})")
-                
+                        details.append(
+                            f'{rank:2d}. <a href="{quote_url}">{_html.escape(sym)}</a> [N/A]  N/A (score={score:.3f})'
+                        )
+
                 # Header with ranking info
                 total_count = len(symbols)
                 header = f"📊 Daily Market Scan – Top {min(50, total_count)} Symbols (Ranked by Composite Score)\n"
@@ -324,7 +367,7 @@ class MainOrchestratorAgent:
                 message = header + "\n".join(details) + footer
                 
                 try:
-                    await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+                    await self.telegram_agent.send_message(chat_id=chat_id, message=message, parse_mode="HTML")
                     logger.info("Sent market scan summary to Telegram")
                 except Exception as e:
                     logger.error(f"Failed to send market scan Telegram: {e}")
@@ -334,8 +377,19 @@ class MainOrchestratorAgent:
 
         # Use 365-day lookback (1 year) to ensure enough trading days for SMA200
         from datetime import datetime, timedelta
-        end_date = datetime.now().date()
+        as_of_date = event.data.get("as_of_date")
+        if as_of_date:
+            try:
+                end_date = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+                logger.info(f"Using debug as_of_date for scan: {as_of_date}")
+            except ValueError:
+                logger.warning(f"Invalid as_of_date format {as_of_date}, expected YYYY-MM-DD. Falling back to today.")
+                end_date = datetime.now().date()
+        else:
+            end_date = datetime.now().date()
         start_date = end_date - timedelta(days=365)
+        self.last_scan_meta["as_of_date_resolved"] = end_date.isoformat()
+        self.last_scan_meta["lookback_start_date"] = start_date.isoformat()
         fetch_errors: list = []
         for symbol in symbols:
             # Data fetch (1d)
@@ -460,6 +514,11 @@ class MainOrchestratorAgent:
             # else: require approval, skip for now
 
         # Send error summary to Telegram if any data fetches failed
+        self.last_scan_meta["status"] = "completed"
+        self.last_scan_meta["completed_at"] = datetime.utcnow().isoformat()
+        self.last_scan_meta["processed_symbols"] = len(symbols)
+        self.last_scan_meta["fetch_errors_count"] = len(fetch_errors)
+
         if fetch_errors and self.health_agent:
             asyncio.create_task(
                 self.health_agent.send_error_alert(
@@ -719,11 +778,19 @@ class MainOrchestratorAgent:
             close = last["Close"]
             change = ((close - prev_close) / prev_close) * 100 if prev_close else None
             volume = last.get("Volume")
+            full_name = symbol
+            try:
+                info = ticker.info or {}
+                full_name = info.get("longName") or info.get("shortName") or symbol
+            except Exception:
+                pass
+
             return {
                 "symbol": symbol,
                 "price": float(close),
                 "change": float(change) if change is not None else None,
-                "volume": int(volume) if volume is not None else None
+                "volume": int(volume) if volume is not None else None,
+                "full_name": full_name,
             }
         except Exception as e:
             logger.debug(f"Snapshot fetch failed for {symbol}: {e}")
@@ -873,11 +940,41 @@ def create_app():
             return jsonify({"error": "Orchestrator not initialized"}), 503
         trigger_type = request.args.get("trigger_type")
         if trigger_type == "market-scan":
-            await _orchestrator.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={}))
-            return jsonify({"status": "queued", "trigger": "market_scan"})
+            market = request.args.get("market", "US")
+            debug_bypass_market_hours = request.args.get("debug_bypass_market_hours", "false").lower() in ("1", "true", "yes", "on")
+            debug_last_friday = request.args.get("debug_last_friday", "false").lower() in ("1", "true", "yes", "on")
+            as_of_date = request.args.get("as_of_date")
+
+            if debug_last_friday and not as_of_date:
+                today = datetime.utcnow().date()
+                # Python weekday: Monday=0 .. Sunday=6, Friday=4
+                days_since_friday = (today.weekday() - 4) % 7
+                as_of_date = (today - timedelta(days=days_since_friday)).isoformat()
+
+            payload = {
+                "market": market,
+                "debug_bypass_market_hours": debug_bypass_market_hours,
+            }
+            if as_of_date:
+                payload["as_of_date"] = as_of_date
+            await _orchestrator.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data=payload))
+            return jsonify({
+                "status": "queued",
+                "trigger": "market_scan",
+                "market": market,
+                "debug_bypass_market_hours": debug_bypass_market_hours,
+                "as_of_date": as_of_date,
+            })
         else:
             return jsonify({"error": "unknown trigger_type"}), 400
 
+
+    @app.route("/api/scan/last")
+    async def api_scan_last():
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+        return jsonify(_sanitize_floats({"status": "success", "data": _orchestrator.last_scan_meta}))
 
     @app.route("/api/dashboard/overview")
     async def api_dashboard_overview():
