@@ -305,15 +305,6 @@ class HealthAgent(Agent):
             return
 
         try:
-            # Refresh prices from market data before generating the report
-            try:
-                await asyncio.wait_for(
-                    self.portfolio_agent.update_prices_from_data_agent(),
-                    timeout=10.0
-                )
-            except Exception as _pe:
-                logger.warning(f"Daily summary: price refresh failed (using cached prices): {_pe}")
-
             portfolio_report = await asyncio.wait_for(
                 self.portfolio_agent.get_detailed_portfolio_state(),
                 timeout=5.0
@@ -411,15 +402,6 @@ class HealthAgent(Agent):
             return
 
         try:
-            # Refresh prices from market data before generating the report
-            try:
-                await asyncio.wait_for(
-                    self.portfolio_agent.update_prices_from_data_agent(),
-                    timeout=10.0
-                )
-            except Exception as _pe:
-                logger.warning(f"Hourly report: price refresh failed (using cached prices): {_pe}")
-
             portfolio_report = await asyncio.wait_for(
                 self.portfolio_agent.get_detailed_portfolio_state(),
                 timeout=5.0
@@ -452,12 +434,30 @@ class HealthAgent(Agent):
 
             now_utc = datetime.utcnow().strftime("%H:%M UTC")
 
+            unrealized_pnl = metrics.get("unrealized_pnl", 0.0)
+            realized_pnl   = metrics.get("realized_pnl", 0.0)
+            total_pnl      = metrics.get("total_pnl", unrealized_pnl + realized_pnl)
+            pnl_sign  = "+" if total_pnl >= 0 else ""
+            upnl_sign = "+" if unrealized_pnl >= 0 else ""
+
             lines = [f"⏰ *Hourly Portfolio — {now_utc}* ({market_str})\n"]
             lines.append(f"💼 Equity: *${equity:,.2f}*  |  Return: {ret:+.2f}%  |  Drawdown: {dd:.2f}%")
-            lines.append(f"💵 Cash: ${cash:,.2f}   📈 Positions: ${gross:,.2f}  ({n_pos} open)\n")
+            lines.append(f"💵 Cash: ${cash:,.2f}   📈 Positions: ${gross:,.2f}  ({n_pos} open)")
+            lines.append(f"📊 P&L: *{pnl_sign}${total_pnl:,.2f}*  (Unrealized: {upnl_sign}${unrealized_pnl:,.2f}  |  Realized: ${realized_pnl:,.2f})\n")
 
             if positions:
                 lines.append("*Positions:*")
+                lines.append("```")
+                lines.append(f"{'Sym':<6} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
+                lines.append("-" * 45)
+                for sym, pos in sorted(positions.items()):
+                    qty      = pos.get("quantity", 0)
+                    avg      = pos.get("avg_cost", 0)
+                    cur      = pos.get("current_price", avg)
+                    upnl     = pos.get("unrealized_pnl", (cur - avg) * qty)
+                    upnl_pct = pos.get("unrealized_pnl_pct", ((cur - avg) / avg * 100) if avg else 0)
+                    sign     = "+" if upnl >= 0 else ""
+                    lines.append(f"{sym:<6} {qty:>5} {avg:>7.2f} {cur:>7.2f} {sign}{upnl:>8,.0f} {upnl_pct:>+5.1f}%")
                 lines.append("```")
                 lines.append(f"{'Sym':<6} {'Qty':>5} {'Avg':>8} {'Value':>10} {'Wt':>6}")
                 lines.append("-" * 40)
