@@ -305,6 +305,15 @@ class HealthAgent(Agent):
             return
 
         try:
+            # Refresh prices from market data before generating the report
+            try:
+                await asyncio.wait_for(
+                    self.portfolio_agent.update_prices_from_data_agent(),
+                    timeout=10.0
+                )
+            except Exception as _pe:
+                logger.warning(f"Daily summary: price refresh failed (using cached prices): {_pe}")
+
             portfolio_report = await asyncio.wait_for(
                 self.portfolio_agent.get_detailed_portfolio_state(),
                 timeout=5.0
@@ -402,6 +411,15 @@ class HealthAgent(Agent):
             return
 
         try:
+            # Refresh prices from market data before generating the report
+            try:
+                await asyncio.wait_for(
+                    self.portfolio_agent.update_prices_from_data_agent(),
+                    timeout=10.0
+                )
+            except Exception as _pe:
+                logger.warning(f"Hourly report: price refresh failed (using cached prices): {_pe}")
+
             portfolio_report = await asyncio.wait_for(
                 self.portfolio_agent.get_detailed_portfolio_state(),
                 timeout=5.0
