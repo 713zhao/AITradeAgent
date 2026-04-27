@@ -314,7 +314,12 @@ class HealthAgent(Agent):
                 return
 
             metrics = portfolio_report.payload.get("equity_metrics", {})
-            positions = portfolio_report.payload.get("positions", {})
+            _raw_positions = portfolio_report.payload.get("positions", [])
+            # positions may be a list of dicts or a dict keyed by symbol — normalise to dict
+            if isinstance(_raw_positions, list):
+                positions = {p["symbol"]: p for p in _raw_positions if "symbol" in p}
+            else:
+                positions = _raw_positions
 
             # Get today's trades via date-range query
             from datetime import date
@@ -406,7 +411,12 @@ class HealthAgent(Agent):
                 return
 
             metrics   = portfolio_report.payload.get("equity_metrics", {})
-            positions = portfolio_report.payload.get("positions", {})
+            _raw_pos  = portfolio_report.payload.get("positions", [])
+            # normalise to dict keyed by symbol
+            if isinstance(_raw_pos, list):
+                positions = {p["symbol"]: p for p in _raw_pos if "symbol" in p}
+            else:
+                positions = _raw_pos
             equity    = metrics.get("total_equity", 0)
             cash      = metrics.get("current_cash", 0)
             gross     = metrics.get("gross_position_value", 0)
