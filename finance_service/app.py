@@ -227,6 +227,8 @@ class MainOrchestratorAgent:
         await self.event_bus.subscribe(Events.PRICE_MONITOR_TRIGGER, self.handle_price_monitor)  # Tier 2
         await self.event_bus.subscribe(Events.APPROVAL_REQUIRED, self.handle_approval_required)
         await self.event_bus.subscribe(Events.PRE_SCAN_CONTEXT_REFRESH, self.handle_pre_scan_context_refresh)
+        await self.event_bus.subscribe(Events.DAILY_REPORT_TRIGGER, self.handle_daily_report)
+        await self.event_bus.subscribe(Events.HOURLY_PORTFOLIO_TRIGGER, self.handle_hourly_portfolio_report)
 
         # Start background agents (those with continuous loops)
         asyncio.create_task(self.scheduler_agent.run())
@@ -918,6 +920,14 @@ class MainOrchestratorAgent:
     async def handle_schedule(self, event: Event):
         # Route to HealthAgent for periodic health check and daily summary
         await self.health_agent.run(event_type=Events.SCHEDULE, payload={})
+
+    async def handle_daily_report(self, event: Event):
+        """Dispatch DAILY_REPORT_TRIGGER to HealthAgent."""
+        await self.health_agent.run(event_type=Events.DAILY_REPORT_TRIGGER, payload={})
+
+    async def handle_hourly_portfolio_report(self, event: Event):
+        """Dispatch HOURLY_PORTFOLIO_TRIGGER to HealthAgent."""
+        await self.health_agent.run(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, payload={})
 
     # Helper methods
     async def _get_symbol_snapshot(self, symbol: str) -> Optional[Dict]:

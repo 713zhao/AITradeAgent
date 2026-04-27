@@ -60,6 +60,12 @@ class SchedulerAgent(Agent):
                 self._trigger_health_check,
                 timedelta(hours=4)
             )
+            # Hourly portfolio summary — market hours only (Tier 4)
+            await self._schedule_task(
+                "hourly_portfolio_report",
+                self._trigger_hourly_portfolio_report,
+                timedelta(hours=1)
+            )
             # Daily summary after market close: run at 16:05 UTC+8 (08:05 UTC) daily
             await self._schedule_daily_at("daily_report", "08:05", self._trigger_daily_report)
             # Market-open scans (fire at market open; pre-warm happens inside, then scan)
@@ -128,6 +134,11 @@ class SchedulerAgent(Agent):
         """Trigger daily summary report after market close."""
         await self.event_bus.publish(Event(event_type=Events.DAILY_REPORT_TRIGGER, data={}))
         logger.info("Published DAILY_REPORT_TRIGGER event.")
+
+    async def _trigger_hourly_portfolio_report(self):
+        """Tier 4: Hourly portfolio summary — only sent when a market is open."""
+        await self.event_bus.publish(Event(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, data={}))
+        logger.info("Published HOURLY_PORTFOLIO_TRIGGER event.")
 
     async def _schedule_daily_at(self, task_name: str, time_utc_str: str, coro: Callable[..., Awaitable[None]]):
         """Schedule a coroutine to run daily at a specific UTC time (HH:MM)."""

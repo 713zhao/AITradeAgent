@@ -81,7 +81,27 @@ curl http://127.0.0.1:8801/portfolio/state
 
 # Portfolio performance
 curl http://127.0.0.1:8801/portfolio/performance
+
+# Trading history (all trades)
+curl http://127.0.0.1:8801/api/trades/history
+
+# Filter by period: today | this_week | this_month | this_year
+curl "http://127.0.0.1:8801/api/trades/history?period=today"
+curl "http://127.0.0.1:8801/api/trades/history?period=this_week"
+curl "http://127.0.0.1:8801/api/trades/history?period=this_month"
+curl "http://127.0.0.1:8801/api/trades/history?period=this_year"
+
+# Filter by specific date
+curl "http://127.0.0.1:8801/api/trades/history?date=2026-04-27"
+
+# Filter by symbol and/or side
+curl "http://127.0.0.1:8801/api/trades/history?symbol=AAPL&side=BUY"
+
+# Combine filters (e.g. this month, BUY only, max 50 results)
+curl "http://127.0.0.1:8801/api/trades/history?period=this_month&side=BUY&limit=50"
 ```
+
+Response includes `filter`, `summary` (count/buys/sells/total_trade_value) and a `trades` list.
 
 ## Project Layout
 

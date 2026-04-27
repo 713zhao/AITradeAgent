@@ -273,6 +273,7 @@ class Events:
     DATA_REFRESH_TRIGGER = "data_refresh_trigger"  # Trigger to refresh data for existing symbols
     PRICE_MONITOR_TRIGGER = "price_monitor_trigger"  # Tier 2: lightweight price refresh (every 15 min)
     DAILY_REPORT_TRIGGER = "daily_report_trigger"
+    HOURLY_PORTFOLIO_TRIGGER = "hourly_portfolio_trigger"  # Hourly portfolio summary (market hours only)
     HEALTH_CHECK_TRIGGER = "health_check_trigger"
     PRE_SCAN_CONTEXT_REFRESH = "pre_scan_context_refresh"  # Pre-warm MarketRegimeAgent + MacroNewsAgent before scanner
 

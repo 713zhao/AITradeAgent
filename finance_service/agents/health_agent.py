@@ -84,6 +84,10 @@ class HealthAgent(Agent):
             await self.send_daily_summary()
             return AgentReport(agent_id=self.agent_id, status="success", message="Daily summary sent")
         
+        elif event_type == Events.HOURLY_PORTFOLIO_TRIGGER:
+            await self.send_hourly_portfolio_report()
+            return AgentReport(agent_id=self.agent_id, status="success", message="Hourly portfolio report sent")
+
         elif event_type == Events.GET_SYSTEM_STATUS:
             # Return health status for system status query
             health_report = await self.get_health_status()
@@ -375,3 +379,72 @@ class HealthAgent(Agent):
             logger.error("Portfolio state fetch timed out for daily summary; cannot send summary")
         except Exception as e:
             logger.error(f"Error sending daily summary: {e}")
+
+    async def send_hourly_portfolio_report(self):
+        """Send a compact hourly portfolio summary — only while a market is open."""
+        from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
+        us_open = is_us_market_open()
+        hk_open = is_hk_market_open()
+        if not (us_open or hk_open):
+            logger.info("Hourly portfolio report: markets closed, skipping.")
+            return
+
+        if not self.telegram_agent or not self.telegram_agent.enabled:
+            logger.warning("TelegramAgent not configured; skipping hourly report")
+            return
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
+            return
+
+        try:
+            portfolio_report = await asyncio.wait_for(
+                self.portfolio_agent.get_detailed_portfolio_state(),
+                timeout=5.0
+            )
+            if portfolio_report.status != "success":
+                logger.error(f"Hourly report: portfolio fetch failed: {portfolio_report.message}")
+                return
+
+            metrics   = portfolio_report.payload.get("equity_metrics", {})
+            positions = portfolio_report.payload.get("positions", {})
+            equity    = metrics.get("total_equity", 0)
+            cash      = metrics.get("current_cash", 0)
+            gross     = metrics.get("gross_position_value", 0)
+            ret       = metrics.get("total_return_pct", 0.0)
+            dd        = metrics.get("drawdown_pct", 0.0)
+            n_pos     = len(positions)
+
+            # Which market(s) open right now?
+            open_markets = []
+            if us_open:
+                open_markets.append("🇺🇸 US")
+            if hk_open:
+                open_markets.append("🇭🇰 HK")
+            market_str = " & ".join(open_markets) + " market open"
+
+            now_utc = datetime.utcnow().strftime("%H:%M UTC")
+
+            lines = [f"⏰ *Hourly Portfolio — {now_utc}* ({market_str})\n"]
+            lines.append(f"💼 Equity: *${equity:,.2f}*  |  Return: {ret:+.2f}%  |  Drawdown: {dd:.2f}%")
+            lines.append(f"💵 Cash: ${cash:,.2f}   📈 Positions: ${gross:,.2f}  ({n_pos} open)\n")
+
+            if positions:
+                lines.append("*Positions:*")
+                lines.append("```")
+                lines.append(f"{'Sym':<6} {'Qty':>5} {'Avg':>8} {'Value':>10} {'Wt':>6}")
+                lines.append("-" * 40)
+                for sym, pos in sorted(positions.items()):
+                    mv  = pos.get("market_value", pos.get("cost_basis", 0))
+                    qty = pos.get("quantity", 0)
+                    avg = pos.get("avg_cost", 0)
+                    wt  = mv / equity * 100 if equity else 0
+                    lines.append(f"{sym:<6} {qty:>5} {avg:>8.2f} {mv:>10,.0f} {wt:>5.1f}%")
+                lines.append("```")
+
+            message = "\n".join(lines)
+            await self.telegram_agent.send_message(chat_id=chat_id, message=message, parse_mode="Markdown")
+            logger.info(f"Sent hourly portfolio report ({n_pos} positions)")
+        except asyncio.TimeoutError:
+            logger.error("Hourly report: portfolio state fetch timed out")
+        except Exception as e:
+            logger.error(f"Error in hourly portfolio report: {e}")
