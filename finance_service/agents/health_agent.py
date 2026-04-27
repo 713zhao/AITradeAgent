@@ -34,6 +34,12 @@ class HealthAgent(Agent):
         self.event_bus = None  # Set by orchestrator
         self.portfolio_agent: Optional[PortfolioAgent] = None
         self.telegram_agent: Optional[TelegramAgent] = None
+        self.market_scanner_agent = None
+        self.data_agent = None
+        self.market_scanner_agent = None
+        self.data_agent = None
+        self.market_scanner_agent = None
+        self.data_agent = None
         
         # Alert thresholds (read from config/YAML if available)
         try:
@@ -402,6 +408,40 @@ class HealthAgent(Agent):
             return
 
         try:
+            # Refresh live prices before generating the report so P&L reflects current market.
+            # Detect stale prices: after a restart, position.current_price is reset to avg_cost
+            # (execution price) since it's only held in memory, not persisted to DB.
+            # If ALL positions show current_price ≈ avg_cost, prices haven't been updated yet.
+            if self.market_scanner_agent and self.data_agent and self.portfolio_agent:
+                positions = self.portfolio_agent.repository.get_positions()
+                held = [p.symbol for p in positions]
+                prices_stale = (
+                    len(positions) > 0 and
+                    all(abs(p.current_price - p.avg_cost) < 0.01 for p in positions)
+                )
+                if prices_stale:
+                    logger.info("Hourly report: prices look stale (current_price == avg_cost), fetching live prices")
+                    try:
+                        scan_report = await asyncio.wait_for(
+                            self.market_scanner_agent.refresh_watchlist_prices(
+                                data_agent=self.data_agent,
+                                held_symbols=held,
+                            ),
+                            timeout=60.0
+                        )
+                        if scan_report and scan_report.status == "success":
+                            price_dict = {item["symbol"]: item["price"]
+                                          for item in scan_report.payload.get("prices", [])}
+                            if price_dict:
+                                self.portfolio_agent.repository.update_position_prices(price_dict)
+                                logger.info(f"Hourly report: applied {len(price_dict)} fresh price updates")
+                    except asyncio.TimeoutError:
+                        logger.warning("Hourly report: price refresh timed out, using cached prices")
+                    except Exception as e:
+                        logger.warning(f"Hourly report: price refresh failed ({e}), using cached prices")
+                else:
+                    logger.info("Hourly report: prices already live (current_price != avg_cost), skipping pre-refresh")
+
             portfolio_report = await asyncio.wait_for(
                 self.portfolio_agent.get_detailed_portfolio_state(),
                 timeout=5.0

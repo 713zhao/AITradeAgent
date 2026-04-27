@@ -203,6 +203,8 @@ class MainOrchestratorAgent:
         self.risk_agent.portfolio_agent = self.portfolio_agent
         self.health_agent.portfolio_agent = self.portfolio_agent
         self.health_agent.telegram_agent = self.telegram_agent
+        self.health_agent.market_scanner_agent = self.market_scanner_agent
+        self.health_agent.data_agent = self.data_agent
         self.portfolio_agent.repository = self.repository
 
         # Inject dependencies
