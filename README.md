@@ -125,21 +125,46 @@ AITradeAgent/
 └── logs/
 ```
 
+## Service Management (systemd)
+
+The service is registered as a systemd user service and **auto-starts at boot**.
+Unit file location: `~/.config/systemd/user/aitrade.service`
+
+```bash
+# Check status
+systemctl --user status aitrade.service
+
+# Start / Stop / Restart
+systemctl --user start aitrade.service
+systemctl --user stop aitrade.service
+systemctl --user restart aitrade.service
+
+# Enable / disable auto-start at boot
+systemctl --user enable aitrade.service
+systemctl --user disable aitrade.service
+
+# Tail runtime log
+tail -f logs/finance_service_restart.log
+```
+
+The service uses `Restart=on-failure` — auto-recovers after crashes.
+`Linger=yes` is set on the user account so the service starts at boot even without a login session.
+
 ## Common Commands
 
 ```bash
 # Run tests
 pytest tests/ -v
 
-# Tail runtime log (when started by start.sh)
+# Tail runtime log
 tail -f logs/finance_service_restart.log
 
-# Stop service
+# Manual stop (prefer systemctl stop when systemd is managing the service)
 pkill -f run_finance_service.py
 ```
 
 ## Notes
 
 - The project uses a single dependency file: `requirements.txt`.
-- `start.sh` writes PID to `logs/finance.pid`.
+- `start.sh` writes PID to `logs/finance.pid`. Use `systemctl --user restart aitrade.service` instead when systemd is managing the service.
 - Scan summaries are sent to Telegram when Telegram config is enabled.
