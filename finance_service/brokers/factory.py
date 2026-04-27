@@ -38,7 +38,8 @@ class BrokerFactory:
 
         initial_cash = 100000.0
         if config:
-            initial_cash = config.get('initial_cash', initial_cash)
+            broker_specific = config.get(broker_type.lower(), config)
+            initial_cash = broker_specific.get('initial_cash', initial_cash)
 
         if broker_type == 'paper':
             return broker_class(initial_cash=initial_cash)

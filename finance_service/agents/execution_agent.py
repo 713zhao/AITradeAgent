@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.models import TradeProposal
-from finance_service.brokers import OrderRequest, OrderType, OrderSide
 
 logger = logging.getLogger(__name__)
 
@@ -48,44 +47,46 @@ class ExecutionAgent(Agent):
             risk_assessments = approval_report.payload.get("risk_assessments", [])
             risk_assessment = risk_assessments[0] if risk_assessments else {}
 
-            # REAL BROKER EXECUTION: Place the order on the broker
+            # Execute via broker using submit_order(dict) interface
             logger.info(f"📊 Placing {trade_proposal.action.upper()} order: {trade_proposal.quantity} × {trade_proposal.symbol} @ ${trade_proposal.target_price}")
             
             try:
-                # Create OrderRequest for broker
-                order_side = OrderSide.BUY if trade_proposal.action.lower() == "buy" else OrderSide.SELL
+                order_dict = {
+                    "symbol": trade_proposal.symbol,
+                    "action": trade_proposal.action.upper(),
+                    "quantity": trade_proposal.quantity or 1.0,
+                    "order_type": "limit",
+                    "price": trade_proposal.target_price,
+                }
+                order_result = await self.broker.submit_order(order_dict)
                 
-                order_request = OrderRequest(
-                    symbol=trade_proposal.symbol,
-                    quantity=trade_proposal.quantity or 1.0,
-                    side=order_side,
-                    order_type=OrderType.LIMIT,
-                    price=trade_proposal.target_price,
-                    time_in_force="DAY"
-                )
+                if order_result.status == "rejected":
+                    err = getattr(order_result, 'error_message', 'Unknown rejection reason')
+                    logger.error(f"❌ Order rejected by broker: {err}")
+                    return AgentReport(
+                        agent_id=self.agent_id,
+                        status="error",
+                        message=f"Order rejected: {err}"
+                    )
                 
-                # Call broker to place the order (synchronous)
-                order_result = self.broker.place_order(order_request)
+                logger.info(f"✅ Order submitted: {order_result.order_id} status={order_result.status}")
                 
-                logger.info(f"✅ Order placed successfully: {order_result}")
-                
-                # Extract execution details from broker response
                 execution_result = {
-                    "trade_id": order_result.order_id if hasattr(order_result, 'order_id') else f"trade_{trade_proposal.symbol}_{datetime.utcnow().timestamp()}",
+                    "trade_id": order_result.order_id,
                     "symbol": trade_proposal.symbol,
                     "action": trade_proposal.action,
-                    "quantity": order_result.quantity if hasattr(order_result, 'quantity') else trade_proposal.quantity or 1.0,
-                    "filled_price": order_result.fill_price if hasattr(order_result, 'fill_price') else trade_proposal.target_price,
-                    "status": order_result.status.value if hasattr(order_result, 'status') else "SUBMITTED",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "quantity": order_result.filled_quantity or order_result.quantity,
+                    "price": order_result.filled_price or trade_proposal.target_price,
+                    "filled_price": order_result.filled_price or trade_proposal.target_price,
+                    "status": order_result.status,
+                    "timestamp": datetime.utcnow().isoformat(),
                 }
                 
-                flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={trade_proposal.quantity} @ ${trade_proposal.target_price} → {execution_result['status']}")
-                message = f"✅ Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
+                flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={execution_result['quantity']} @ ${execution_result['filled_price']} → {execution_result['status']}")
+                message = f"✅ Trade {trade_proposal.symbol} {trade_proposal.action} executed: {execution_result['status']}"
                 
             except Exception as broker_error:
                 logger.error(f"❌ Broker execution failed: {broker_error}", exc_info=True)
-                # Return error report instead of silent failure
                 return AgentReport(
                     agent_id=self.agent_id,
                     status="error",

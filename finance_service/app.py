@@ -124,6 +124,7 @@ class MainOrchestratorAgent:
             "min_position_size_usd",
             "allow_short_selling",
             "margin_enabled",
+            "approval_required_pct",
         ]
         for field in risk_fields:
             val = config_engine.get("finance", f"risk/{field}", default=None)
@@ -713,32 +714,51 @@ class MainOrchestratorAgent:
             logger.error(f"Error handling approval required: {e}", exc_info=True)
     
     async def execute_trade_proposal(self, proposal: Dict[str, Any], task_id: str):
-        """Execute a trade proposal after approval"""
+        """Execute a trade proposal after Telegram approval, using real broker."""
         try:
             from datetime import datetime
-            
-            execution_result = {
-                "trade_id": task_id,
-                "symbol": proposal.get("symbol"),
-                "action": proposal.get("action"),
-                "quantity": proposal.get("quantity", 1.0),
-                "filled_price": proposal.get("target_price"),
-                "status": "FILLED",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-            
-            # Send execution notification
-            await self.telegram_agent.send_message(
-                f"✅ Trade Executed: {proposal.get('action')} {proposal.get('quantity')} {proposal.get('symbol')} @ ${proposal.get('target_price')}"
+            from finance_service.agents.agent_interface import AgentReport
+            from finance_service.core.models import TradeProposal
+            from dataclasses import asdict
+
+            trade_proposal = TradeProposal(
+                symbol=proposal.get("symbol", ""),
+                action=proposal.get("action", "BUY"),
+                quantity=proposal.get("quantity", 1.0),
+                target_price=proposal.get("target_price"),
+                confidence=proposal.get("confidence", 1.0),
             )
-            
-            # Publish trade executed event
-            await self.event_bus.publish(__import__('finance_service.core.event_bus', fromlist=['Event']).Event(
-                event_type=__import__('finance_service.core.event_bus', fromlist=['Events']).Events.TRADE_EXECUTED,
-                data={"trade_info": execution_result}
-            ))
-            
-            logger.info(f"Trade {task_id} execution completed")
+            risk_report = AgentReport(
+                agent_id="approval_gate",
+                status="success",
+                message="Manual approval granted",
+                payload={
+                    "trade_proposals": [asdict(trade_proposal)],
+                    "risk_assessments": [],
+                    "all_passed": True,
+                    "decision": "APPROVED",
+                },
+            )
+            exec_report = await self.execution_agent.run(risk_report)
+            if exec_report.status == "success":
+                execution_result = exec_report.payload.get("execution_result", {})
+                await self.event_bus.publish(Event(
+                    event_type=Events.TRADE_EXECUTED,
+                    data=exec_report.payload,
+                ))
+                if self.telegram_agent and self.telegram_agent.enabled:
+                    status = execution_result.get("status", "?")
+                    filled = execution_result.get("filled_price", proposal.get("target_price"))
+                    await self.telegram_agent.send_message(
+                        f"✅ Trade Executed: {proposal.get('action')} {proposal.get('quantity')} "
+                        f"{proposal.get('symbol')} @ ${filled} [{status}]"
+                    )
+            else:
+                if self.telegram_agent and self.telegram_agent.enabled:
+                    await self.telegram_agent.send_message(
+                        f"❌ Trade execution failed: {exec_report.message}"
+                    )
+            logger.info(f"Trade {task_id} execution completed: {exec_report.status}")
         except Exception as e:
             logger.error(f"Error executing trade proposal: {e}", exc_info=True)
 

@@ -10,6 +10,7 @@ risk:
   min_position_size_usd: 100
   allow_short_selling: false
   margin_enabled: false
+  approval_required_pct: 0.5   # confidence below this triggers approval; 0.5 = any single-rule pass works
 strategies:
   momentum_trend:
     allocation: 1.0
@@ -195,8 +196,27 @@ strategies:
       indicator: regime_score
       condition: less_than
       value: 30.0
+  sma20_trend:
+    allocation: 1.0
+    risk_budget_pct: 1.5
+    confidence_threshold: 1.0
+    entry_rules:
+      - name: price_above_sma20
+        type: entry
+        indicator: sma_20
+        condition: greater_than
+        value: 0.0
+        compare_to_price: true
+    exit_rules:
+      - name: price_below_sma20
+        type: exit
+        indicator: sma_20
+        condition: less_than
+        value: 0.0
+        compare_to_price: true
+
 strategy:
-  type: momentum_trend
+  type: sma20_trend   # single-rule strategy: price > SMA20 → confidence=1.0, always executes
   auto_execute:
     enabled: true
     confidence_threshold: 0.5
