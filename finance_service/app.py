@@ -269,16 +269,29 @@ class MainOrchestratorAgent:
         )
         self.last_scan_meta["enforce_market_hours_for_scan"] = bool(enforce_market_hours)
         debug_bypass_market_hours = bool(event_data_in.get("debug_bypass_market_hours", False))
+        bypass_market_hours_scan = bool(event_data_in.get("bypass_market_hours_scan", False))
+        market_for_scan = event_data_in.get("market", "US")
 
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
-        if enforce_market_hours and not debug_bypass_market_hours and not (is_us_market_open() or is_hk_market_open()):
-            logger.info("Markets closed (US and HK). Skipping market scan.")
-            self.last_scan_meta["status"] = "skipped"
-            self.last_scan_meta["reason"] = "markets_closed"
-            return
+        if enforce_market_hours and not debug_bypass_market_hours and not bypass_market_hours_scan:
+            hk_open = is_hk_market_open()
+            us_open = is_us_market_open()
+            # For market-specific scans, only check the relevant market
+            if market_for_scan == "HK" and not hk_open:
+                logger.info("HK market closed. Skipping HK market scan.")
+                self.last_scan_meta["status"] = "skipped"
+                self.last_scan_meta["reason"] = "hk_market_closed"
+                return
+            elif market_for_scan != "HK" and not us_open and not hk_open:
+                logger.info("Markets closed (US and HK). Skipping market scan.")
+                self.last_scan_meta["status"] = "skipped"
+                self.last_scan_meta["reason"] = "markets_closed"
+                return
 
         if debug_bypass_market_hours:
             logger.info("Debug bypass enabled: running market scan even though markets may be closed.")
+        elif bypass_market_hours_scan:
+            logger.info(f"Scheduler bypass: running {market_for_scan} market scan at scheduled market-open time.")
 
         # Trigger scanner with DataAgent for proper ranking
         report = await self.market_scanner_agent.run(data_agent=self.data_agent)
@@ -484,10 +497,13 @@ class MainOrchestratorAgent:
                 continue
             logger.info(f"Risk report for {symbol}: status={risk_report.status}, decision={risk_report.payload.get('decision')}, passed={risk_report.payload.get('all_passed')}, approval_required={risk_report.payload.get('any_approval_required')}")
             if risk_report.payload.get("decision") == "APPROVED":
-                # Guard: only execute during market hours
+                # Guard: only execute during the relevant market's hours
                 from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
-                if not (is_us_market_open() or is_hk_market_open()):
-                    logger.warning(f"Skipping execution for {symbol}: markets closed")
+                _sym_is_hk = symbol.endswith(".HK")
+                _market_open = is_hk_market_open() if _sym_is_hk else is_us_market_open()
+                if not _market_open:
+                    _mkt_name = "HK" if _sym_is_hk else "US"
+                    logger.warning(f"Skipping execution for {symbol}: {_mkt_name} market closed")
                     continue
                 # Send pre-execution Telegram notification before placing the trade
                 if self.telegram_agent and self.telegram_agent.enabled:

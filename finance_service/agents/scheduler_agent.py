@@ -62,9 +62,9 @@ class SchedulerAgent(Agent):
             )
             # Daily summary after market close: run at 16:05 UTC+8 (08:05 UTC) daily
             await self._schedule_daily_at("daily_report", "08:05", self._trigger_daily_report)
-            # Pre-market scans (30min before market open)
-            await self._schedule_daily_at("pre_market_scan_hk", "01:00", self._trigger_pre_market_scan_hk)
-            await self._schedule_daily_at("pre_market_scan_us", "13:00", self._trigger_pre_market_scan_us)
+            # Market-open scans (fire at market open; pre-warm happens inside, then scan)
+            await self._schedule_daily_at("pre_market_scan_hk", "01:30", self._trigger_pre_market_scan_hk)  # HK opens 09:30 HKT = 01:30 UTC
+            await self._schedule_daily_at("pre_market_scan_us", "13:30", self._trigger_pre_market_scan_us)  # US opens 09:30 ET = 13:30 UTC
             
             logger.info("SchedulerAgent tasks initiated.")
             return AgentReport(agent_id=self.agent_id, status="success", message="SchedulerAgent started.")
@@ -169,13 +169,14 @@ class SchedulerAgent(Agent):
         logger.info("Published PRE_SCAN_CONTEXT_REFRESH for HK pre-market (pre-warming regime + macro)")
         # Give orchestrator ~5 seconds to warm cache before scanner runs
         await asyncio.sleep(5)
-        # Step 2: Trigger market scanner
+        # Step 2: Trigger market scanner (bypass_market_hours_scan: scheduler fires at open, no need to re-check)
         await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
-            "interval": "pre_market",
+            "interval": "market_open",
             "send_telegram_report": True,
-            "market": "HK"
+            "market": "HK",
+            "bypass_market_hours_scan": True,
         }))
-        logger.info("Published MARKET_SCAN_TRIGGER for HK pre-market")
+        logger.info("Published MARKET_SCAN_TRIGGER for HK market open")
 
     async def _trigger_pre_market_scan_us(self):
         """Trigger pre-market scan for US (30min before 09:30 local time).
@@ -186,13 +187,14 @@ class SchedulerAgent(Agent):
         logger.info("Published PRE_SCAN_CONTEXT_REFRESH for US pre-market (pre-warming regime + macro)")
         # Give orchestrator ~5 seconds to warm cache before scanner runs
         await asyncio.sleep(5)
-        # Step 2: Trigger market scanner
+        # Step 2: Trigger market scanner (bypass_market_hours_scan: scheduler fires at open, no need to re-check)
         await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
-            "interval": "pre_market",
+            "interval": "market_open",
             "send_telegram_report": True,
-            "market": "US"
+            "market": "US",
+            "bypass_market_hours_scan": True,
         }))
-        logger.info("Published MARKET_SCAN_TRIGGER for US pre-market")
+        logger.info("Published MARKET_SCAN_TRIGGER for US market open")
 
     async def stop(self):
         """Stops all scheduled tasks."""
