@@ -386,23 +386,28 @@ class StrategyAgent(Agent):
                 if stop_loss_price >= current_price:
                     stop_loss_price = round(current_price * 0.95, 2)  # 5% below as fallback
                 
+                # Currency normalisation: HK stocks quote in HKD; convert to USD for sizing
+                fx_rate = 7.78 if symbol.endswith('.HK') else 1.0  # HKD per USD (pegged ~7.75-7.85)
+                price_usd = current_price / fx_rate  # price in USD for all portfolio math
+
                 # Position sizing: risk-based, respecting existing exposure
                 risk_per_share = current_price - stop_loss_price
-                if risk_per_share <= 0:
-                    logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share}. Using default 1 share.")
+                risk_per_share_usd = risk_per_share / fx_rate  # convert risk to USD
+                if risk_per_share_usd <= 0:
+                    logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share_usd:.4f} USD. Using default 1 share.")
                     quantity = 1
                 else:
                     # Maximum loss amount we're willing to take for this trade
                     risk_budget_usd = portfolio_equity * (self.risk_budget_pct / 100.0)
-                    desired_quantity = int(risk_budget_usd / risk_per_share)
+                    desired_quantity = int(risk_budget_usd / risk_per_share_usd)
                     desired_quantity = max(1, desired_quantity)
                     
                     # --- FIX 2: Adjust quantity to respect max position size ---
                     # Compute total position after trade
                     total_qty = existing_qty + desired_quantity
-                    # Max allowed qty based on % of portfolio
+                    # Max allowed qty based on % of portfolio (price converted to USD)
                     max_allowed_value = portfolio_equity * (max_position_size_pct / 100.0)
-                    max_allowed_qty = int(max_allowed_value / current_price)
+                    max_allowed_qty = int(max_allowed_value / price_usd)
                     if total_qty > max_allowed_qty:
                         quantity = max(0, max_allowed_qty - existing_qty)
                         if quantity == 0:

@@ -41,10 +41,20 @@ class PaperBroker(BaseBroker):
     - Simulated order fills with configurable delay
     - Slippage simulation for market orders
     - Position tracking
-    - Account cash management
+    - Account cash management (all values denominated in USD)
     - Order status transitions
     - Partial fills simulation
+
+    Note: HK stocks trade in HKD. An approximate peg rate of 7.78 HKD/USD is used to
+    normalise costs, proceeds, and market values into USD for portfolio accounting.
     """
+
+    _HKD_USD = 7.78  # approximate HKD/USD peg rate
+
+    @staticmethod
+    def _fx(symbol: str) -> float:
+        """Return FX divisor to convert local currency → USD. HK stocks: HKD/USD."""
+        return PaperBroker._HKD_USD if symbol.endswith('.HK') else 1.0
     
     def __init__(
         self,
@@ -248,13 +258,14 @@ class PaperBroker(BaseBroker):
             order.status = OrderStatus.FILLED
             order.filled_at = now
             
-            # Update cash and positions
+            # Update cash and positions (normalise HK prices HKD→USD)
+            fx = self._fx(order.symbol)
             if order.side == OrderSide.BUY:
-                cost = order.quantity * fill_price
+                cost = order.quantity * fill_price / fx
                 self.cash -= cost
                 self._add_position(order.symbol, order.quantity, fill_price)
             else:
-                proceeds = order.quantity * fill_price
+                proceeds = order.quantity * fill_price / fx
                 self.cash += proceeds
                 self._remove_position(order.symbol, order.quantity)
             
@@ -310,12 +321,13 @@ class PaperBroker(BaseBroker):
             pos.quantity = total_qty
         else:
             quote = self.quotes.get(symbol, {"last": price})
+            fx = self._fx(symbol)
             self.positions[symbol] = Position(
                 symbol=symbol,
                 quantity=quantity,
                 entry_price=price,
                 current_price=quote["last"],
-                market_value=quantity * quote["last"],
+                market_value=quantity * quote["last"] / fx,  # normalised to USD
                 unrealized_pnl=0.0,
                 unrealized_pnl_pct=0.0,
                 side="long",
@@ -333,9 +345,10 @@ class PaperBroker(BaseBroker):
             del self.positions[symbol]
         else:
             quote = self.quotes.get(symbol, {"last": pos.current_price})
+            fx = self._fx(symbol)
             pos.current_price = quote["last"]
-            pos.market_value = pos.quantity * pos.current_price
-            pos.unrealized_pnl = (pos.current_price - pos.entry_price) * pos.quantity
+            pos.market_value = pos.quantity * pos.current_price / fx  # normalised to USD
+            pos.unrealized_pnl = (pos.current_price - pos.entry_price) * pos.quantity / fx
             pos.unrealized_pnl_pct = (pos.current_price - pos.entry_price) / pos.entry_price * 100
     
     def get_filled_trades(self) -> List[Dict]:

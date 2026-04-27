@@ -57,16 +57,21 @@ class Position:
         """Allow setting entry_price as alias for avg_cost."""
         self.avg_cost = value
     
+    @staticmethod
+    def _fx(symbol: str) -> float:
+        """FX divisor: HK stocks trade in HKD; returns HKD/USD rate so values are in USD."""
+        return 7.78 if (symbol or "").endswith('.HK') else 1.0
+
     def market_value(self) -> float:
-        """Current market value of position."""
+        """Current market value of position, normalised to USD."""
         # Guard against NaN or infinite current_price
         if self.current_price is None or not isinstance(self.current_price, (int, float)) or self.current_price != self.current_price or self.current_price in (float('inf'), float('-inf')):
             return 0.0
-        return self.quantity * self.current_price
+        return self.quantity * self.current_price / self._fx(self.symbol)
     
     def cost_basis(self) -> float:
-        """Total cost of position (avg_cost * qty)."""
-        return self.quantity * self.avg_cost
+        """Total cost of position (avg_cost * qty), normalised to USD."""
+        return self.quantity * self.avg_cost / self._fx(self.symbol)
     
     def unrealized_pnl(self) -> float:
         """Unrealized profit/loss."""

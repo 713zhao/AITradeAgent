@@ -460,7 +460,9 @@ class RiskAgent(Agent):
             # Cash sufficiency check: reject if total trade cost exceeds available cash
             if decision == "APPROVED" and proposals_data:
                 p = proposals_data[0]
-                trade_cost = (p.get("quantity") or 0) * (p.get("target_price") or 0)
+                _sym = p.get("symbol", "")
+                _fx = 7.78 if _sym.endswith('.HK') else 1.0  # HKD→USD for HK stocks
+                trade_cost = (p.get("quantity") or 0) * (p.get("target_price") or 0) / _fx
                 if trade_cost > available_cash:
                     decision = "REJECTED"
                     message = (f"Insufficient cash: trade costs ${trade_cost:,.2f} "
