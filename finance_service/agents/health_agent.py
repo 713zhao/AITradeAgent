@@ -459,6 +459,9 @@ class HealthAgent(Agent):
                     sign     = "+" if upnl >= 0 else ""
                     lines.append(f"{sym:<6} {qty:>5} {avg:>7.2f} {cur:>7.2f} {sign}{upnl:>8,.0f} {upnl_pct:>+5.1f}%")
                 lines.append("```")
+                lines.append("")
+                lines.append("*Allocation:*")
+                lines.append("```")
                 lines.append(f"{'Sym':<6} {'Qty':>5} {'Avg':>8} {'Value':>10} {'Wt':>6}")
                 lines.append("-" * 40)
                 for sym, pos in sorted(positions.items()):

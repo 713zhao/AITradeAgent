@@ -1129,6 +1129,9 @@ def create_app():
                 "debug_bypass_market_hours": debug_bypass_market_hours,
                 "as_of_date": as_of_date,
             })
+        elif trigger_type == "hourly-report":
+            await _orchestrator.event_bus.publish(Event(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, data={}))
+            return jsonify({"status": "queued", "trigger": "hourly_report"})
         else:
             return jsonify({"error": "unknown trigger_type"}), 400
 
