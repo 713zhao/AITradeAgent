@@ -200,12 +200,12 @@ class StrategyAgent(Agent):
         rules_config = self._load_rules_from_config()
         self.rule_strategy = RuleStrategy(rules_config)
         # Load portfolio and risk parameters for position sizing
-        self.initial_cash = self.config_engine.get("finance", "portfolio/initial_cash", default=100000.0)
+        self.initial_cash = self.config_engine.get("portfolio", "initial_cash", default=100000.0)
         # Get active strategy's risk_budget_pct
-        strategy_name = self.config_engine.get("finance", "strategy/type", default=None)
+        strategy_name = self.config_engine.get("strategy", "type", default=None)
         self.risk_budget_pct = 1.5  # default
         if strategy_name:
-            strategies = self.config_engine.get("finance", "strategies", default={})
+            strategies = self.config_engine.get_section("strategies")
             if isinstance(strategies, dict) and strategy_name in strategies:
                 strat_cfg = strategies[strategy_name]
                 self.risk_budget_pct = strat_cfg.get('risk_budget_pct', 1.5)
@@ -214,16 +214,16 @@ class StrategyAgent(Agent):
         # Position cooling: track last entry per symbol to avoid stacking
         self.last_entry_time: Dict[str, datetime] = {}
         # Cooling period in hours (configurable)
-        self.position_cooling_hours = self.config_engine.get("finance", "strategy/position_cooling_hours", default=24)
+        self.position_cooling_hours = self.config_engine.get("strategy", "position_cooling_hours", default=24)
         logger.info(f"StrategyAgent: portfolio_value=${self.initial_cash:,.2f}, risk_budget_pct={self.risk_budget_pct}%, position_cooling_hours={self.position_cooling_hours}")
         logger.info(f"StrategyAgent initialized with {len(rules_config)} rules")
 
     def _load_rules_from_config(self) -> List[Dict]:
         """Load trading rules from YAML configuration."""
         # New approach: select a strategy from the strategies dict by name
-        strategy_name = self.config_engine.get("finance", "strategy/type", default=None)
+        strategy_name = self.config_engine.get("strategy", "type", default=None)
         if strategy_name:
-            strategies = self.config_engine.get("finance", "strategies", default={})
+            strategies = self.config_engine.get_section("strategies")
             if isinstance(strategies, dict) and strategy_name in strategies:
                 strat_cfg = strategies[strategy_name]
                 entry_rules = strat_cfg.get('entry_rules', [])
@@ -238,7 +238,7 @@ class StrategyAgent(Agent):
         # Fallback to legacy format (boolean flags)
         logger.warning("Falling back to legacy strategy config format")
         rules = []
-        rules_enabled = self.config_engine.get("finance", "strategy/rules", default={})
+        rules_enabled = self.config_engine.get("strategy", "rules", default={})
         if isinstance(rules_enabled, dict):
             rule_map = {
                 'rsi_entry_oversold': {
@@ -246,7 +246,7 @@ class StrategyAgent(Agent):
                     'type': 'entry',
                     'indicator': 'rsi',
                     'condition': 'less_than',
-                    'value': self.config_engine.get("finance", "strategy/rules/rsi_entry_oversold_threshold", default=35)
+                    'value': self.config_engine.get("strategy", "rules/rsi_entry_oversold_threshold", default=35)
                 },
                 'macd_crossover': {
                     'name': 'macd_bullish_entry',
@@ -268,7 +268,7 @@ class StrategyAgent(Agent):
                     'type': 'exit',
                     'indicator': 'rsi',
                     'condition': 'greater_than',
-                    'value': self.config_engine.get("finance", "strategy/rules/rsi_exit_overbought_threshold", default=70)
+                    'value': self.config_engine.get("strategy", "rules/rsi_exit_overbought_threshold", default=70)
                 },
                 'macd_signal_exit': {
                     'name': 'macd_signal_cross_exit',
@@ -369,7 +369,7 @@ class StrategyAgent(Agent):
                                     break
                             portfolio_equity = portfolio_data["equity_metrics"]["total_equity"]
                             # get max position size from risk config (fallback)
-                            max_position_size_pct = self.config_engine.get("finance", "risk/max_position_size_pct", default=10.0)
+                            max_position_size_pct = self.config_engine.get("risk", "max_position_size_pct", default=10.0)
                     except Exception as e:
                         logger.warning(f"Failed to query portfolio_agent for position cooling: {e}")
                 
