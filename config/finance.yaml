@@ -217,6 +217,7 @@ strategies:
 
 strategy:
   type: sma20_trend   # single-rule strategy: price > SMA20 → confidence=1.0, always executes
+  enable_intraday_entries: true  # Tier 2: evaluate buy entries every 15 min (in addition to daily Tier 1 scan)
   auto_execute:
     enabled: true
     confidence_threshold: 0.5

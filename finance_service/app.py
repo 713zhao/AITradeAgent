@@ -652,14 +652,14 @@ class MainOrchestratorAgent:
                 logger.error(f"Error executing strategic exit for {symbol}: {e}", exc_info=True)
 
     async def handle_price_monitor(self, event: Event):
-        """Tier 2: Lightweight price refresh for watchlist + held symbols every 15 min."""
+        """Tier 2: Price refresh + optional intra-day entry evaluation for watchlist symbols."""
         logger.info("Received PRICE_MONITOR_TRIGGER")
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
         if not (is_us_market_open() or is_hk_market_open()):
             logger.info("Markets closed (US and HK). Skipping price monitor.")
             return
-        # Refresh prices for watchlist + held positions
-        # Get held symbols from portfolio
+
+        # ── Refresh prices for watchlist + held positions ──────────────────
         held_symbols = set()
         if self.portfolio_agent:
             report = await self.portfolio_agent.get_detailed_portfolio_state()
@@ -668,18 +668,110 @@ class MainOrchestratorAgent:
                     sym = pos.get("symbol")
                     if sym:
                         held_symbols.add(sym)
-        # Delegate to scanner; it will combine with its watchlist and filter by market open status
-        report = await self.market_scanner_agent.refresh_watchlist_prices(
+
+        scan_report = await self.market_scanner_agent.refresh_watchlist_prices(
             data_agent=self.data_agent,
             held_symbols=held_symbols
         )
-        # Apply fetched prices to portfolio positions
-        if report and report.status == "success" and self.portfolio_agent:
-            price_dict = {item["symbol"]: item["price"] for item in report.payload.get("prices", [])}
+        if scan_report and scan_report.status == "success" and self.portfolio_agent:
+            price_dict = {item["symbol"]: item["price"] for item in scan_report.payload.get("prices", [])}
             if price_dict:
                 self.portfolio_agent.repository.update_position_prices(price_dict)
                 logger.info(f"Applied {len(price_dict)} price updates to portfolio")
-        logger.info(f"Price monitor complete: {report.message}")
+        logger.info(f"Price monitor complete: {scan_report.message}")
+
+        # ── Intra-day entry evaluation (Tier 2 buy decisions) ───────────────
+        intraday_entries = self.config_engine.get("strategy", "enable_intraday_entries", default=True)
+        if not intraday_entries:
+            logger.info("Intra-day entry evaluation disabled (strategy.enable_intraday_entries=false).")
+            return
+
+        watchlist_symbols = list(self.market_scanner_agent.get_watchlist())
+        if not watchlist_symbols:
+            logger.info("Watchlist empty — skipping intra-day entry evaluation.")
+            return
+
+        logger.info(f"[Tier2-Entry] Evaluating {len(watchlist_symbols)} watchlist symbols for intra-day entries")
+        from datetime import datetime, timedelta
+        end_date   = datetime.now().date()
+        start_date = end_date - timedelta(days=365)
+
+        for symbol in watchlist_symbols:
+            # Only evaluate symbols whose market is currently open
+            _is_hk = symbol.endswith(".HK")
+            if _is_hk and not is_hk_market_open():
+                continue
+            if not _is_hk and not is_us_market_open():
+                continue
+
+            # Skip symbols already at max position size (strategy_agent handles this too,
+            # but short-circuit here saves redundant data fetches)
+            try:
+                data_report = await self.data_agent.run(
+                    symbol=symbol, interval="1d", start_date=start_date, end_date=end_date
+                )
+                if data_report.status != "success":
+                    logger.debug(f"[Tier2-Entry] Data fetch failed for {symbol}: {data_report.message}")
+                    continue
+
+                analysis_report = await self.analysis_agent.run(data_payload=data_report.payload, symbol=symbol)
+                if analysis_report.status != "success":
+                    logger.debug(f"[Tier2-Entry] Analysis failed for {symbol}: {analysis_report.message}")
+                    continue
+
+                strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=symbol)
+                if strategy_report.status != "success":
+                    logger.debug(f"[Tier2-Entry] Strategy failed for {symbol}: {strategy_report.message}")
+                    continue
+
+                proposals = strategy_report.payload.get("proposals", [])
+                if not proposals:
+                    continue
+                proposal = proposals[0]
+                if proposal.get("action") != "BUY":
+                    continue
+
+                risk_report = await self.risk_agent.run(proposal)
+                if risk_report.payload.get("decision") != "APPROVED":
+                    logger.info(f"[Tier2-Entry] {symbol}: risk not approved — {risk_report.payload.get('violations', [])}")
+                    continue
+
+                logger.info(f"[Tier2-Entry] {symbol}: APPROVED BUY — proceeding to execution")
+
+                # Pre-execution Telegram notification
+                if self.telegram_agent and self.telegram_agent.enabled:
+                    try:
+                        snapshot = await self._get_symbol_snapshot(symbol)
+                        _company_name = (snapshot or {}).get("full_name")
+                        _pf_cash, _pf_equity = None, None
+                        try:
+                            _pf = await asyncio.wait_for(
+                                self.portfolio_agent.get_detailed_portfolio_state(), timeout=2.0
+                            )
+                            if _pf.status == "success":
+                                _pf_cash   = _pf.payload.get("equity_metrics", {}).get("current_cash")
+                                _pf_equity = _pf.payload.get("equity_metrics", {}).get("total_equity")
+                        except Exception:
+                            pass
+                        await self.telegram_agent.send_pre_execution_notification(
+                            symbol=symbol,
+                            action=proposal.get("action"),
+                            quantity=proposal.get("quantity"),
+                            price=proposal.get("target_price"),
+                            confidence=proposal.get("confidence", 0),
+                            rationale=proposal.get("rationale", "Intra-day entry: rule conditions met"),
+                            company_name=_company_name,
+                            portfolio_cash=_pf_cash,
+                            portfolio_equity=_pf_equity,
+                        )
+                    except Exception as _e:
+                        logger.warning(f"[Tier2-Entry] Pre-execution notification failed: {_e}")
+
+                task_id = f"TIER2-{symbol}-{int(datetime.utcnow().timestamp())}"
+                await self.execute_trade_proposal(proposal, task_id)
+
+            except Exception as e:
+                logger.error(f"[Tier2-Entry] Error evaluating {symbol}: {e}", exc_info=True)
 
     async def handle_data_fetched(self, event: Event):
         pass  # No action needed; downstream continues via event chain
@@ -1182,6 +1274,89 @@ def create_app():
             return jsonify({"error": report.message}), 500
         metrics = report.payload.get("equity_metrics", {})
         return jsonify(_sanitize_floats({"status": "success", "data": metrics}))
+
+    @app.route("/api/trades/history")
+    async def api_trades_history():
+        """
+        Return trade history with optional filters.
+
+        Query params:
+            period  : today | this_week | this_month | this_year  (default: all)
+            date    : YYYY-MM-DD  — override period with a specific day
+            symbol  : filter by ticker (e.g. ARM)
+            side    : BUY or SELL
+            limit   : max records to return (default 200)
+        """
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+
+        from datetime import date, timedelta, timezone
+
+        try:
+            period = request.args.get("period", "all").lower()
+            date_param = request.args.get("date")
+            symbol = request.args.get("symbol")
+            side = request.args.get("side")
+            try:
+                limit = int(request.args.get("limit", 200))
+            except (ValueError, TypeError):
+                limit = 200
+
+            now_utc = datetime.utcnow()
+            today_utc = now_utc.date()
+            start: Optional[datetime] = None
+            end: Optional[datetime] = None
+
+            if date_param:
+                try:
+                    d = date.fromisoformat(date_param)
+                    start = datetime(d.year, d.month, d.day, 0, 0, 0)
+                    end   = datetime(d.year, d.month, d.day, 23, 59, 59)
+                except ValueError:
+                    return jsonify({"error": f"Invalid date format: {date_param}. Use YYYY-MM-DD."}), 400
+            elif period == "today":
+                start = datetime(today_utc.year, today_utc.month, today_utc.day, 0, 0, 0)
+            elif period == "this_week":
+                week_start = today_utc - timedelta(days=today_utc.weekday())
+                start = datetime(week_start.year, week_start.month, week_start.day, 0, 0, 0)
+            elif period == "this_month":
+                start = datetime(today_utc.year, today_utc.month, 1, 0, 0, 0)
+            elif period == "this_year":
+                start = datetime(today_utc.year, 1, 1, 0, 0, 0)
+            # else "all" — no date bounds
+
+            repo = _orchestrator.portfolio_agent.repository
+            trades = repo.get_trades_by_date_range(start=start, end=end, symbol=symbol, side=side)
+            trades = trades[-limit:]  # newest N
+
+            # Build simple summary counts
+            buys  = sum(1 for t in trades if t.get("side", "").upper() == "BUY")
+            sells = sum(1 for t in trades if t.get("side", "").upper() == "SELL")
+            total_value = sum(
+                (t.get("quantity") or 0) * (t.get("price") or 0)
+                for t in trades
+            )
+
+            return jsonify(_sanitize_floats({
+                "status": "success",
+                "filter": {
+                    "period": date_param if date_param else period,
+                    "symbol": symbol,
+                    "side": side,
+                    "limit": limit,
+                },
+                "summary": {
+                    "count": len(trades),
+                    "buys": buys,
+                    "sells": sells,
+                    "total_trade_value": total_value,
+                },
+                "trades": trades,
+            }))
+        except Exception as e:
+            logger.error(f"api_trades_history error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/market/watchlist")
     async def api_market_watchlist():

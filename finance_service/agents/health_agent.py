@@ -290,58 +290,86 @@ class HealthAgent(Agent):
         if not self.telegram_agent or not self.telegram_agent.enabled:
             logger.warning("TelegramAgent not configured or disabled, cannot send daily summary")
             return
-        
+
         if not self.portfolio_agent:
             logger.warning("PortfolioAgent not set, cannot send daily summary")
             return
-        
+
         chat_id = self.telegram_agent.chat_id
         if not chat_id:
             logger.warning("TelegramAgent has no chat_id configured, cannot send daily summary")
             return
-        
+
         try:
             portfolio_report = await asyncio.wait_for(
                 self.portfolio_agent.get_detailed_portfolio_state(),
-                timeout=3.0
+                timeout=5.0
             )
             if portfolio_report.status != "success":
                 logger.error(f"Failed to get portfolio state for daily summary: {portfolio_report.message}")
                 return
-            
+
             metrics = portfolio_report.payload.get("equity_metrics", {})
             positions = portfolio_report.payload.get("positions", {})
-            
-            # Get today's trades
+
+            # Get today's trades via date-range query
             from datetime import date
             today = date.today()
-            trades = []
+            today_trades = []
             if self.portfolio_agent.repository:
-                all_trades = self.portfolio_agent.repository.get_all_trades()
-                for t in all_trades:
-                    trade_date = datetime.fromisoformat(t.get("timestamp", "")).date()
-                    if trade_date == today:
-                        trades.append(t)
-            
-            summary_lines = [f"📊 Daily Portfolio Summary - {today}\n"]
-            summary_lines.append(f"Equity: ${metrics.get('total_equity', 0):,.2f}")
-            summary_lines.append(f"Total Return: {metrics.get('total_return_pct', 0):.2f}%")
-            summary_lines.append(f"Drawdown: {metrics.get('drawdown_pct', 0):.2f}%")
-            summary_lines.append(f"Positions: {len(positions)}")
-            summary_lines.append(f"Trades Today: {len(trades)}")
-            
+                today_dt = datetime(today.year, today.month, today.day, 0, 0, 0)
+                today_trades = self.portfolio_agent.repository.get_trades_by_date_range(start=today_dt)
+
+            # Fetch company names for open positions (best-effort, no timeout extension)
+            company_names: dict = {}
+            try:
+                import yfinance as yf
+                for sym in list(positions.keys()):
+                    try:
+                        info = yf.Ticker(sym).info or {}
+                        company_names[sym] = info.get("longName") or info.get("shortName") or sym
+                    except Exception:
+                        company_names[sym] = sym
+            except Exception:
+                pass
+
+            equity = metrics.get("total_equity", 0)
+            cash   = metrics.get("current_cash", 0)
+            gross  = metrics.get("gross_position_value", 0)
+            ret    = metrics.get("total_return_pct", 0.0)
+            dd     = metrics.get("drawdown_pct", 0.0)
+
+            lines = [f"📊 *Daily Portfolio Summary — {today}*\n"]
+            lines.append(f"💼 Equity: *${equity:,.2f}*  |  Return: {ret:+.2f}%  |  Drawdown: {dd:.2f}%")
+            lines.append(f"💵 Cash: ${cash:,.2f}   📈 Positions: ${gross:,.2f}")
+            lines.append(f"🔢 Trades today: {len(today_trades)}  |  Open positions: {len(positions)}\n")
+
             if positions:
-                summary_lines.append("\nCurrent Positions:")
-                for sym, pos in positions.items():
-                    summary_lines.append(f"  {sym}: {pos.quantity} @ ${pos.avg_cost:.2f}")
-            
-            if trades:
-                summary_lines.append("\nToday's Trades:")
-                for t in trades[-10:]:  # last 10 trades
-                    summary_lines.append(f"  {t.get('action')} {t.get('symbol')} x{t.get('quantity')} @ ${t.get('price'):,.2f}")
-            
-            message = "\n".join(summary_lines)
-            await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+                lines.append("*Open Positions:*")
+                lines.append("```")
+                lines.append(f"{'Symbol':<6} {'Name':<22} {'Qty':>5} {'Avg':>8} {'Value':>10} {'Wt':>6}")
+                lines.append("-" * 62)
+                for sym, pos in sorted(positions.items()):
+                    mv  = pos.get("market_value", pos.get("cost_basis", 0))
+                    qty = pos.get("quantity", 0)
+                    avg = pos.get("avg_cost", 0)
+                    wt  = mv / equity * 100 if equity else 0
+                    name = (company_names.get(sym) or sym)[:22]
+                    lines.append(f"{sym:<6} {name:<22} {qty:>5} {avg:>8.2f} {mv:>10,.0f} {wt:>5.1f}%")
+                lines.append("```")
+
+            if today_trades:
+                lines.append("\n*Today\'s Trades:*")
+                for t in today_trades[-10:]:
+                    sym  = t.get("symbol", "?")
+                    side = t.get("side", "?")
+                    qty  = t.get("quantity") or t.get("filled_quantity") or 0
+                    px   = t.get("price", 0)
+                    ts   = (t.get("ordered_at") or "")[:16].replace("T", " ")
+                    lines.append(f"  {side} {sym} ×{qty} @ ${px:.2f}  ({ts})")
+
+            message = "\n".join(lines)
+            await self.telegram_agent.send_message(chat_id=chat_id, message=message, parse_mode="Markdown")
             logger.info("Sent daily portfolio summary")
         except asyncio.TimeoutError:
             logger.error("Portfolio state fetch timed out for daily summary; cannot send summary")
