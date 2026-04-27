@@ -58,7 +58,8 @@ class YfinanceProvider:
         symbols: List[str],
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        interval: str = "1d"
+        interval: str = "1d",
+        period: Optional[str] = None,
     ) -> Dict[str, pd.DataFrame]:
         """
         Fetch OHLCV data with batching and rate-limit handling
@@ -85,7 +86,7 @@ class YfinanceProvider:
             
             logger.debug(f"Fetching batch {i//self.config.batch_size + 1}/{(len(symbols)-1)//self.config.batch_size + 1}: {batch}")
             
-            batch_data = self._fetch_batch_with_retry(batch, start_date, end_date, interval)
+            batch_data = self._fetch_batch_with_retry(batch, start_date, end_date, interval, period=period)
             results.update(batch_data)
             
             # Add delay between batches
@@ -100,24 +101,34 @@ class YfinanceProvider:
         symbols: List[str],
         start_date: Optional[str],
         end_date: Optional[str],
-        interval: str
+        interval: str,
+        period: Optional[str] = None,
     ) -> Dict[str, pd.DataFrame]:
         """Fetch a batch with retry logic"""
         for attempt in range(self.config.max_retries):
             try:
                 self._add_jitter()
                 
-                logger.info(f"[YfinanceProvider] Fetching batch {symbols} with start={start_date}, end={end_date}, interval={interval}")
+                logger.info(f"[YfinanceProvider] Fetching batch {symbols} with start={start_date}, end={end_date}, interval={interval}, period={period}")
                 
-                # Fetch batch
-                data = yf.download(
-                    " ".join(symbols),
-                    start=start_date,
-                    end=end_date,
-                    interval=interval,
-                    progress=False,
-                    timeout=self.config.timeout_sec
-                )
+                # Fetch batch — use period-based request when start/end not provided (e.g. intraday)
+                if period:
+                    data = yf.download(
+                        " ".join(symbols),
+                        period=period,
+                        interval=interval,
+                        progress=False,
+                        timeout=self.config.timeout_sec
+                    )
+                else:
+                    data = yf.download(
+                        " ".join(symbols),
+                        start=start_date,
+                        end=end_date,
+                        interval=interval,
+                        progress=False,
+                        timeout=self.config.timeout_sec
+                    )
                 
                 logger.info(f"[YfinanceProvider] download returned {len(data)} rows, columns: {data.columns.tolist() if hasattr(data, 'columns') else 'N/A'}")
                 
