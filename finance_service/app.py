@@ -511,6 +511,29 @@ class MainOrchestratorAgent:
                         _snap = analysis_report.payload.get("indicators_snapshot") if analysis_report else None
                         _news_score = news_report.payload.get("sentiment_score") if (news_report and news_report.status == "success") else None
                         _news_cats = news_report.payload.get("catalysts") if (news_report and news_report.status == "success") else None
+                        # Fetch company name from yfinance (best-effort; cached in prior scan)
+                        _company_name = None
+                        _pf_cash = None
+                        _pf_equity = None
+                        try:
+                            _sym_snap = await self._get_symbol_snapshot(symbol)
+                            if _sym_snap:
+                                _company_name = _sym_snap.get("full_name")
+                        except Exception:
+                            pass
+                        # Fetch live portfolio cash/equity for the notification
+                        try:
+                            if self.portfolio_agent:
+                                _pf_report = await asyncio.wait_for(
+                                    self.portfolio_agent.get_detailed_portfolio_state(),
+                                    timeout=2.0
+                                )
+                                if _pf_report.status == "success":
+                                    _em = _pf_report.payload.get("equity_metrics", {})
+                                    _pf_cash = _em.get("current_cash")
+                                    _pf_equity = _em.get("total_equity")
+                        except Exception:
+                            pass
                         await self.telegram_agent.send_pre_execution_notification(
                             symbol=proposal.get("symbol", "?"),
                             action=proposal.get("action", "BUY"),
@@ -522,6 +545,9 @@ class MainOrchestratorAgent:
                             indicators_snapshot=_snap,
                             news_sentiment=_news_score,
                             news_catalysts=_news_cats,
+                            company_name=_company_name,
+                            portfolio_cash=_pf_cash,
+                            portfolio_equity=_pf_equity,
                         )
                     except Exception as _tg_err:
                         logger.warning(f"Pre-execution Telegram notification failed: {_tg_err}")

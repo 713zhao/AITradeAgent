@@ -139,6 +139,9 @@ class TelegramAgent(Agent):
         news_sentiment=None,
         news_catalysts=None,
         chat_id=None,
+        company_name: str = None,
+        portfolio_cash: float = None,
+        portfolio_equity: float = None,
     ):
         """Send a Telegram notification before a trade is executed, with full technical detail."""
         if not self.enabled or not self.bot:
@@ -263,16 +266,29 @@ class TelegramAgent(Agent):
         reasons = "\n".join(f"  • {r}" for r in rationale) if rationale else "  • N/A"
 
         # ── Assemble message ─────────────────────────────────────────────
+        # Company name display
+        name_str = f" — {company_name}" if company_name and company_name != symbol else ""
+        # Portfolio context
+        portfolio_line = None
+        if portfolio_equity is not None:
+            if portfolio_cash is not None:
+                pos_val = portfolio_equity - portfolio_cash
+                portfolio_line = f"  Cash: ${portfolio_cash:,.2f}  |  Positions: ${pos_val:,.2f}  |  Equity: ${portfolio_equity:,.2f}"
+            else:
+                portfolio_line = f"  Equity: ${portfolio_equity:,.2f}"
+
         lines = [
             f"⚡ *Trade About to Execute*",
             "",
-            f"*Symbol:* [{symbol}]({link})",
+            f"*Symbol:* [{symbol}]({link}){name_str}",
             f"*Action:* {action_emoji}",
             f"*Quantity:* {quantity:.4f} shares",
             f"*Entry Price:* {price_str}",
             f"*Stop Loss:* {stop_str}",
             f"*Confidence:* {conf_str}",
         ]
+        if portfolio_line:
+            lines += [f"*Portfolio:* {portfolio_line}"]
 
         if tech_lines:
             lines += ["", "📊 *Technical Indicators:*"] + tech_lines

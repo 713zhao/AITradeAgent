@@ -261,9 +261,14 @@ class HealthAgent(Agent):
                 )
                 if portfolio_report.status == "success":
                     portfolio = portfolio_report.payload
-                    equity = portfolio.get("equity_metrics", {}).get("total_equity", 0)
-                    positions = len(portfolio.get("positions", {}))
-                    portfolio_summary = f"Portfolio: ${equity:,.2f}, {positions} positions"
+                    metrics = portfolio.get("equity_metrics", {})
+                    cash = metrics.get("current_cash", 0)
+                    equity = metrics.get("total_equity", 0)
+                    pos_value = equity - cash
+                    n_positions = len(portfolio.get("positions", []))
+                    portfolio_summary = (
+                        f"Cash: ${cash:,.2f}  |  Positions: ${pos_value:,.2f} ({n_positions} open)  |  Equity: ${equity:,.2f}"
+                    )
             except asyncio.TimeoutError:
                 logger.warning("Portfolio state fetch timed out in trade notification; proceeding without portfolio context")
             except Exception as e:
