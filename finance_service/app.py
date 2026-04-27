@@ -688,7 +688,7 @@ class MainOrchestratorAgent:
             logger.info("Intra-day entry evaluation disabled (strategy.enable_intraday_entries=false).")
             return
 
-        watchlist_symbols = list(self.market_scanner_agent.get_watchlist())
+        watchlist_symbols = self.market_scanner_agent.get_watchlist_symbols()
         if not watchlist_symbols:
             logger.info("Watchlist empty — skipping intra-day entry evaluation.")
             return
