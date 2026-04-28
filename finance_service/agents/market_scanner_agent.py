@@ -223,7 +223,8 @@ class MarketScannerAgent(Agent):
     # ─── Tier 2: Price Monitor (every 15 min) ───────────────────────
 
     async def refresh_watchlist_prices(self, data_agent=None,
-                                       held_symbols: Optional[List[str]] = None) -> AgentReport:
+                                       held_symbols: Optional[List[str]] = None,
+                                       force_held: bool = False) -> AgentReport:
         """
         Tier 2 — Lightweight price refresh for watchlist + held positions.
         
@@ -248,7 +249,8 @@ class MarketScannerAgent(Agent):
         from finance_service.utils.market_hours import is_hk_market_open, is_us_market_open
         hk_open = is_hk_market_open()
         us_open = is_us_market_open()
-        if not (hk_open or us_open):
+        held_set = set(held_symbols or [])
+        if not (hk_open or us_open) and not force_held:
             logger.info("[PriceMonitor] Both markets closed; skipping fetch.")
             return AgentReport(
                 agent_id=self.agent_id,
@@ -256,11 +258,13 @@ class MarketScannerAgent(Agent):
                 message="Markets closed; no price fetch.",
                 payload={"prices": [], "count": 0}
             )
-        # Filter to open-market symbols only
+        # Filter to open-market symbols only; force_held bypasses filter for held positions
         original_count = len(symbols_to_check)
         filtered_symbols = []
         for sym in symbols_to_check:
-            if sym.endswith('.HK'):
+            if force_held and sym in held_set:
+                filtered_symbols.append(sym)  # always include held positions
+            elif sym.endswith('.HK'):
                 if hk_open:
                     filtered_symbols.append(sym)
             else:

@@ -408,24 +408,40 @@ class HealthAgent(Agent):
             return
 
         try:
-            # Refresh live prices before generating the report so P&L reflects current market.
-            # Detect stale prices: after a restart, position.current_price is reset to avg_cost
-            # (execution price) since it's only held in memory, not persisted to DB.
-            # If ALL positions show current_price ≈ avg_cost, prices haven't been updated yet.
+            # Always refresh prices for held positions before the hourly report.
+            # Use force_held=True to bypass the market-hours filter — this ensures
+            # US positions get their latest available price even during HK-only hours.
+            # Stale = either all prices == avg_cost (fresh restart) OR positions
+            # haven't been updated in more than STALE_MINUTES minutes.
+            STALE_MINUTES = 20
+            price_fetch_status = "skipped"
+            price_fetch_count = 0
+            price_fetch_error = None
             if self.market_scanner_agent and self.data_agent and self.portfolio_agent:
-                positions = self.portfolio_agent.repository.get_positions()
-                held = [p.symbol for p in positions]
-                prices_stale = (
-                    len(positions) > 0 and
-                    all(abs(p.current_price - p.avg_cost) < 0.01 for p in positions)
+                live_positions = self.portfolio_agent.repository.get_positions()
+                held = [p.symbol for p in live_positions]
+                now_dt = datetime.utcnow()
+                # Check age: most recent position update
+                max_age_mins = None
+                if live_positions:
+                    oldest = min(p.updated_at.replace(tzinfo=None) if p.updated_at.tzinfo else p.updated_at
+                                 for p in live_positions)
+                    max_age_mins = (now_dt - oldest).total_seconds() / 60
+                all_same_as_cost = (
+                    len(live_positions) > 0 and
+                    all(abs(p.current_price - p.avg_cost) < 0.01 for p in live_positions)
                 )
+                prices_stale = all_same_as_cost or (max_age_mins is not None and max_age_mins > STALE_MINUTES)
                 if prices_stale:
-                    logger.info("Hourly report: prices look stale (current_price == avg_cost), fetching live prices")
+                    age_desc = f"{max_age_mins:.0f}m old" if max_age_mins is not None else "age unknown"
+                    reason = "current_price==avg_cost" if all_same_as_cost else age_desc
+                    logger.info(f"Hourly report: prices stale ({reason}), fetching live prices (force_held=True)")
                     try:
                         scan_report = await asyncio.wait_for(
                             self.market_scanner_agent.refresh_watchlist_prices(
                                 data_agent=self.data_agent,
                                 held_symbols=held,
+                                force_held=True,
                             ),
                             timeout=60.0
                         )
@@ -434,13 +450,25 @@ class HealthAgent(Agent):
                                           for item in scan_report.payload.get("prices", [])}
                             if price_dict:
                                 self.portfolio_agent.repository.update_position_prices(price_dict)
-                                logger.info(f"Hourly report: applied {len(price_dict)} fresh price updates")
+                                price_fetch_count = len(price_dict)
+                                price_fetch_status = "refreshed"
+                                logger.info(f"Hourly report: applied {price_fetch_count} fresh price updates")
+                            else:
+                                price_fetch_status = "no_data"
+                        else:
+                            price_fetch_status = "failed"
+                            price_fetch_error = scan_report.message if scan_report else "unknown"
                     except asyncio.TimeoutError:
+                        price_fetch_status = "timeout"
+                        price_fetch_error = "yfinance fetch timed out (>60s)"
                         logger.warning("Hourly report: price refresh timed out, using cached prices")
                     except Exception as e:
+                        price_fetch_status = "error"
+                        price_fetch_error = str(e)
                         logger.warning(f"Hourly report: price refresh failed ({e}), using cached prices")
                 else:
-                    logger.info("Hourly report: prices already live (current_price != avg_cost), skipping pre-refresh")
+                    price_fetch_status = "fresh"
+                    logger.info(f"Hourly report: prices fresh ({max_age_mins:.0f}m old), skipping pre-refresh")
 
             portfolio_report = await asyncio.wait_for(
                 self.portfolio_agent.get_detailed_portfolio_state(),
@@ -480,10 +508,23 @@ class HealthAgent(Agent):
             pnl_sign  = "+" if total_pnl >= 0 else ""
             upnl_sign = "+" if unrealized_pnl >= 0 else ""
 
+            # Data freshness indicator
+            if price_fetch_status == "refreshed":
+                data_line = f"🔄 Prices: just updated ({price_fetch_count} symbols)"
+            elif price_fetch_status == "fresh":
+                data_line = f"✅ Prices: live (updated <{STALE_MINUTES}m ago)"
+            elif price_fetch_status in ("timeout", "error", "failed"):
+                data_line = f"⚠️ Prices: stale — fetch failed ({price_fetch_error})"
+            elif price_fetch_status == "no_data":
+                data_line = f"⚠️ Prices: no data returned by yfinance — may be rate-limited"
+            else:
+                data_line = "ℹ️ Prices: cached"
+
             lines = [f"⏰ *Hourly Portfolio — {now_utc}* ({market_str})\n"]
             lines.append(f"💼 Equity: *${equity:,.2f}*  |  Return: {ret:+.2f}%  |  Drawdown: {dd:.2f}%")
             lines.append(f"💵 Cash: ${cash:,.2f}   📈 Positions: ${gross:,.2f}  ({n_pos} open)")
-            lines.append(f"📊 P&L: *{pnl_sign}${total_pnl:,.2f}*  (Unrealized: {upnl_sign}${unrealized_pnl:,.2f}  |  Realized: ${realized_pnl:,.2f})\n")
+            lines.append(f"📊 P&L: *{pnl_sign}${total_pnl:,.2f}*  (Unrealized: {upnl_sign}${unrealized_pnl:,.2f}  |  Realized: ${realized_pnl:,.2f})")
+            lines.append(f"{data_line}\n")
 
             if positions:
                 lines.append("*Positions:*")
