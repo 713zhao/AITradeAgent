@@ -7,6 +7,8 @@ Checks latest backtest results, compares to targets, and sends Telegram notifica
 import sqlite3
 import json
 import os
+import urllib.request
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -133,49 +135,41 @@ Assessment:
         f.write(latest_summary)
 
 def send_telegram(message: str):
-    """Send notification via OpenClaw CLI. Skips weekends."""
-    # Weekend skip: Saturday=5, Sunday=6
-    if datetime.now().weekday() in (5, 6):
-        print("Weekend detected (Sat/Sun). Skipping Telegram notification.")
+    """Send notification via direct Telegram HTTP API.
+    Note: market-hours scheduling is handled by progress_monitor_daemon.py.
+    """
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        # Try loading from .env file directly
+        env_file = WORKSPACE / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("TELEGRAM_BOT_TOKEN="):
+                    bot_token = line.split("=", 1)[1].strip()
+                elif line.startswith("TELEGRAM_CHAT_ID="):
+                    chat_id = line.split("=", 1)[1].strip()
+    if not bot_token or not chat_id:
+        print("❌ TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set")
         return False
     try:
-        import subprocess
-        # Use openclaw CLI to send message to Telegram
-        result = subprocess.run(
-            ['openclaw', 'message', 'send', '-t', '8383381149', '-m', message],
-            capture_output=True,
-            text=True,
-            timeout=60  # Increased from 10s to 60s for slow gateway responses
-        )
-        if result.returncode == 0:
-            print("✅ Telegram notification sent")
-            return True
-        else:
-            print(f"❌ openclaw CLI error: {result.stderr}")
-            # Fallback to stdout
-            print("\n" + "="*60)
-            print("TELEGRAM NOTIFICATION (manual copy):")
-            print("="*60)
-            print(message)
-            print("="*60 + "\n")
-            return False
-    except subprocess.TimeoutExpired:
-        print("❌ openclaw CLI timed out after 60 seconds")
-        # Fallback to stdout
-        print("\n" + "="*60)
-        print("TELEGRAM NOTIFICATION (manual copy):")
-        print("="*60)
-        print(message)
-        print("="*60 + "\n")
-        return False
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        data = urllib.parse.urlencode({
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": "true",
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.getcode() == 200:
+                print("✅ Telegram notification sent via direct API")
+                return True
+            else:
+                print(f"❌ Telegram API error: HTTP {resp.getcode()}")
+                return False
     except Exception as e:
         print(f"❌ Failed to send Telegram: {e}")
-        # Fallback to stdout
-        print("\n" + "="*60)
-        print("TELEGRAM NOTIFICATION (manual copy):")
-        print("="*60)
-        print(message)
-        print("="*60 + "\n")
         return False
 
 def main():

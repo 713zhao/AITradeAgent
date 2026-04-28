@@ -385,6 +385,8 @@ class StrategyAgent(Agent):
                 # Ensure stop is below current price
                 if stop_loss_price >= current_price:
                     stop_loss_price = round(current_price * 0.95, 2)  # 5% below as fallback
+                # Calculate take profit using 4x ATR (2:1 reward/risk ratio)
+                take_profit_price = round(current_price + (atr_value * 4), 2)
                 
                 # Position sizing: risk-based, respecting existing exposure
                 risk_per_share = current_price - stop_loss_price
@@ -424,6 +426,7 @@ class StrategyAgent(Agent):
                     confidence=confidence,
                     target_price=target_price,
                     stop_loss_price=stop_loss_price,
+                    take_profit_price=take_profit_price,
                     rationale=[f"Entry rules triggered: {entry_rules}"]
                 )
                 # Attach quantity separately (not part of TradeProposal model but needed for execution)

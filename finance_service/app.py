@@ -470,7 +470,7 @@ class MainOrchestratorAgent:
             proposal_summary = f"{action} {quantity} shares of {symbol} @ ${price}"
             
             # Get approval gate and request approval
-            approval_gate = await get_approval_gate("telegram")
+            approval_gate = get_approval_gate("telegram")
             if not approval_gate.enabled:
                 logger.warning("Approval gate not enabled, executing trade anyway")
                 await self.execute_trade_proposal(proposal, task_id)

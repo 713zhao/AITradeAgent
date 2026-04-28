@@ -41,7 +41,7 @@ cd "$PROJECT_ROOT"
 
 # Start finance service in background
 echo -e "${BLUE}📊 Starting Finance Service (port 8801)...${NC}"
-python3 run_finance_service.py &
+python3 scripts/run_finance_service.py &
 FINANCE_PID=$!
 echo -e "${GREEN}✓ Finance Service PID: $FINANCE_PID${NC}"
 
@@ -49,9 +49,9 @@ echo -e "${GREEN}✓ Finance Service PID: $FINANCE_PID${NC}"
 sleep 2
 
 # Start dashboard if script exists
-if [ -f "$PROJECT_ROOT/run_dashboard.sh" ]; then
+if [ -f "$PROJECT_ROOT/scripts/run_dashboard.sh" ]; then
     echo -e "${BLUE}📈 Starting Dashboard...${NC}"
-    bash "$PROJECT_ROOT/run_dashboard.sh" &
+    bash "$PROJECT_ROOT/scripts/run_dashboard.sh" &
     DASHBOARD_PID=$!
     echo -e "${GREEN}✓ Dashboard PID: $DASHBOARD_PID${NC}"
 else

@@ -350,3 +350,179 @@ For issues or questions:
 ## License
 
 MIT License - See LICENSE file for details
+## Project Cleanup (April 28, 2026)
+
+The project root has been reorganized for better maintainability:
+
+### Changes Made:
+1. **Removed unused files:**
+   - `finance_service.out` (large log file, 21MB)
+   - `finance.pid` (process ID file)
+   - `test_approval_sync.py` and `test_approval_workflow.py` (test files)
+   - `.env.example` (kept `.env.template` as comprehensive reference)
+
+2. **Consolidated dependencies:**
+   - Merged `requirements_ui.txt` into `requirements.txt`
+   - Removed duplicate package specifications
+
+3. **Created scripts/ folder:**
+   - Moved 23 utility, analysis, and deployment scripts
+   - Created [scripts/README.md](./scripts/README.md) with script documentation
+   - Organized scripts by category: Deployment, Analysis, Trading, Telegram Agents, Inspection, Development
+
+### Updated Project Structure:
+```
+picotradeagent/
+├── run_finance_service.py      ← Main entry point (KEEP IN ROOT)
+├── picoclaw_connector.py       ← Integration helper (KEEP IN ROOT)
+├── run_paper_trading.py        ← Main pipeline scripts (KEEP IN ROOT)
+├── run_simple.py               ← Main pipeline scripts (KEEP IN ROOT)
+├── setup.sh                    ← Setup script (KEEP IN ROOT)
+├── start_all.sh                ← Startup scripts (KEEP IN ROOT)
+├── start_paper_trading.sh      ← Startup scripts (KEEP IN ROOT)
+├── setup_paper_trading.py      ← Setup scripts (KEEP IN ROOT)
+├── run_finance_service.py      → Launch script (KEEP IN ROOT)
+│
+├── scripts/                    ← NEWLY ORGANIZED
+│   ├── README.md              ← Script documentation
+│   ├── Deployment scripts     (docker-*.sh, run_dashboard.sh, etc)
+│   ├── Analysis scripts       (optimize_*, analyze_*, check_*, etc)
+│   ├── Trading scripts        (simulate_trade.py, manual_*.py, etc)
+│   ├── Telegram agents        (telegram_*.py)
+│   └── Inspection utilities   (validate_system.py, show_*.py, etc)
+│
+├── finance_service/            ← Core backend (unchanged)
+├── picoclaw_config/            ← PicoClaw configuration (unchanged)
+├── config/                     ← Configuration files (unchanged)
+├── tests/                      ← Testing suite (unchanged)
+├── doc/                        ← Documentation (unchanged)
+└── storage/                    ← Runtime data (unchanged)
+```
+
+### Environment Configuration:
+- **`.env`** - Active configuration (with your secrets)
+- **`.env.template`** - Comprehensive template for new environments
+
+### For Contributors:
+When adding new scripts:
+- **Main pipeline scripts** → Keep in project root
+- **Utility/analysis scripts** → Move to `scripts/` folder
+- **Update `scripts/README.md`** with the new script description
+
+
+## Final Project Structure (Post-Reorganization - April 28, 2026)
+
+The project has been fully reorganized for optimal maintainability and clarity:
+
+### Root Directory (7 files - Minimal!)
+```
+picotradeagent/
+├── start_all.sh                ← MAIN STARTUP SCRIPT (orchestrator)
+├── README.md                   ← Documentation
+├── requirements.txt            ← Consolidated dependencies
+├── AGENTS.md                   ← AI agents configuration
+├── docker-compose.yml          ← Docker configuration
+├── Dockerfile                  ← Container definitions
+└── Dockerfile.ui               ← UI container definition
+```
+
+### Scripts Folder (Organized by Category)
+```
+scripts/
+├── README.md                   ← Script documentation
+
+├── MAIN ENTRY POINTS:
+│   ├── run_finance_service.py  ← Finance backend launcher
+│   ├── run_paper_trading.py    ← Paper trading pipeline
+│   ├── run_simple.py           ← Simple execution mode
+│   ├── setup_paper_trading.py  ← Trading setup utility
+│   └── progress_monitor.py     ← Progress monitoring
+
+├── STARTUP & SETUP:
+│   ├── setup.sh                ← Initial project setup
+│   ├── start_paper_trading.sh  ← Paper trading startup
+│   ├── run_dashboard.sh        ← Dashboard launcher
+│   └── run_network_mode.sh     ← Network mode launcher
+
+├── DEPLOYMENT:
+│   ├── docker-deploy.sh        ← Docker deployment
+│   └── docker-verify.sh        ← Deployment verification
+
+├── ANALYSIS & OPTIMIZATION:
+│   ├── analyze_regime_detection.py
+│   ├── analyze_fundamentals_distribution.py
+│   ├── quick_regime_analysis.py
+│   ├── optimize_drawdown.py
+│   └── optimize_parameters.py
+
+├── TRADING & SIGNALS:
+│   ├── check_current_signals.py
+│   ├── check_sma20_signals.py
+│   ├── simulate_trade.py
+│   ├── manual_buy_asml.py
+│   └── reset_and_book_asml.py
+
+├── TELEGRAM AGENTS:
+│   ├── telegram_forwarder_agent.py
+│   ├── telegram_notifier_agent.py
+│   └── telegram_watch_agent.py
+
+└── UTILITIES:
+    ├── show_finance_backtest.py
+    ├── show_tables.py
+    ├── validate_system.py
+    ├── verify_fixes.py
+    ├── inspect_cache.py
+    ├── get_latest_backtest.py
+    ├── describe_backtest.py
+    ├── notify_telegram.py
+    └── add_cov.py
+```
+
+### Test Directory
+```
+tests/
+├── pytest.ini                  ← pytest configuration (moved from root)
+├── test_*.py                   ← Test modules
+└── ...
+```
+
+### Startup Flow
+```
+1. USER: ./start_all.sh
+2. Script activates venv
+3. Script launches: python3 scripts/run_finance_service.py
+4. (Optional) Script launches: bash scripts/run_dashboard.sh
+```
+
+### Why This Structure?
+- **Minimal Root**: Only startup orchestrator and docs in root
+- **Organized Scripts**: All utilities grouped by category in scripts/
+- **Clear Entry Points**: start_all.sh is the single entry point for users
+- **Easy Maintenance**: New scripts go to scripts/README.md for documentation
+- **Test Organization**: pytest.ini with test suite in tests/
+
+### Adding New Scripts
+1. Develop your utility script
+2. Place in `scripts/` folder
+3. Update `scripts/README.md` with description and category
+4. If it's a new main entry point, update `start_all.sh` references
+
+### Running the Service
+```bash
+# Start everything (Finance Service + Dashboard)
+./start_all.sh
+
+# Or start components individually
+python3 scripts/run_finance_service.py
+bash scripts/run_dashboard.sh
+```
+
+### Running Tests
+```bash
+# From project root or tests directory
+python3 -m pytest tests/ -v
+
+# With coverage
+python3 -m pytest tests/ --cov=finance_service
+```

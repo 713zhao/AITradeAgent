@@ -108,23 +108,57 @@ class TelegramApprovalGate(ApprovalGate):
             return False, str(e)
     
     async def wait_for_response(self, task_id: str) -> Tuple[bool, str]:
-        """Wait for response (timeout or manual approval)"""
-        
+        """Wait for response by polling Telegram getUpdates for callback queries."""
         event = self.pending_approvals.get(task_id)
         if not event:
             return False, "No approval found"
-        
+
         try:
+            import urllib.request as _ureq
+            import urllib.parse as _uparse
+            import json as _json
+
+            offset = None
             start = time.time()
             while time.time() - start < self.timeout:
-                if event.is_set():
-                    approved, msg = self.approval_responses.get(task_id, (False, "No response"))
-                    return approved, msg
-                await asyncio.sleep(0.5)
-            
-            logger.warning(f"Approval timeout for {task_id}")
+                # Poll Telegram for any incoming callback queries
+                try:
+                    params = {"timeout": 2, "allowed_updates": '["callback_query"]'}
+                    if offset is not None:
+                        params["offset"] = offset
+                    url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates?" + _uparse.urlencode(params)
+                    req = _ureq.Request(url, method="GET")
+                    with _ureq.urlopen(req, timeout=5) as resp:
+                        updates = _json.loads(resp.read().decode())
+                    if updates.get("ok") and updates.get("result"):
+                        for update in updates["result"]:
+                            offset = update["update_id"] + 1  # advance offset to ack
+                            cb = update.get("callback_query", {})
+                            data = cb.get("data", "")
+                            # Answer the callback to dismiss the "loading" spinner
+                            try:
+                                ack_url = f"https://api.telegram.org/bot{self.bot_token}/answerCallbackQuery"
+                                ack_data = _uparse.urlencode({"callback_query_id": cb["id"]}).encode()
+                                _ureq.urlopen(_ureq.Request(ack_url, data=ack_data, method="POST"), timeout=5)
+                            except Exception:
+                                pass
+                            if data == f"approve_{task_id}":
+                                self.approval_responses[task_id] = (True, "Approved via Telegram button")
+                                event.set()
+                                logger.info(f"Trade {task_id} APPROVED via Telegram button")
+                                return True, "Approved via Telegram button"
+                            elif data == f"reject_{task_id}":
+                                self.approval_responses[task_id] = (False, "Rejected via Telegram button")
+                                event.set()
+                                logger.info(f"Trade {task_id} REJECTED via Telegram button")
+                                return False, "Rejected via Telegram button"
+                except Exception as e:
+                    logger.debug(f"getUpdates poll error: {e}")
+                await asyncio.sleep(1)
+
+            logger.warning(f"Approval timeout for {task_id} after {self.timeout}s")
             return False, "Timeout - no response received"
-        
+
         finally:
             if task_id in self.pending_approvals:
                 del self.pending_approvals[task_id]

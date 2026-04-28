@@ -135,6 +135,16 @@ class ExitAgent(Agent):
                     reason = f"ATR stop triggered: price ${current_price:.2f} <= ${stop_loss:.2f}"
                 elif take_profit and current_price >= take_profit:
                     reason = f"ATR take profit triggered: price ${current_price:.2f} >= ${take_profit:.2f}"
+                elif not stop_loss and not take_profit and entry_price:
+                    # Fallback: use fixed_pct when ATR stops were not stored at entry
+                    sl_pct = self.config.get("risk", "stop_loss_default_pct", default=0.08) if self.config else 0.08
+                    tp_pct = self.config.get("risk", "take_profit_default_pct", default=0.20) if self.config else 0.20
+                    stop_fallback = entry_price * (1 - sl_pct)
+                    take_fallback = entry_price * (1 + tp_pct)
+                    if current_price <= stop_fallback:
+                        reason = f"Fallback stop triggered ({sl_pct*100:.0f}%): price ${current_price:.2f} <= ${stop_fallback:.2f}"
+                    elif current_price >= take_fallback:
+                        reason = f"Fallback take profit triggered ({tp_pct*100:.0f}%): price ${current_price:.2f} >= ${take_fallback:.2f}"
             elif self.exit_strategy == "fixed_pct":
                 # Use configured fixed percentages (stop_loss_default_pct, take_profit_default_pct) if not stored
                 sl_pct = self.config.get("risk.stop_loss_default_pct", 0.015) if self.config else 0.015

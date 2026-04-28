@@ -1,17 +1,20 @@
-📊 AiTradeAgent Progress Report (2026-03-22 21:00)
-Strategy: sma50_trend_regime 2023-01-01 to 2023-12-31
-Period: 2023-01-01 00:00:00 to 2023-12-31 00:00:00
+📊 AiTradeAgent Progress Report (2026-04-28 23:30)
+Strategy: sma50_trend_regime 2020-01-01 to 2024-12-31
+Period: 2020-01-01 00:00:00 to 2024-12-31 00:00:00
 Symbols: 20
 
-CAGR: 21.50%
-Sharpe: 1.27
-Max DD: -16.14%
-Trades: 127
-Final Value: $121,116.46
+CAGR: 0.65%
+Sharpe: 0.13
+Max DD: -13.88%
+Trades: 87
+Final Value: $103,197.49
 
-Overall: ✅ ON TARGET
+Overall: ⚠️ UNDER TARGET
 
 Assessment:
-✅ CAGR above target: 21.5% >= 20.0%
-✅ Sharpe acceptable: 1.27 >= 1.0
-✅ Drawdown within limit: -16.1%
+⚠️ CAGR below target: 0.6% < 20.0%
+⚠️ Sharpe low: 0.13 < 1.0
+✅ Drawdown within limit: -13.9%
+
+Recommended Actions:
+  • Improve risk-adjusted returns: add trend filter or increase take-profit ratios
