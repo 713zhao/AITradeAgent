@@ -55,6 +55,7 @@ class HealthAgent(Agent):
             self.alert_cooldown_hours = 4
         
         self.last_alert_time: Optional[datetime] = None
+        self._hourly_price_refresh_lock = asyncio.Lock()
         
         # Initialize remediation helper for auto-recovery
         try:
@@ -417,7 +418,7 @@ class HealthAgent(Agent):
             price_fetch_status = "skipped"
             price_fetch_count = 0
             price_fetch_error = None
-            if self.market_scanner_agent and self.data_agent and self.portfolio_agent:
+            if self.market_scanner_agent and self.data_agent and self.portfolio_agent and not self._hourly_price_refresh_lock.locked():
                 live_positions = self.portfolio_agent.repository.get_positions()
                 held = [p.symbol for p in live_positions]
                 now_dt = datetime.utcnow()
@@ -437,14 +438,15 @@ class HealthAgent(Agent):
                     reason = "current_price==avg_cost" if all_same_as_cost else age_desc
                     logger.info(f"Hourly report: prices stale ({reason}), fetching live prices (force_held=True)")
                     try:
-                        scan_report = await asyncio.wait_for(
-                            self.market_scanner_agent.refresh_watchlist_prices(
-                                data_agent=self.data_agent,
-                                held_symbols=held,
-                                force_held=True,
-                            ),
-                            timeout=60.0
-                        )
+                        async with self._hourly_price_refresh_lock:
+                            scan_report = await asyncio.wait_for(
+                                self.market_scanner_agent.refresh_watchlist_prices(
+                                    data_agent=self.data_agent,
+                                    held_symbols=held,
+                                    force_held=True,
+                                ),
+                                timeout=90.0
+                            )
                         if scan_report and scan_report.status == "success":
                             price_dict = {item["symbol"]: item["price"]
                                           for item in scan_report.payload.get("prices", [])}
