@@ -3,7 +3,7 @@
 Progress Monitor Daemon
 
 Runs as a persistent background service (managed by systemd).
-Calls heartbeat_report.py every 30 minutes while any market is open.
+Calls heartbeat_report.py every 60 minutes (hourly) while any market is open.
 Sends one final closing report when market transitions from open -> closed.
 
 Market coverage:
@@ -28,7 +28,7 @@ LOG_FILE           = Path("/tmp/progress_monitor.log")
 MONITOR_SCRIPT     = WORKSPACE / "scripts" / "heartbeat_report.py"
 
 # Timing
-INTERVAL_SECONDS   = 30 * 60   # 30-min between reports while market is open
+INTERVAL_SECONDS   = 60 * 60   # 60-min (hourly) between reports while market is open
 POLL_SECONDS       = 60         # How often we wake to re-check market state
 
 # Logging
@@ -155,7 +155,7 @@ def main() -> None:
                     state["closing_report_sent"] = False
                     save_state(state)
 
-                # Send report every 30 minutes
+                # Send report every 60 minutes (hourly)
                 seconds_since = now_ts - state.get("last_report_ts", 0.0)
                 if seconds_since >= INTERVAL_SECONDS:
                     ok = run_progress_report(label=f"open/{open_markets_label()}")
