@@ -209,16 +209,28 @@ class MainOrchestratorAgent:
                 preview_symbols = rated_symbols[:50] if rated_symbols else []
                 details = []
                 
+                # Pre-load symbol names from cache for the scan report
+                _scan_name_cache: dict = {}
+                from pathlib import Path as _Path
+                _names_path = _Path(__file__).parent.parent / "memory" / "symbol_names.json"
+                if _names_path.exists():
+                    try:
+                        import json as _json
+                        _scan_name_cache = _json.loads(_names_path.read_text())
+                    except Exception:
+                        pass
+
                 for item in preview_symbols:
                     sym = item.get("symbol", "")
                     score = item.get("rating", 0)
                     rank = item.get("rank", 0)
+                    name = (_scan_name_cache.get(sym) or sym)[:20]
                     snap = await self._get_symbol_snapshot(sym)
                     if snap:
                         price = snap.get('price', 0)
-                        details.append(f"{rank:2d}. {sym:6s}  ${price:7.2f} (score={score:.3f})")
+                        details.append(f"{rank:2d}. {sym:<6}  {name:<20}  ${price:7.2f}  (score={score:.3f})")
                     else:
-                        details.append(f"{rank:2d}. {sym:6s}  N/A (score={score:.3f})")
+                        details.append(f"{rank:2d}. {sym:<6}  {name:<20}  N/A        (score={score:.3f})")
                 
                 # Header with ranking info
                 total_count = len(symbols)

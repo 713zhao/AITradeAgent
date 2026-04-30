@@ -255,9 +255,9 @@ def build_report(data: dict, market: dict) -> str:
 
         lines.append("*Positions:*")
         lines.append("```")
-        # Column layout: Name(12) Qty(5) Avg(7) Cur(7) P&L(9) %(6)
-        lines.append(f"{'Name':<12} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
-        lines.append("-" * 50)
+        # Column layout: Sym(8) Name(12) Qty(5) Avg(7) Cur(7) P&L(9) %(6)
+        lines.append(f"{'Sym':<8} {'Name':<12} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
+        lines.append("-" * 60)
         for sym, pos in sorted(positions.items()):
             qty      = pos.get("quantity", 0)
             avg      = pos.get("avg_cost", 0)
@@ -267,7 +267,7 @@ def build_report(data: dict, market: dict) -> str:
             name     = (names.get(sym) or sym)[:12]
             pnl_str  = _fmt_pnl(upnl)
             lines.append(
-                f"{name:<12} {qty:>5} {avg:>7.2f} {cur:>7.2f} {pnl_str} {upnl_pct:>+5.1f}%"
+                f"{sym:<8} {name:<12} {qty:>5} {avg:>7.2f} {cur:>7.2f} {pnl_str} {upnl_pct:>+5.1f}%"
             )
         lines.append("```\n")
 
