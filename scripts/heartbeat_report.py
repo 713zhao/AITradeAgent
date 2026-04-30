@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Heartbeat report generator for AITradeAgent — rich hourly portfolio format."""
 import os
+import json
 import sqlite3
 import requests
+import concurrent.futures
 from datetime import datetime, timezone
 import pytz
 from pathlib import Path
@@ -19,16 +21,18 @@ if env_path.exists():
 API_BASE      = os.getenv("FINANCE_API_URL", "http://127.0.0.1:8801")
 WORKSPACE     = Path(__file__).parent.parent
 BACKTEST_DB   = WORKSPACE / "finance_service" / "storage" / "backtest.sqlite"
+NAMES_CACHE   = WORKSPACE / "memory" / "symbol_names.json"
 STALE_MINUTES = 20
 
 # Assessment thresholds
-TARGET_CAGR_PCT     = 20.0   # annual %
-TARGET_SHARPE       = 1.0
-DRAWDOWN_LIMIT_PCT  = -20.0  # max acceptable drawdown
+TARGET_CAGR_PCT    = 20.0
+TARGET_SHARPE      = 1.0
+DRAWDOWN_LIMIT_PCT = -20.0
 
+
+# ── Data fetchers ────────────────────────────────────────────────────────────
 
 def get_portfolio_state():
-    """Fetch full portfolio state from the live service API."""
     try:
         resp = requests.get(f"{API_BASE}/portfolio/state", timeout=10)
         resp.raise_for_status()
@@ -39,7 +43,6 @@ def get_portfolio_state():
 
 
 def get_market_status():
-    """Check if HK and US markets are currently open."""
     try:
         now_hk = datetime.now(pytz.timezone("Asia/Hong_Kong"))
         is_weekday = now_hk.weekday() < 5
@@ -52,13 +55,42 @@ def get_market_status():
         return {"hk": False, "us": False}
 
 
-def get_backtest_result(strategy_name: str = None):
-    """Return the most recent backtest row for the active strategy (or any run).
+def get_symbol_names(symbols: list) -> dict:
+    """Return {symbol: short_name} using a local JSON cache; fetch missing ones via yfinance."""
+    cache = {}
+    if NAMES_CACHE.exists():
+        try:
+            cache = json.loads(NAMES_CACHE.read_text())
+        except Exception:
+            cache = {}
 
-    Returns a dict with keys: run_name, start_date, end_date, cagr_pct,
-    sharpe_ratio, max_drawdown_pct, total_return_pct, win_rate_pct, total_trades.
-    Returns None if the DB is missing or has no rows.
-    """
+    missing = [s for s in symbols if s not in cache]
+    if missing:
+        try:
+            import yfinance as yf
+
+            def _fetch(sym):
+                try:
+                    info = yf.Ticker(sym).info or {}
+                    return sym, (info.get("shortName") or info.get("longName") or sym)
+                except Exception:
+                    return sym, sym
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+                for sym, name in ex.map(_fetch, missing):
+                    cache[sym] = name
+
+            NAMES_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            NAMES_CACHE.write_text(json.dumps(cache, indent=2))
+        except Exception as e:
+            print(f"[heartbeat] Name fetch failed: {e}", flush=True)
+            for sym in missing:
+                cache[sym] = sym
+
+    return cache
+
+
+def get_backtest_result(strategy_name: str = None):
     if not BACKTEST_DB.exists():
         return None
     try:
@@ -72,9 +104,7 @@ def get_backtest_result(strategy_name: str = None):
                 (f"%{strategy_name}%",),
             )
         else:
-            cur.execute(
-                "SELECT * FROM backtest_runs ORDER BY created_at DESC LIMIT 1"
-            )
+            cur.execute("SELECT * FROM backtest_runs ORDER BY created_at DESC LIMIT 1")
         row = cur.fetchone()
         conn.close()
         return dict(row) if row else None
@@ -84,7 +114,6 @@ def get_backtest_result(strategy_name: str = None):
 
 
 def get_active_strategy():
-    """Read the active strategy type from config/finance.yaml (best-effort)."""
     cfg = WORKSPACE / "config" / "finance.yaml"
     if not cfg.exists():
         return "sma50_trend_regime"
@@ -95,25 +124,33 @@ def get_active_strategy():
     return "sma50_trend_regime"
 
 
-def build_assessment_lines(bt: dict) -> list[str]:
-    """Return ⚠️/✅ assessment bullet lines from a backtest result dict."""
-    lines = []
-    cagr = bt.get("cagr_pct", 0.0)
+# ── Report builders ──────────────────────────────────────────────────────────
+
+def _fmt_pnl(upnl: float) -> str:
+    """Format a P&L dollar value, avoiding the '-0' display artifact."""
+    rounded = round(upnl, 2)
+    if rounded == 0.0:
+        return f"{'0':>9}"
+    sign = "+" if rounded > 0 else ""
+    return f"{sign}{rounded:>8.2f}"
+
+
+def build_assessment_lines(bt: dict) -> list:
+    cagr   = bt.get("cagr_pct", 0.0)
     sharpe = bt.get("sharpe_ratio", 0.0)
-    dd = bt.get("max_drawdown_pct", 0.0)
+    dd     = bt.get("max_drawdown_pct", 0.0)
+    lines  = []
 
     cagr_ok = cagr >= TARGET_CAGR_PCT
     lines.append(
         f"{'✅' if cagr_ok else '⚠️'} CAGR {'on target' if cagr_ok else 'below target'}: "
         f"{cagr:.1f}% {'≥' if cagr_ok else '<'} {TARGET_CAGR_PCT:.1f}%"
     )
-
     sharpe_ok = sharpe >= TARGET_SHARPE
     lines.append(
         f"{'✅' if sharpe_ok else '⚠️'} Sharpe {'sufficient' if sharpe_ok else 'low'}: "
         f"{sharpe:.2f} {'≥' if sharpe_ok else '<'} {TARGET_SHARPE:.1f}"
     )
-
     dd_ok = dd >= DRAWDOWN_LIMIT_PCT
     lines.append(
         f"{'✅' if dd_ok else '⚠️'} Drawdown {'within limit' if dd_ok else 'excessive'}: "
@@ -122,12 +159,11 @@ def build_assessment_lines(bt: dict) -> list[str]:
     return lines
 
 
-def build_recommendations(bt: dict) -> list[str]:
-    """Return actionable recommendation bullets based on backtest metrics."""
-    recs = []
+def build_recommendations(bt: dict) -> list:
     cagr   = bt.get("cagr_pct", 0.0)
     sharpe = bt.get("sharpe_ratio", 0.0)
     dd     = bt.get("max_drawdown_pct", 0.0)
+    recs   = []
 
     if cagr < TARGET_CAGR_PCT and sharpe < TARGET_SHARPE:
         recs.append("Improve risk-adjusted returns: add trend filter or increase take-profit ratios")
@@ -143,7 +179,6 @@ def build_recommendations(bt: dict) -> list[str]:
 
 
 def send_telegram(message: str) -> bool:
-    """Send message to Telegram if configured."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id   = os.getenv("TELEGRAM_CHAT_ID")
     if not bot_token or not chat_id:
@@ -162,12 +197,10 @@ def send_telegram(message: str) -> bool:
 
 
 def build_report(data: dict, market: dict) -> str:
-    """Build the rich hourly portfolio report."""
-    m         = data.get("equity_metrics", {})
-    _raw_pos  = data.get("positions", [])
+    m            = data.get("equity_metrics", {})
+    _raw_pos     = data.get("positions", [])
     last_updated = data.get("last_updated")
 
-    # Normalise positions to dict keyed by symbol
     if isinstance(_raw_pos, list):
         positions = {p["symbol"]: p for p in _raw_pos if "symbol" in p}
     else:
@@ -182,10 +215,9 @@ def build_report(data: dict, market: dict) -> str:
     unrealized_pnl = m.get("unrealized_pnl", 0.0)
     realized_pnl   = m.get("realized_pnl", 0.0)
     total_pnl      = m.get("total_pnl", unrealized_pnl + realized_pnl)
-    pnl_sign       = "+" if total_pnl >= 0 else ""
-    upnl_sign      = "+" if unrealized_pnl >= 0 else ""
+    pnl_sign       = "+" if total_pnl > 0 else ""
+    upnl_sign      = "+" if unrealized_pnl > 0 else ""
 
-    # Market label
     open_markets = []
     if market["us"]:
         open_markets.append("🇺🇸 US")
@@ -195,7 +227,6 @@ def build_report(data: dict, market: dict) -> str:
 
     now_utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
-    # Data freshness indicator
     if last_updated:
         try:
             updated_dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
@@ -219,19 +250,24 @@ def build_report(data: dict, market: dict) -> str:
     lines.append(f"{data_line}\n")
 
     if positions:
+        # Fetch symbol names (from cache, no blocking requests on subsequent runs)
+        names = get_symbol_names(list(positions.keys()))
+
         lines.append("*Positions:*")
         lines.append("```")
-        lines.append(f"{'Sym':<8} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
-        lines.append("-" * 47)
+        # Column layout: Sym(8) Name(10) Qty(5) Avg(7) Cur(7) P&L(9) %(6)
+        lines.append(f"{'Sym':<8} {'Name':<10} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
+        lines.append("-" * 58)
         for sym, pos in sorted(positions.items()):
             qty      = pos.get("quantity", 0)
             avg      = pos.get("avg_cost", 0)
             cur      = pos.get("current_price", avg)
             upnl     = pos.get("unrealized_pnl", (cur - avg) * qty)
             upnl_pct = ((cur - avg) / avg * 100) if avg else 0
-            sign     = "+" if upnl > 0 else ""
+            name     = (names.get(sym) or sym)[:10]
+            pnl_str  = _fmt_pnl(upnl)
             lines.append(
-                f"{sym:<8} {qty:>5} {avg:>7.2f} {cur:>7.2f} {sign}{upnl:>8,.0f} {upnl_pct:>+5.1f}%"
+                f"{sym:<8} {name:<10} {qty:>5} {avg:>7.2f} {cur:>7.2f} {pnl_str} {upnl_pct:>+5.1f}%"
             )
         lines.append("```\n")
 
