@@ -2211,3 +2211,1029 @@
 - Improve risk-adjusted returns: add trend filter or increase take-profit ratios
 
 ---
+
+## 2026-04-28 23:58
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 00:28
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 00:58
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 01:28
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 01:58
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 02:28
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 02:58
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 03:28
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 03:58
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 04:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 09:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 10:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 10:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 11:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 11:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 12:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 12:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 13:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 13:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 14:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 14:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 15:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 15:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 16:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 21:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 22:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 22:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 23:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-29 23:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 00:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 00:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 01:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 01:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 02:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 02:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 03:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 03:30
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---
+
+## 2026-04-30 04:00
+
+### Latest Backtest Results
+{
+  "total_return_pct": 3.271234479146741,
+  "cagr_pct": 0.6462941770756903,
+  "sharpe_ratio": 0.13061525511603939,
+  "max_drawdown_pct": -13.879318947458753,
+  "total_trades": 87,
+  "final_value": 103197.48788933654,
+  "run_date": "2026-03-26 00:05:38",
+  "start_date": "2020-01-01 00:00:00",
+  "end_date": "2024-12-31 00:00:00",
+  "symbols_count": 20,
+  "strategy": "sma50_trend_regime 2020-01-01 to 2024-12-31"
+}
+
+### Assessment
+- ⚠️ CAGR below target: 0.6% < 20.0%
+- ⚠️ Sharpe low: 0.13 < 1.0
+- ✅ Drawdown within limit: -13.9%
+
+### Recommended Actions
+- Improve risk-adjusted returns: add trend filter or increase take-profit ratios
+
+---

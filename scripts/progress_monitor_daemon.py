@@ -3,7 +3,7 @@
 Progress Monitor Daemon
 
 Runs as a persistent background service (managed by systemd).
-Calls progress_monitor.py every 30 minutes while any market is open.
+Calls heartbeat_report.py every 30 minutes while any market is open.
 Sends one final closing report when market transitions from open -> closed.
 
 Market coverage:
@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 WORKSPACE          = Path("/home/eric/.openclaw/workspace/AITradeAgent")
 STATE_FILE         = WORKSPACE / "memory" / "progress_daemon_state.json"
 LOG_FILE           = Path("/tmp/progress_monitor.log")
-MONITOR_SCRIPT     = WORKSPACE / "scripts" / "progress_monitor.py"
+MONITOR_SCRIPT     = WORKSPACE / "scripts" / "heartbeat_report.py"
 
 # Timing
 INTERVAL_SECONDS   = 30 * 60   # 30-min between reports while market is open
@@ -110,7 +110,7 @@ def load_env(env_file: Path) -> None:
 # Run progress monitor -------------------------------------------------------
 
 def run_progress_report(label: str = "") -> bool:
-    """Load and execute progress_monitor.main() directly."""
+    """Load and execute heartbeat_report.main() directly."""
     try:
         project_root = str(WORKSPACE)
         if project_root not in sys.path:
@@ -118,7 +118,7 @@ def run_progress_report(label: str = "") -> bool:
 
         load_env(WORKSPACE / ".env")
 
-        spec = importlib.util.spec_from_file_location("progress_monitor", MONITOR_SCRIPT)
+        spec = importlib.util.spec_from_file_location("heartbeat_report", MONITOR_SCRIPT)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
@@ -128,7 +128,7 @@ def run_progress_report(label: str = "") -> bool:
         logger.info(f"Progress report{tag} done.")
         return True
     except Exception as exc:
-        logger.error(f"progress_monitor failed: {exc}", exc_info=True)
+        logger.error(f"heartbeat_report failed: {exc}", exc_info=True)
         return False
 
 

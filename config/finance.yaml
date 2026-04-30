@@ -70,6 +70,7 @@ strategies:
 
 strategy:
   type: sma50_trend_regime
+  enable_intraday_entries: true  # Tier 2: evaluate BUY entries every 15 min (in addition to daily Tier 1 scan)
   auto_execute:
     enabled: true
     confidence_threshold: 0.8

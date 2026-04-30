@@ -391,14 +391,14 @@ class MainOrchestratorAgent:
                 logger.error(f"Error executing strategic exit for {symbol}: {e}", exc_info=True)
 
     async def handle_price_monitor(self, event: Event):
-        """Tier 2: Lightweight price refresh for watchlist + held symbols every 15 min."""
+        """Tier 2: Price refresh + optional intra-day entry evaluation for watchlist symbols."""
         logger.info("Received PRICE_MONITOR_TRIGGER")
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
         if not (is_us_market_open() or is_hk_market_open()):
             logger.info("Markets closed (US and HK). Skipping price monitor.")
             return
-        # Refresh prices for watchlist + held positions
-        # Get held symbols from portfolio
+
+        # ── Refresh prices for watchlist + held positions ──────────────────
         held_symbols = set()
         if self.portfolio_agent:
             report = await self.portfolio_agent.get_detailed_portfolio_state()
@@ -407,18 +407,86 @@ class MainOrchestratorAgent:
                     sym = pos.get("symbol")
                     if sym:
                         held_symbols.add(sym)
-        # Delegate to scanner; it will combine with its watchlist and filter by market open status
-        report = await self.market_scanner_agent.refresh_watchlist_prices(
+
+        scan_report = await self.market_scanner_agent.refresh_watchlist_prices(
             data_agent=self.data_agent,
             held_symbols=held_symbols
         )
-        # Apply fetched prices to portfolio positions
-        if report and report.status == "success" and self.portfolio_agent:
-            price_dict = {item["symbol"]: item["price"] for item in report.payload.get("prices", [])}
+        if scan_report and scan_report.status == "success" and self.portfolio_agent:
+            price_dict = {item["symbol"]: item["price"] for item in scan_report.payload.get("prices", [])}
             if price_dict:
                 self.portfolio_agent.repository.update_position_prices(price_dict)
                 logger.info(f"Applied {len(price_dict)} price updates to portfolio")
-        logger.info(f"Price monitor complete: {report.message}")
+            logger.info(f"Price monitor complete: {scan_report.message}")
+
+        # ── Intra-day entry evaluation (Tier 2 buy decisions) ───────────────
+        intraday_entries = self.config_engine.get("strategy", "enable_intraday_entries", default=True)
+        if not intraday_entries:
+            logger.info("Intra-day entry evaluation disabled (strategy.enable_intraday_entries=false).")
+            return
+
+        watchlist_symbols = self.market_scanner_agent.get_watchlist_symbols()
+        if not watchlist_symbols:
+            logger.info("Watchlist empty — skipping intra-day entry evaluation.")
+            return
+
+        logger.info(f"[Tier2-Entry] Evaluating {len(watchlist_symbols)} watchlist symbols for intra-day entries")
+        from datetime import datetime, timedelta
+        end_date   = datetime.now().date()
+        start_date = end_date - timedelta(days=365)
+
+        for symbol in watchlist_symbols:
+            _is_hk = symbol.endswith(".HK")
+            if _is_hk and not is_hk_market_open():
+                continue
+            if not _is_hk and not is_us_market_open():
+                continue
+
+            try:
+                data_report = await self.data_agent.run(
+                    symbol=symbol, interval="1d", start_date=start_date, end_date=end_date
+                )
+                if data_report.status != "success":
+                    logger.debug(f"[Tier2-Entry] Data fetch failed for {symbol}: {data_report.message}")
+                    continue
+
+                analysis_report = await self.analysis_agent.run(data_payload=data_report.payload, symbol=symbol)
+                if analysis_report.status != "success":
+                    logger.debug(f"[Tier2-Entry] Analysis failed for {symbol}: {analysis_report.message}")
+                    continue
+
+                strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=symbol)
+                if strategy_report.status != "success":
+                    logger.debug(f"[Tier2-Entry] Strategy failed for {symbol}: {strategy_report.message}")
+                    continue
+
+                proposals = strategy_report.payload.get("proposals", [])
+                if not proposals:
+                    continue
+                proposal = proposals[0]
+                if proposal.get("action") != "BUY":
+                    continue
+
+                risk_report = await self.risk_agent.run(proposal)
+                if risk_report.payload.get("decision") != "APPROVED":
+                    logger.info(f"[Tier2-Entry] {symbol}: risk not approved — {risk_report.payload.get('violations', [])}")
+                    continue
+
+                logger.info(f"[Tier2-Entry] {symbol}: APPROVED BUY — proceeding to execution")
+
+                if not (is_us_market_open() or is_hk_market_open()):
+                    logger.warning(f"[Tier2-Entry] Markets closed before execution of {symbol}, skipping")
+                    continue
+
+                exec_report = await self.execution_agent.run(risk_report)
+                if exec_report and exec_report.status == "success":
+                    await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload))
+                    logger.info(f"[Tier2-Entry] Trade executed for {symbol}")
+                else:
+                    logger.warning(f"[Tier2-Entry] Execution failed for {symbol}: {exec_report.message if exec_report else 'no report'}")
+
+            except Exception as e:
+                logger.error(f"[Tier2-Entry] Error evaluating {symbol}: {e}", exc_info=True)
 
     async def handle_data_fetched(self, event: Event):
         pass  # No action needed; downstream continues via event chain
