@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Heartbeat report generator for AITradeAgent — rich hourly portfolio format."""
 import os
+import sqlite3
 import requests
 from datetime import datetime, timezone
 import pytz
@@ -15,8 +16,15 @@ if env_path.exists():
             key, _, value = line.partition("=")
             os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
-API_BASE = os.getenv("FINANCE_API_URL", "http://127.0.0.1:8801")
+API_BASE      = os.getenv("FINANCE_API_URL", "http://127.0.0.1:8801")
+WORKSPACE     = Path(__file__).parent.parent
+BACKTEST_DB   = WORKSPACE / "finance_service" / "storage" / "backtest.sqlite"
 STALE_MINUTES = 20
+
+# Assessment thresholds
+TARGET_CAGR_PCT     = 20.0   # annual %
+TARGET_SHARPE       = 1.0
+DRAWDOWN_LIMIT_PCT  = -20.0  # max acceptable drawdown
 
 
 def get_portfolio_state():
@@ -44,10 +52,100 @@ def get_market_status():
         return {"hk": False, "us": False}
 
 
+def get_backtest_result(strategy_name: str = None):
+    """Return the most recent backtest row for the active strategy (or any run).
+
+    Returns a dict with keys: run_name, start_date, end_date, cagr_pct,
+    sharpe_ratio, max_drawdown_pct, total_return_pct, win_rate_pct, total_trades.
+    Returns None if the DB is missing or has no rows.
+    """
+    if not BACKTEST_DB.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(BACKTEST_DB))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        if strategy_name:
+            cur.execute(
+                "SELECT * FROM backtest_runs WHERE run_name LIKE ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (f"%{strategy_name}%",),
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM backtest_runs ORDER BY created_at DESC LIMIT 1"
+            )
+        row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"[heartbeat] Backtest DB read failed: {e}", flush=True)
+        return None
+
+
+def get_active_strategy():
+    """Read the active strategy type from config/finance.yaml (best-effort)."""
+    cfg = WORKSPACE / "config" / "finance.yaml"
+    if not cfg.exists():
+        return "sma50_trend_regime"
+    for line in cfg.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("type:") and "sma" in stripped.lower():
+            return stripped.split(":", 1)[1].strip()
+    return "sma50_trend_regime"
+
+
+def build_assessment_lines(bt: dict) -> list[str]:
+    """Return ⚠️/✅ assessment bullet lines from a backtest result dict."""
+    lines = []
+    cagr = bt.get("cagr_pct", 0.0)
+    sharpe = bt.get("sharpe_ratio", 0.0)
+    dd = bt.get("max_drawdown_pct", 0.0)
+
+    cagr_ok = cagr >= TARGET_CAGR_PCT
+    lines.append(
+        f"{'✅' if cagr_ok else '⚠️'} CAGR {'on target' if cagr_ok else 'below target'}: "
+        f"{cagr:.1f}% {'≥' if cagr_ok else '<'} {TARGET_CAGR_PCT:.1f}%"
+    )
+
+    sharpe_ok = sharpe >= TARGET_SHARPE
+    lines.append(
+        f"{'✅' if sharpe_ok else '⚠️'} Sharpe {'sufficient' if sharpe_ok else 'low'}: "
+        f"{sharpe:.2f} {'≥' if sharpe_ok else '<'} {TARGET_SHARPE:.1f}"
+    )
+
+    dd_ok = dd >= DRAWDOWN_LIMIT_PCT
+    lines.append(
+        f"{'✅' if dd_ok else '⚠️'} Drawdown {'within limit' if dd_ok else 'excessive'}: "
+        f"{dd:.1f}%"
+    )
+    return lines
+
+
+def build_recommendations(bt: dict) -> list[str]:
+    """Return actionable recommendation bullets based on backtest metrics."""
+    recs = []
+    cagr   = bt.get("cagr_pct", 0.0)
+    sharpe = bt.get("sharpe_ratio", 0.0)
+    dd     = bt.get("max_drawdown_pct", 0.0)
+
+    if cagr < TARGET_CAGR_PCT and sharpe < TARGET_SHARPE:
+        recs.append("Improve risk-adjusted returns: add trend filter or increase take-profit ratios")
+    elif cagr < TARGET_CAGR_PCT:
+        recs.append("Increase CAGR: widen take-profit targets or expand universe to more volatile symbols")
+    if sharpe < TARGET_SHARPE:
+        recs.append("Reduce volatility drag: tighten position sizing or add regime filter to avoid sideways markets")
+    if dd < DRAWDOWN_LIMIT_PCT:
+        recs.append("Tighten stop-losses or reduce max concurrent positions to limit drawdown")
+    if not recs:
+        recs.append("Strategy performing within targets — continue monitoring")
+    return recs
+
+
 def send_telegram(message: str) -> bool:
     """Send message to Telegram if configured."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id   = os.getenv("TELEGRAM_CHAT_ID")
     if not bot_token or not chat_id:
         return False
     try:
@@ -64,9 +162,9 @@ def send_telegram(message: str) -> bool:
 
 
 def build_report(data: dict, market: dict) -> str:
-    """Build the rich hourly portfolio report string (ported from health_agent.py)."""
-    m = data.get("equity_metrics", {})
-    _raw_pos = data.get("positions", [])
+    """Build the rich hourly portfolio report."""
+    m         = data.get("equity_metrics", {})
+    _raw_pos  = data.get("positions", [])
     last_updated = data.get("last_updated")
 
     # Normalise positions to dict keyed by symbol
@@ -104,10 +202,11 @@ def build_report(data: dict, market: dict) -> str:
             if updated_dt.tzinfo is None:
                 updated_dt = updated_dt.replace(tzinfo=timezone.utc)
             age_mins = (datetime.now(timezone.utc) - updated_dt).total_seconds() / 60
-            if age_mins <= STALE_MINUTES:
-                data_line = f"✅ Prices: live (updated <{STALE_MINUTES}m ago)"
-            else:
-                data_line = f"⚠️ Prices: stale ({age_mins:.0f}m old)"
+            data_line = (
+                f"✅ Prices: live (updated <{STALE_MINUTES}m ago)"
+                if age_mins <= STALE_MINUTES
+                else f"⚠️ Prices: stale ({age_mins:.0f}m old)"
+            )
         except Exception:
             data_line = "ℹ️ Prices: cached"
     else:
@@ -134,7 +233,25 @@ def build_report(data: dict, market: dict) -> str:
             lines.append(
                 f"{sym:<8} {qty:>5} {avg:>7.2f} {cur:>7.2f} {sign}{upnl:>8,.0f} {upnl_pct:>+5.1f}%"
             )
-        lines.append("```")
+        lines.append("```\n")
+
+    # ── Strategy + Backtest Assessment ──────────────────────────────────────
+    strategy = get_active_strategy()
+    bt = get_backtest_result(strategy)
+    if bt:
+        start = bt.get("start_date", "")[:10]
+        end   = bt.get("end_date", "")[:10]
+        lines.append(f"*📈 Strategy:* `{bt.get('run_name', strategy)}`")
+        lines.append(f"Period: {start} to {end}\n")
+
+        lines.append("*🔍 Assessment:*")
+        for a in build_assessment_lines(bt):
+            lines.append(f"  {a}")
+        lines.append("")
+
+        lines.append("*🔧 Recommended Actions:*")
+        for r in build_recommendations(bt):
+            lines.append(f"  • {r}")
 
     return "\n".join(lines)
 
