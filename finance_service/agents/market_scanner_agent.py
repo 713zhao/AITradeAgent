@@ -223,19 +223,19 @@ class MarketScannerAgent(Agent):
     # ─── Tier 2: Price Monitor (every 15 min) ───────────────────────
 
     async def refresh_watchlist_prices(self, data_agent=None,
-                                       held_symbols: Optional[List[str]] = None) -> AgentReport:
+                                       held_symbols: Optional[List[str]] = None,
+                                       force_held: bool = False) -> AgentReport:
         """
         Tier 2 — Lightweight price refresh for watchlist + held positions.
-        
-        Fetches only the latest price (no full OHLCV history needed).
+
+        Fetches only the latest price using 2-min intraday bars so P&L reflects
+        live market prices (not yesterday's close).
         Does NOT re-run news/analysis/strategy.
-        
+
         Args:
             data_agent: DataAgent for fetching current quotes
             held_symbols: Symbols from PortfolioAgent (always included)
-        
-        Returns:
-            AgentReport with price snapshots
+            force_held: If True, always include held positions even when market closed
         """
         # Merge watchlist + held positions (dedup)
         symbols_to_check = list(self._watchlist_symbols)
@@ -244,11 +244,12 @@ class MarketScannerAgent(Agent):
                 if s not in symbols_to_check:
                     symbols_to_check.append(s)
 
-        # Market-aware filtering: only include symbols whose primary market is open
+        # Market-aware filtering
         from finance_service.utils.market_hours import is_hk_market_open, is_us_market_open
         hk_open = is_hk_market_open()
         us_open = is_us_market_open()
-        if not (hk_open or us_open):
+        held_set = set(held_symbols or [])
+        if not (hk_open or us_open) and not force_held:
             logger.info("[PriceMonitor] Both markets closed; skipping fetch.")
             return AgentReport(
                 agent_id=self.agent_id,
@@ -256,11 +257,12 @@ class MarketScannerAgent(Agent):
                 message="Markets closed; no price fetch.",
                 payload={"prices": [], "count": 0}
             )
-        # Filter to open-market symbols only
-        original_count = len(symbols_to_check)
+
         filtered_symbols = []
         for sym in symbols_to_check:
-            if sym.endswith('.HK'):
+            if force_held and sym in held_set:
+                filtered_symbols.append(sym)
+            elif sym.endswith('.HK'):
                 if hk_open:
                     filtered_symbols.append(sym)
             else:
@@ -268,8 +270,10 @@ class MarketScannerAgent(Agent):
                     filtered_symbols.append(sym)
         symbols_to_check = filtered_symbols
 
-        logger.info(f"[PriceMonitor] Refreshing prices for {len(symbols_to_check)} symbols "
-                     f"(watchlist={len(self._watchlist_symbols)}, held={len(held_symbols or [])})")
+        logger.info(
+            f"[PriceMonitor] Refreshing prices for {len(symbols_to_check)} symbols "
+            f"(watchlist={len(self._watchlist_symbols)}, held={len(held_symbols or [])})"
+        )
 
         if not symbols_to_check:
             return AgentReport(
@@ -282,47 +286,29 @@ class MarketScannerAgent(Agent):
         prices: List[Dict[str, Any]] = []
         if data_agent:
             try:
-                # Use fetch_live_prices() to get real intraday prices (1-min bars),
-                # falling back to daily EOD if intraday is unavailable.
-                logger.info(f"[PriceMonitor] Fetching live prices for {len(symbols_to_check)} symbols")
+                # Batch fetch intraday prices (2-min bars for live P&L):
+                # period="1d" gives today's intraday data so iloc[-1] is the
+                # actual current price, not yesterday's close.
+                logger.info(f"[PriceMonitor] Batch fetching {len(symbols_to_check)} symbols (intraday 2m, period=1d)")
 
-                live_prices = await asyncio.to_thread(
-                    data_agent.provider.fetch_live_prices,
-                    symbols_to_check,
-                )
-
-                # Also fetch recent daily bars for change_pct calculation
-                end_date = datetime.now().strftime("%Y-%m-%d")
-                start_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
-                daily_results = await asyncio.to_thread(
+                results = await asyncio.to_thread(
                     data_agent.provider.fetch_ohlcv,
                     symbols_to_check,
-                    start_date=start_date,
-                    end_date=end_date,
-                    interval="1d"
+                    period="1d",
+                    interval="2m",
                 )
 
-                for symbol in symbols_to_check:
-                    latest_close = live_prices.get(symbol)
-                    if latest_close is None or latest_close <= 0:
+                # Extract latest prices (do NOT cache intraday data into daily cache)
+                for symbol, df in results.items():
+                    if df is None or df.empty or 'Close' not in df.columns:
                         continue
-
-                    # Compute change_pct vs previous daily close
-                    change_pct = None
-                    volume = None
-                    daily_df = daily_results.get(symbol)
-                    if daily_df is not None and not daily_df.empty and len(daily_df) >= 2:
-                        prev_close = float(daily_df["Close"].iloc[-2])
-                        if prev_close and prev_close != 0:
-                            change_pct = ((latest_close - prev_close) / prev_close) * 100
-                        if "Volume" in daily_df.columns:
-                            volume = int(daily_df["Volume"].iloc[-1])
-                        # Refresh daily cache with latest data
-                        try:
-                            data_agent.cache.store(symbol, daily_df, "1d")
-                        except Exception:
-                            pass
-
+                    df_valid = df.dropna(subset=['Close'])
+                    if df_valid.empty:
+                        continue
+                    latest_close = float(df_valid['Close'].iloc[-1])
+                    prev_close   = float(df_valid['Close'].iloc[-2]) if len(df_valid) >= 2 else latest_close
+                    volume       = int(df_valid['Volume'].iloc[-1]) if 'Volume' in df_valid.columns else None
+                    change_pct   = ((latest_close - prev_close) / prev_close) * 100 if prev_close else None
                     prices.append({
                         "symbol": symbol,
                         "price": latest_close,
@@ -330,10 +316,10 @@ class MarketScannerAgent(Agent):
                         "change_pct": change_pct,
                         "timestamp": datetime.utcnow().isoformat(),
                     })
+                logger.info(f"[PriceMonitor] Batch fetch produced {len(prices)}/{len(symbols_to_check)} valid price updates")
 
-                logger.info(f"[PriceMonitor] Live price fetch produced {len(prices)}/{len(symbols_to_check)} updates")
             except Exception as e:
-                logger.error(f"[PriceMonitor] Live price fetch failed: {e}", exc_info=True)
+                logger.error(f"[PriceMonitor] Batch fetch failed: {e}", exc_info=True)
                 logger.info("[PriceMonitor] Falling back to individual fetch method")
                 prices = []
                 for symbol in symbols_to_check:
@@ -363,14 +349,12 @@ class MarketScannerAgent(Agent):
         try:
             await self.event_bus.publish(Event(
                 event_type=Events.PRICE_REFRESH_COMPLETE,
-                data=asdict(report)
+                data={"prices": prices, "count": len(prices)}
             ))
         except Exception as e:
             logger.error(f"Error publishing PRICE_REFRESH_COMPLETE: {e}", exc_info=True)
 
         return report
-
-    # ─── Internal methods ──────────────────────────────────────────
 
     async def _fetch_quick_quote(self, symbol: str, data_agent=None) -> Optional[Dict[str, Any]]:
         """Fetch latest price for a single symbol (lightweight)."""

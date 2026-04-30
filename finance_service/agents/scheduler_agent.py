@@ -63,8 +63,8 @@ class SchedulerAgent(Agent):
             # Daily summary after market close: run at 16:05 UTC+8 (08:05 UTC) daily
             await self._schedule_daily_at("daily_report", "08:05", self._trigger_daily_report)
             # Pre-market scans (30min before market open)
-            await self._schedule_daily_at("pre_market_scan_hk", "01:00", self._trigger_pre_market_scan_hk)
-            await self._schedule_daily_at("pre_market_scan_us", "13:00", self._trigger_pre_market_scan_us)
+            await self._schedule_daily_at("pre_market_scan_hk", "01:30", self._trigger_pre_market_scan_hk)
+            await self._schedule_daily_at("pre_market_scan_us", "13:30", self._trigger_pre_market_scan_us)
             
             logger.info("SchedulerAgent tasks initiated.")
             return AgentReport(agent_id=self.agent_id, status="success", message="SchedulerAgent started.")
