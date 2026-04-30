@@ -255,19 +255,19 @@ def build_report(data: dict, market: dict) -> str:
 
         lines.append("*Positions:*")
         lines.append("```")
-        # Column layout: Sym(8) Name(10) Qty(5) Avg(7) Cur(7) P&L(9) %(6)
-        lines.append(f"{'Sym':<8} {'Name':<10} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
-        lines.append("-" * 58)
+        # Column layout: Name(12) Qty(5) Avg(7) Cur(7) P&L(9) %(6)
+        lines.append(f"{'Name':<12} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
+        lines.append("-" * 50)
         for sym, pos in sorted(positions.items()):
             qty      = pos.get("quantity", 0)
             avg      = pos.get("avg_cost", 0)
             cur      = pos.get("current_price", avg)
             upnl     = pos.get("unrealized_pnl", (cur - avg) * qty)
             upnl_pct = ((cur - avg) / avg * 100) if avg else 0
-            name     = (names.get(sym) or sym)[:10]
+            name     = (names.get(sym) or sym)[:12]
             pnl_str  = _fmt_pnl(upnl)
             lines.append(
-                f"{sym:<8} {name:<10} {qty:>5} {avg:>7.2f} {cur:>7.2f} {pnl_str} {upnl_pct:>+5.1f}%"
+                f"{name:<12} {qty:>5} {avg:>7.2f} {cur:>7.2f} {pnl_str} {upnl_pct:>+5.1f}%"
             )
         lines.append("```\n")
 
