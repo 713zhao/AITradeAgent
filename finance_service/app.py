@@ -786,9 +786,72 @@ def create_app():
         if trigger_type == "market-scan":
             await _orchestrator.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={}))
             return jsonify({"status": "queued", "trigger": "market_scan"})
+        elif trigger_type == "hourly-report" or trigger_type == "status-report":
+            await _orchestrator.event_bus.publish(Event(event_type=Events.GET_SYSTEM_STATUS, data={}))
+            return jsonify({"status": "queued", "trigger": "hourly_report"})
+        elif trigger_type == "price-monitor":
+            await _orchestrator.event_bus.publish(Event(event_type=Events.PRICE_MONITOR_TRIGGER, data={}))
+            return jsonify({"status": "queued", "trigger": "price_monitor"})
         else:
             return jsonify({"error": "unknown trigger_type"}), 400
 
+
+    @app.route("/api/report/hourly", methods=["GET", "POST"])
+    async def api_report_hourly():
+        """Generate and send hourly portfolio report via Telegram."""
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+        
+        try:
+            # Get portfolio state
+            portfolio_report = await _orchestrator.portfolio_agent.get_detailed_portfolio_state()
+            if portfolio_report.status != "success":
+                return jsonify({"error": "Failed to get portfolio state"}), 500
+            
+            payload = portfolio_report.payload
+            metrics = payload.get("equity_metrics", {})
+            positions = payload.get("positions", [])
+            
+            # Generate report message
+            report_lines = ["📊 *Hourly Portfolio Report*\n"]
+            report_lines.append(f"💰 *Summary*")
+            report_lines.append(f"Equity: ${metrics.get('total_equity', 0):,.0f}")
+            report_lines.append(f"Return: {metrics.get('total_return_pct', 0):.2f}%")
+            report_lines.append(f"P&L: ${metrics.get('unrealized_pnl', 0):,.0f}")
+            report_lines.append(f"Positions: {len(positions)}")
+            report_lines.append(f"Drawdown: {metrics.get('drawdown_pct', 0):.2f}%\n")
+            
+            # Top 5 gainers
+            gainers = sorted([p for p in positions if p.get('unrealized_pnl_pct', 0) > 0], 
+                           key=lambda x: x.get('unrealized_pnl_pct', 0), reverse=True)[:5]
+            if gainers:
+                report_lines.append("📈 *Top Gainers*")
+                for pos in gainers:
+                    report_lines.append(f"{pos.get('symbol', '?')}: +{pos.get('unrealized_pnl_pct', 0):.2f}%")
+                report_lines.append("")
+            
+            # Top 5 losers
+            losers = sorted([p for p in positions if p.get('unrealized_pnl_pct', 0) < 0], 
+                          key=lambda x: x.get('unrealized_pnl_pct', 0))[:5]
+            if losers:
+                report_lines.append("📉 *Top Losers*")
+                for pos in losers:
+                    report_lines.append(f"{pos.get('symbol', '?')}: {pos.get('unrealized_pnl_pct', 0):.2f}%")
+            
+            message = "\n".join(report_lines)
+            
+            # Send via Telegram if available
+            if _orchestrator.telegram_agent and _orchestrator.telegram_agent.enabled:
+                chat_id = _orchestrator.telegram_agent.chat_id
+                if chat_id:
+                    await _orchestrator.telegram_agent.send_message(chat_id=chat_id, message=message)
+                    return jsonify({"status": "success", "message": "Hourly report sent via Telegram", "payload": payload})
+            
+            return jsonify({"status": "success", "message": "Hourly report generated (Telegram not configured)", "payload": payload})
+        except Exception as e:
+            logger.exception("Error generating hourly report")
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/dashboard/overview")
     async def api_dashboard_overview():

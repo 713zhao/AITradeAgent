@@ -526,3 +526,13 @@ python3 -m pytest tests/ -v
 # With coverage
 python3 -m pytest tests/ --cov=finance_service
 ```
+
+### Viewing Trading History
+The system provides a built-in terminal script to quickly view all `SELL` transactions and historical liquidations from your live portfolio.
+
+To view your sell trades:
+```bash
+source venv/bin/activate
+python3 scripts/list_sell_trades.py
+```
+*Note: This strictly pulls from your live operational database. It will not show trades from offline backtest simulations.*

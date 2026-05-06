@@ -7,6 +7,7 @@ from finance_service.core.models import TradeProposal
 
 logger = logging.getLogger(__name__)
 
+
 class ExecutionAgent(Agent):
     """Execution Agent - Executes approved trade proposals with optimal algorithms."""
 
@@ -16,7 +17,9 @@ class ExecutionAgent(Agent):
 
     @property
     def goal(self) -> str:
-        return "Execute approved trade proposals efficiently and optimally in the market."
+        return (
+            "Execute approved trade proposals efficiently and optimally in the market."
+        )
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -56,10 +59,17 @@ class ExecutionAgent(Agent):
                 "status": "FILLED",
                 "timestamp": datetime.utcnow().isoformat(),
                 "stop_loss": trade_proposal.stop_loss_price,
-                "take_profit": trade_proposal.take_profit_price
+                "take_profit": trade_proposal.take_profit_price,
+                "reason": trade_proposal.rationale[0]
+                if trade_proposal.rationale
+                else "Strategy execution",
             }
 
-            flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={trade_proposal.quantity} @ ${trade_proposal.target_price} → {execution_result['status']}")
+            flow(
+                "ExecutionAgent",
+                "DONE",
+                f"{trade_proposal.symbol} {trade_proposal.action} qty={trade_proposal.quantity} @ ${trade_proposal.target_price} → {execution_result['status']}",
+            )
             message = f"Trade {trade_proposal.symbol} {trade_proposal.action} executed with status {execution_result['status']}"
             payload = {"execution_result": execution_result}
 
@@ -67,7 +77,7 @@ class ExecutionAgent(Agent):
                 agent_id=self.agent_id,
                 status="success",
                 message=message,
-                payload=payload
+                payload=payload,
             )
             return report
         except Exception as e:
@@ -75,7 +85,7 @@ class ExecutionAgent(Agent):
             return AgentReport(
                 agent_id=self.agent_id,
                 status="error",
-                message=f"Error executing trade: {e}"
+                message=f"Error executing trade: {e}",
             )
 
     def __repr__(self) -> str:

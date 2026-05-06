@@ -5,11 +5,11 @@ risk:
   max_drawdown_pct: 15.0
   default_risk_budget_pct: 10
   # Exit strategy configuration
-  exit_strategy: "atr"  # "fixed_pct", "atr", "partial_trail"
+  exit_strategy: "partial_trail"  # "fixed_pct", "atr", "partial_trail"
   stop_loss_default_pct: 1.5  # used only if exit_strategy == "fixed_pct"
   take_profit_default_pct: 3.0  # used only if exit_strategy == "fixed_pct"
   atr_multiplier_sl: 2.0  # for atr strategy
-  atr_multiplier_tp: 4.0  # for atr strategy
+  atr_multiplier_tp: 2.0  # for atr strategy
   partial_target_pct: 0.02  # for partial_trail strategy (2% gain)
   trail_stop_multiplier: 1.5  # for partial_trail, ATR multiplier for trailing stop
   max_concurrent_positions: 25
@@ -42,11 +42,11 @@ strategies:
   sma50_trend_regime:
     allocation: 1.0
     risk_budget_pct: 1.5
-    confidence_threshold: 1.0
+    confidence_threshold: 0.1
     entry_rules:
       - name: price_above_sma50
         type: entry
-        indicator: sma_50
+        indicator: sma_20
         condition: greater_than
         value: 0.0
         compare_to_price: true
@@ -56,9 +56,9 @@ strategies:
         condition: greater_than
         value: 50.0
     exit_rules:
-      - name: price_below_sma50
+      - name: price_below_sma20
         type: exit
-        indicator: sma_50
+        indicator: sma_20
         condition: less_than
         value: 0.0
         compare_to_price: true
@@ -67,13 +67,18 @@ strategies:
         indicator: regime_score
         condition: less_than
         value: 30.0
+      - name: rsi_overbought_take_profit
+        type: exit
+        indicator: rsi
+        condition: greater_than
+        value: 75.0
 
 strategy:
   type: sma50_trend_regime
   enable_intraday_entries: true  # Tier 2: evaluate BUY entries every 15 min (in addition to daily Tier 1 scan)
   auto_execute:
     enabled: true
-    confidence_threshold: 0.8
+    confidence_threshold: 0.1
     require_approval: false
   indicators:
     sma:
@@ -398,25 +403,25 @@ backtest_strategies:
     entry_rules:
     - name: price_above_sma50
       type: entry
-      indicator: sma_50
+      indicator: sma_20
       condition: greater_than
       value: 0.0
       compare_to_price: true
     exit_rules:
-    - name: price_below_sma50
+    - name: price_below_sma20
       type: exit
-      indicator: sma_50
+      indicator: sma_20
       condition: less_than
       value: 0.0
       compare_to_price: true
   sma50_trend_regime:
     allocation: 1.0
     risk_budget_pct: 1.5
-    confidence_threshold: 1.0
+    confidence_threshold: 0.1
     entry_rules:
     - name: price_above_sma50
       type: entry
-      indicator: sma_50
+      indicator: sma_20
       condition: greater_than
       value: 0.0
       compare_to_price: true
@@ -426,9 +431,9 @@ backtest_strategies:
       condition: greater_than
       value: 50.0
     exit_rules:
-    - name: price_below_sma50
+    - name: price_below_sma20
       type: exit
-      indicator: sma_50
+      indicator: sma_20
       condition: less_than
       value: 0.0
       compare_to_price: true

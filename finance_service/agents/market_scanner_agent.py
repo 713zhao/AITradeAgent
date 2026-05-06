@@ -249,8 +249,9 @@ class MarketScannerAgent(Agent):
         hk_open = is_hk_market_open()
         us_open = is_us_market_open()
         held_set = set(held_symbols or [])
-        if not (hk_open or us_open) and not force_held:
-            logger.info("[PriceMonitor] Both markets closed; skipping fetch.")
+        # Only skip if both markets are closed AND there are no held positions to update
+        if not (hk_open or us_open) and not force_held and not held_set:
+            logger.info("[PriceMonitor] Both markets closed and no held positions; skipping fetch.")
             return AgentReport(
                 agent_id=self.agent_id,
                 status="success",
@@ -260,7 +261,8 @@ class MarketScannerAgent(Agent):
 
         filtered_symbols = []
         for sym in symbols_to_check:
-            if force_held and sym in held_set:
+            # ALWAYS include held symbols (they need price updates regardless of market hours)
+            if sym in held_set:
                 filtered_symbols.append(sym)
             elif sym.endswith('.HK'):
                 if hk_open:
@@ -364,7 +366,7 @@ class MarketScannerAgent(Agent):
         try:
             report = await data_agent.run(
                 symbol=symbol,
-                interval="1d",
+                interval="5m",
                 use_cache=True,
                 emit_events=False
             )
