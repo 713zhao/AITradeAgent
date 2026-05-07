@@ -39,3 +39,4 @@ plotly>=5.17.0
 
 # Performance
 cython>=0.29.0
+google-generativeai>=0.3.0
