@@ -106,9 +106,18 @@ def get_backtest_result(strategy_name: str = None):
                 "ORDER BY created_at DESC LIMIT 1",
                 (f"%{strategy_name}%",),
             )
+            row = cur.fetchone()
+            # If not found, fallback to "default" strategy results
+            if not row:
+                cur.execute(
+                    "SELECT * FROM backtest_runs WHERE run_name LIKE ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    ("%default%",),
+                )
+                row = cur.fetchone()
         else:
             cur.execute("SELECT * FROM backtest_runs ORDER BY created_at DESC LIMIT 1")
-        row = cur.fetchone()
+            row = cur.fetchone()
         conn.close()
         return dict(row) if row else None
     except Exception as e:

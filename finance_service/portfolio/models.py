@@ -46,6 +46,8 @@ class Position:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     trades: List[str] = field(default_factory=list)  # Trade IDs
     metadata: Dict[str, Any] = field(default_factory=dict)
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
     
     @property
     def entry_price(self) -> float:
