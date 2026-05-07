@@ -80,6 +80,7 @@ class ExecutionAgent(Agent):
                     "filled_price": order_result.filled_price or trade_proposal.target_price,
                     "status": order_result.status,
                     "timestamp": datetime.utcnow().isoformat(),
+                    "reason": trade_proposal.rationale[0] if trade_proposal.rationale else "Strategy execution",
                 }
                 
                 flow("ExecutionAgent", "DONE", f"{trade_proposal.symbol} {trade_proposal.action} qty={execution_result['quantity']} @ ${execution_result['filled_price']} → {execution_result['status']}")
