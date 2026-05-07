@@ -1,7 +1,7 @@
 # AITradeAgent - Full System Architecture
 
-**Version:** 3.0  
-**Last Updated:** 2026-03-30  
+**Version:** 4.0  
+**Last Updated:** 2026-04-04  
 **Source:** `finance_service/agents/` + `finance_service/app.py`
 
 ---
@@ -11,6 +11,8 @@
 AITradeAgent is an **autonomous multi-agent trading research system** built around an event-driven architecture. A central `MainOrchestratorAgent` wires together 13 specialized agents, each with a single responsibility. Agents communicate via an async **Event Bus** — no agent directly calls another; they publish and subscribe to named events.
 
 The system continuously scans markets, analyzes candidates, generates trade proposals, enforces risk rules, executes orders, monitors positions, and reports everything to Telegram.
+
+**Phase 3 addition:** An LLM-powered pre-selection layer sits between discovery and analysis. After `MarketScannerAgent` discovers up to 50+ candidates, `SymbolSelectorAgent` uses `MarketRegimeAgent` and `MacroNewsAgent` context to rank them via LLM and return the top 5–10 highest-conviction symbols. Only these proceed to deep analysis — reducing cost and noise.
 
 ---
 
@@ -31,45 +33,77 @@ The system continuously scans markets, analyzes candidates, generates trade prop
                                     │
         ┌───────────────────────────┼───────────────────────────┐
         │                           │                           │
-┌───────▼───────┐        ┌──────────▼────────┐      ┌──────────▼──────────┐
-│SchedulerAgent │        │ Trading Pipeline  │      │  Monitoring Loop    │
-│(clock/trigger)│        │ (main workflow)   │      │(continuous exit/    │
-└───────┬───────┘        └──────────┬────────┘      │ reanalysis checks) │
-        │                           │                └──────────┬──────────┘
-   Emits:                    See pipeline below              │
-   • MARKET_SCAN             (per symbol discovery)  Emits: EXIT_CHECK_TRIGGER
-   • DATA_REFRESH            & strategy analysis    (every 5 min)
-   • DAILY_REPORT                   │                       │
-   • SCHEDULE                       │          ┌────────────▼────────┐
-                                    │          │    ExitAgent         │
-                                    │          │  • Monitor exits     │
-                    ┌───────────────┼──────────┤  • Re-analyze held   │
-                    │               │          │    positions         │
-                    ▼               │          │  • Emit signals      │
-    ┌───────────────────────┐       │          └────────────┬────────┘
-    │ MarketScannerAgent     │       │                       │
-    │ Emits: MARKET_SCANNED  │       │         ┌─────────────┴─────────┐
-    └───────────┬────────────┘       │         │(if check fails)       │
-                │ (per symbol)       │         │                       │
-    ┌───────────▼────────────┐       │    ┌────▼──────────────────┐
-    │    DataAgent            │       │    │ POSITION_DEGRADED     │
-    │ Emits: DATA_FETCH_      │       │    │ (sent back through    │
-    │       COMPLETE          │       │    │  orchestrator for     │
-    └──────────┬──────────────┘       │    │  strategy recheck)    │
+┌──────────────────────┐ ┌──────────▼────────┐      ┌──────────▼──────────┐
+│  SchedulerAgent      │ │ Trading Pipeline  │      │  Monitoring Loop    │
+│ (continuous loop)    │ │ (main workflow)   │      │(continuous exit/    │
+└──────────┬──────────┘  └──────────┬────────┘      │ reanalysis checks) │
+           │                        │                └──────────┬──────────┘
+    Emits (on schedule):    See pipeline below              │
+    • MARKET_SCAN          (per symbol discovery)  Emits: EXIT_CHECK_TRIGGER
+      (daily @ 01:00/13:00)  & strategy analysis  (every 5 min)
+    • DATA_REFRESH (every 30 min)  │                      │
+    • DAILY_REPORT (EOD)           │        ┌─────────────▼─────────┐
+    • EXIT_CHECK (every 5 min)     │        │    ExitAgent          │
+                                   │        │  (every 5 minutes)    │
+                 ┌─────────────────┼────────┤  • Monitor exits      │
+                 │                 │        │  • Re-analyze held    │
+                 ▼                 │        │    positions          │
+    ┌────────────────────────────────┐     │  • Emit signals       │
+    │   MarketScannerAgent            │     │          └─────────────┬────────┘
+    │   Tier 1: Daily discovery       │     │                       │
+    │   Tier 2: Every 15 min prices   │     │     ┌─────────────────┴────────┐
+    │   Emits: MARKET_SCANNED         │     │     │(if thesis degrades)     │
+    └──────────┬─────────────────────┘     │     │                         │
+               │ (50+ candidates)           │     │                         │
+    ┌──────────────────────────────────────────────────────────┐
+    │    LLM Pre-Selection Pipeline (Phase 3) ✅ (Daily)       │
+    │                                                          │
+    │  ┌──────────────────────┐  ┌────────────────────────┐   │
+    │  │ MarketRegimeAgent    │  │ MacroNewsAgent         │   │
+    │  │ (Daily per-market)   │  │ (Daily per-market)     │   │
+    │  │ 9 indices: US + HK   │  │ US + HK news feeds     │   │
+    │  │ SMA20/50/200         │  │ VADER sentiment        │   │
+    │  │ Risk-on/off + regime │  │ categories + catalysts │   │
+    │  └────────┬─────────────┘  └──────────┬─────────────┘   │
+    │           └────────────┬──────────────┘                  │
+    │                        ▼                                 │
+    │    SymbolSelectorAgent (LLM ranking)                     │
+    │    (Daily per-market: 01:00 HK, 13:00 US)              │
+    │    50 candidates → top 5–10 picks                      │
+    │    gpt-4o-mini via OpenRouter (~13k tokens)             │
+    └──────────────┬───────────────────────────────────────────┘
+                   │ (top N symbols)
+               │ (per ranked symbol)                  │         │                       │
+    ┌──────────▼────────────────────────┐      │    ┌────▼──────────────────┐
+    │    RankingAgent (Phase 2)          │      │    │ POSITION_DEGRADED     │
+    │  • 5-factor re-ranking             │      │    │ (sent back through    │
+    │  • Liquidity, Momentum, Value,    │      │    │  orchestrator for     │
+    │    Growth, Quality scoring         │      │    │  strategy recheck)    │
+    │  Emits: RANKING_COMPLETE           │      │    └───────────────────────┘
+    └──────────┬────────────────────────┘      │
+               │ (re-ranked symbols)           │
+    ┌──────────▼────────────────────────────┐  │
+    │    DataAgent                          │  │
+    │    Emits: DATA_FETCH_COMPLETE         │  │
+    │           (per re-ranked symbol)      │  │
+    └──────────┬────────────────────────────┘  │    ┌────────────────────┐
                                       │    └───────────────────────┘
-              ┌──────────────┬────────┴─────────────┐
-              │ (parallel)   │ (parallel)           │
-    ┌─────────▼──────┐   ┌───▼──────────┐   ┌─────▼────────────────┐
-    │  NewsAgent      │   │AnalysisAgent │   │ [Parallel support   │
-    │ Emits: NEWS_    │   │ Emits:       │   │  agents]            │
-    │ FETCH_COMPLETE  │   │ANALYSIS_     │   │ HealthAgent         │
-    └────────┬────────┘   │COMPLETE      │   │ TelegramAgent       │
-             │            └───┬──────────┘   │ PortfolioAgent      │
-             │                │              │ LearningAgent       │
-             └────────┬───────┘              └─────────────────────┘
-                      │(both ready)
+              ┌──────────────┬────────┴──────────────────┬──────────┐
+              │ (parallel)   │ (parallel)               │ (parallel)│
+    ┌─────────▼──────┐   ┌───▼──────────┐   ┌──────────▼────────┐
+    │  NewsAgent      │   │AnalysisAgent │   │TradingAgentsAnalyz│
+    │ Emits: NEWS_    │   │ Emits:       │   │  (Phase 1 - LLM)  │
+    │ FETCH_COMPLETE  │   │ANALYSIS_     │   │ Emits: LLM_       │
+    │                 │   │COMPLETE      │   │ ANALYSIS_COMPLETE │
+    └────────┬────────┘   └───┬──────────┘   │  ▲ via            │
+             │                │              │  │ TradingAgentsAPI│
+             │                │              └──┼────────────────┘
+             │                │                 │ (REST gateway)
+             └────────┬───────┴─────────────────┘
+                      │(all ready)
          ┌────────────▼──────────────┐
          │   StrategyAgent            │
+         │  (enriched with LLM data)  │
          │  Emits: TRADE_PROPOSAL_    │
          │         GENERATED          │
          └────────────┬───────────────┘
@@ -91,9 +125,41 @@ The system continuously scans markets, analyzes candidates, generates trade prop
          └────────────────────────────┘
 ```
 
----
+### Agent Run Frequencies (Illustrated Above)
+
+The diagram shows the event-driven pipeline with these key timing patterns:
+
+| Layer | Agents | Frequency | Trigger | Purpose |
+|-------|--------|-----------|---------|---------|
+| **Scheduler** | SchedulerAgent | Continuous | Self-loop | Emit periodic triggers |
+| **Pre-Market Setup** | MarketRegimeAgent, MacroNewsAgent | Daily per-market | PRE_SCAN_CONTEXT_REFRESH | Pre-warm regime & macro context 5 min before scan |
+| **Discovery (Tier 1)** | MarketScannerAgent | Daily @ 01:00 & 13:00 UTC+8 | MARKET_SCAN_TRIGGER | Discover 50+ HK/US candidates |
+| **Pre-Selection (Phase 3)** | SymbolSelectorAgent | Daily per-market | MARKET_SCANNED | LLM rank 50→5-10 high-conviction picks |
+| **Re-Ranking (Phase 2)** | RankingAgent | Per discovery | MARKET_SCANNED | Multi-factor scoring of all candidates |
+| **Data Fetch** | DataAgent | Per-symbol | RANKING_COMPLETE | Fetch OHLCV + fundamentals |
+| **Parallel Analysis** | NewsAgent, AnalysisAgent, TradingAgentsAnalyzer | Per-symbol | DATA_FETCH_COMPLETE | News sentiment + technical indicators + LLM analysis |
+| **Strategy** | StrategyAgent | Per-symbol | NEWS + ANALYSIS ready | Generate BUY/SELL proposals |
+| **Risk Check** | RiskAgent | Per proposal | TRADE_PROPOSAL_GENERATED | Validate against risk limits |
+| **Execution** | ExecutionAgent | Per approved trade | RISK_CHECK_COMPLETE | Submit orders |
+| **Post-Trade** | PortfolioAgent, LearningAgent, HealthAgent | Per execution | TRADE_EXECUTED | Update holdings; learn; notify |
+| **Continuous Monitoring (Tier 3)** | ExitAgent | Every 5 min | EXIT_CHECK_TRIGGER | Check stops/profits & strategic degradation |
+| **Intraday Refresh (Tier 2)** | MarketScannerAgent | Every 15 min | PRICE_MONITOR_TRIGGER | Refresh watchlist prices |
+| **Periodic Health** | HealthAgent | Every 4 hours | HEALTH_CHECK_TRIGGER | System health check |
+| **Daily Summary** | HealthAgent, TelegramAgent | Once daily @ 08:05 UTC | DAILY_REPORT_TRIGGER | Portfolio P&L report |
+| **Always-On** | TelegramAgent | Real-time | User commands + events | Handle user interactions + broadcast alerts |
+
+**Key Timing Insights:**
+- **01:00 UTC+8**: HK pre-market scan starts (regime + macro pre-warmed)
+- **13:00 UTC+8**: US pre-market scan starts (regime + macro pre-warmed)
+- **Every 5 min**: ExitAgent monitors positions for stop-loss/take-profit
+- **Every 15 min**: Price refresh for watchlist symbols
+- **Per-symbol parallelism**: News + Analysis + LLM analysis run in parallel to minimize latency
+
+----
 
 ## Agent Inventory
+
+### Core Trading Agents
 
 | # | Agent | `agent_id` | File | Trigger |
 |---|-------|-----------|------|---------|
@@ -103,14 +169,39 @@ The system continuously scans markets, analyzes candidates, generates trade prop
 | 4 | DataAgent | `data_agent` | `data_agent.py` | Per-symbol after scan |
 | 5 | NewsAgent | `news_agent` | `news_agent.py` | Per-symbol after data |
 | 6 | AnalysisAgent | `analysis_agent` | `analysis_agent.py` | Per-symbol after data |
-| 7 | StrategyAgent | `strategy_agent` | `strategy_agent.py` | When news + analysis both ready |
-| 8 | RiskAgent | `risk_agent` | `risk_agent.py` | `TRADE_PROPOSAL_GENERATED` |
-| 9 | ExecutionAgent | `execution_agent` | `execution_agent.py` | `RISK_CHECK_COMPLETE` |
-| 10 | PortfolioAgent | `portfolio_agent` | `portfolio_agent.py` | `TRADE_EXECUTED` |
-| 11 | LearningAgent | `learning_agent` | `learning_agent.py` | `TRADE_EXECUTED` |
-| 12 | HealthAgent | `health_agent` | `health_agent.py` | `TRADE_EXECUTED`, `SCHEDULE`, `DAILY_REPORT_TRIGGER` |
-| 13 | ExitAgent | `exit_agent` | `exit_agent.py` | ✅ Every 5 min via `EXIT_CHECK_TRIGGER` |
+| 7 | RegimeAgent | `regime_agent` | `regime_agent.py` | `ANALYSIS_COMPLETE` (if LLM enabled) |
+| 8 | StrategyAgent | `strategy_agent` | `strategy_agent.py` | When news + analysis both ready |
+| 9 | RiskAgent | `risk_agent` | `risk_agent.py` | `TRADE_PROPOSAL_GENERATED` |
+| 10 | ExecutionAgent | `execution_agent` | `execution_agent.py` | `RISK_CHECK_COMPLETE` |
+| 11 | PortfolioAgent | `portfolio_agent` | `portfolio_agent.py` | `TRADE_EXECUTED` |
+| 12 | LearningAgent | `learning_agent` | `learning_agent.py` | `TRADE_EXECUTED` |
+| 13 | HealthAgent | `health_agent` | `health_agent.py` | `TRADE_EXECUTED`, `SCHEDULE`, `DAILY_REPORT_TRIGGER` |
+| 14 | ExitAgent | `exit_agent` | `exit_agent.py` | ✅ Every 5 min via `EXIT_CHECK_TRIGGER` |
 | — | TelegramAgent | `telegram_agent` | `telegram_agent.py` | User commands + broadcast messages |
+
+### LLM & Advanced Analysis Agents (Phase 1 - Gemini Integration ✅)
+
+| # | Agent | `agent_id` | File | Purpose |
+|---|-------|-----------|------|---------|
+| 15 | TradingAgentsAnalyzer | `trading_agents_analyzer` | `trading_agents_analyzer.py` | ✅ LLM-powered opportunity analysis using TradingAgents framework (Gemini 2.5) |
+| 16 | TradingAgentsAPI | `trading_agents_api` | `trading_agents_api.py` | ✅ REST API gateway for TradingAgents framework multi-agent orchestration |
+| — | LLM Config Module | — | `llm_config.py` | ✅ Multi-provider LLM configuration (Gemini, OpenRouter, OpenAI, Anthropic, xAI) |
+
+### Ranking & Interpretability Agents (Phase 2 ✅)
+
+| # | Agent | `agent_id` | File | Purpose |
+|---|-------|-----------|------|---------|
+| 17 | RankingAgent | `ranking_agent` | `ranking_agent.py` | ✅ Multi-factor symbol ranking with explainability and scoring breakdown |
+
+### LLM Symbol Selection Agents (Phase 3 ✅)
+
+| # | Agent | `agent_id` | File | Purpose |
+|---|-------|-----------|------|---------|
+| 18 | MarketRegimeAgent | `market_regime_agent` | `market_regime_agent.py` | ✅ Broad market context from 5 indices (SP500/NASDAQ/DOW/VIX/RUSSELL2000); risk-on/off flag, volatility regime, trend strength |
+| 19 | MacroNewsAgent | `macro_news_agent` | `macro_news_agent.py` | ✅ Macro news aggregation from SPY/QQQ/DIA feeds; VADER sentiment; categories: monetary_policy, geopolitical, economic_data, regulatory, sector_rotation |
+| 20 | SymbolSelectorAgent | `symbol_selector_agent` | `symbol_selector_agent.py` | ✅ LLM-powered symbol ranking; 50 candidates → top 5–10 high-conviction picks; 5-dimension scoring; Telegram report with token usage |
+
+> **Docs:** [MARKET_REGIME_AGENT.md](MARKET_REGIME_AGENT.md) · [MACRO_NEWS_AGENT.md](MACRO_NEWS_AGENT.md) · [SYMBOL_SELECTOR_AGENT.md](SYMBOL_SELECTOR_AGENT.md)
 
 ---
 
@@ -141,6 +232,12 @@ NEWS_FETCH_COMPLETE       ← NewsAgent: sentiment data ready
 ANALYSIS_STARTED          ← AnalysisAgent: computing indicators
 ANALYSIS_COMPLETE         ← AnalysisAgent: RSI, MACD, MAs, ATR ready
 ANALYSIS_FAILED           ← AnalysisAgent: error
+
+# Regime (Phase 1 - LLM Augmentation)
+MARKET_REGIME_UPDATED     ← RegimeAgent: market regime classification (trending, range, vol)
+
+# LLM Analysis (Phase 1 - Gemini Integration)
+LLM_ANALYSIS_COMPLETE     ← TradingAgentsAnalyzer: Gemini LLM multi-agent analysis (opportunities, risks)
 
 # Strategy
 TRADE_PROPOSAL_GENERATED  ← StrategyAgent: BUY/SELL proposals ready
@@ -396,7 +493,234 @@ Computes technical indicators from OHLCV data:
 
 ---
 
-### 7. StrategyAgent
+### 7. RegimeAgent (Phase 1 - LLM Augmentation)
+
+**File:** `finance_service/agents/regime_agent.py`  
+**Goal:** Classify current market regime (trending, range-bound, high/low volatility) to enable strategy adaptation.
+
+**Trigger:** Event-driven; called after `ANALYSIS_COMPLETE` for each symbol when LLM regime module is enabled via config.
+
+**Inputs:**
+- `symbol` — ticker
+- `ohlcv_data` — DataFrame with OHLCV
+- `indicators` — dict of technical indicators
+
+**Processing:**
+- If LLM module enabled: sends prompt to configured provider (OpenRouter/OpenAI/Anthropic/Ollama) with market data, requests JSON classification
+- If LLM disabled or fails: uses deterministic rules (ATR ratio + SMA trend)
+- Caches response (24h TTL)
+- Publishes `MARKET_REGIME_UPDATED` event
+
+**Regimes:**
+- `trending_bullish` — price > SMA200, SMA50 > SMA200, MACD > 0
+- `trending_bearish` — price < SMA200, SMA50 < SMA200, MACD < 0
+- `range_bound` — low ATR, oscillating near MAs
+- `high_volatility` — ATR > 2× normal
+- `low_volatility` — ATR < 0.5× normal
+- `mixed` — unclear/transitioning
+
+**Output Event:** `MARKET_REGIME_UPDATED`
+```python
+{
+    "agent_id": "regime_agent",
+    "status": "success",
+    "payload": {
+        "regime": {
+            "regime": "trending_bullish",
+            "confidence": 0.87,
+            "description": "Price 7% above SMA200, MACD positive",
+            "timestamp": "2026-04-01T10:30:00Z",
+            "indicators_used": ["rsi", "macd", "atr", "sma_50", "sma_200"]
+        }
+    }
+}
+```
+
+**Configuration (config/config.yaml):**
+```yaml
+llm:
+  enabled: true  # Global LLM switch
+  modules:
+    market_regime:
+      enabled: true
+      model: "anthropic/claude-3.7-sonnet"
+      temperature: 0.2
+      prompt_template: "prompts/regime_classifier.md"
+```
+
+**Integration:** `StrategyAgent` subscribes to this event and adjusts confidence thresholds accordingly (e.g., higher thresholds in trending markets, lower in low volatility).
+
+---
+
+
+### 15. TradingAgentsAnalyzer (Phase 1 - Gemini Integration ✅)
+
+**File:** `finance_service/agents/trading_agents_analyzer.py`  
+**Goal:** Leverage LLM-powered multi-agent analysis through TradingAgents framework for deep opportunity evaluation.
+
+**Trigger:** Called by orchestrator after analysis indicators are ready; integrates with `RegimeAgent` and `StrategyAgent`.
+
+**Inputs:**
+- `symbol` — ticker to analyze
+- `ohlcv_data` — OHLCV DataFrame
+- `fundamentals` — fundamental metrics
+- `indicators` — technical indicators from `AnalysisAgent`
+- `market_regime` — regime classification from `RegimeAgent`
+
+**Processing:**
+- Routes multi-step LLM analysis through TradingAgents framework
+- Quick-think LLM (Gemini 2.5 Flash): Rapid pattern recognition (0.2s latency)
+- Deep-think LLM (Gemini 2.5 Pro): Detailed opportunity assessment (1-2s latency)
+- Evaluates trader psychology, market microstructure, regime-specific tactics
+- Returns ranked opportunities with detailed rationale and risk assessment
+
+**Output Event:** `LLM_ANALYSIS_COMPLETE`
+```python
+{
+    "agent_id": "trading_agents_analyzer",
+    "status": "success",
+    "payload": {
+        "symbol": "NVDA",
+        "opportunities": [
+            {
+                "opportunity_id": "opp-001",
+                "type": "breakout_momentum",
+                "strength": 0.88,
+                "rationale": "Bullish regime confirmation + RSI recovery from oversold",
+                "recommended_action": "aggressive_entry",
+                "risk_factors": ["sector_volatility", "macro_uncertainty"]
+            }
+        ],
+        "llm_models_used": ["gemini-2.5-flash-v1", "gemini-2.5-pro-v1"],
+        "analysis_latency_ms": 1245
+    }
+}
+```
+
+**Integration:** Works in tandem with `RegimeAgent` (shares market regime context) and `StrategyAgent` (enriches proposals with LLM analysis).
+
+---
+
+### 16. TradingAgentsAPI (Phase 1 - Gemini Integration ✅)
+
+**File:** `finance_service/agents/trading_agents_api.py`  
+**Goal:** Provide REST API gateway for TradingAgents framework multi-agent orchestration and external integrations.
+
+**Endpoints:**
+- `POST /analyze` — Submit symbol for LLM-powered analysis
+- `GET /status/{task_id}` — Poll analysis completion status
+- `GET /results/{task_id}` — Retrieve analysis results
+- `POST /feedback` — Log analysis outcome for future model tuning
+
+**Integration:** Used by `MainOrchestratorAgent` to queue and retrieve LLM analyses asynchronously.
+
+---
+
+### LLM Configuration
+
+**File:** `finance_service/agents/llm_config.py`  
+**Goal:** Centralized multi-provider LLM configuration and credential management.
+
+**Supported Providers:**
+- **Google Gemini** ✅ (Active: gemini-2.5-flash-v1, gemini-2.5-pro-v1)
+- **OpenRouter** (OpenAI, Anthropic, xAI models)
+- **OpenAI** (GPT-4, GPT-3.5)
+- **Anthropic** (Claude 3 Sonnet)
+- **xAI** (Grok v2, v3)
+
+**Configuration Source:** Environment variables (`.env` file)
+```bash
+LLM_PROVIDER=google
+GOOGLE_API_KEY=<gemini-key>
+TA_QUICK_THINK_MODEL=gemini-2.5-flash-v1
+TA_DEEP_THINK_MODEL=gemini-2.5-pro-v1
+```
+
+**Key Feature:** Hot-reload support — change LLM provider without restarting system.
+
+
+
+### 17. RankingAgent (Phase 2 - Interpretability ✅)
+
+**File:** `finance_service/agents/ranking_agent.py`  
+**Goal:** Provide explainable, multi-factor ranking of symbols with detailed scoring breakdown.
+
+**Trigger:** Called by orchestrator after `MARKET_SCANNED` to re-rank and enrich discovered symbols with scoring details.
+
+**Inputs:**
+- `symbols_with_data` — dict of {symbol: {theme, data, indicators, fundamentals}}
+
+**Processing:**
+Computes composite ranking score from 5 independent factors:
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Liquidity | 20% | Trading volume, bid-ask spread (min $1M daily) |
+| Momentum | 25% | RSI trend + MACD + SMA trend (technical) |
+| Value | 20% | P/E ratio, book value (fundamental valuation) |
+| Growth | 20% | EPS growth, revenue growth (expansion metrics) |
+| Quality | 15% | ROE, debt/equity ratio (financial health) |
+
+**Scoring Pipeline:**
+1. Compute raw metric for each factor
+2. Normalize each to 0-1 scale using configurable thresholds
+3. Apply weighted sum: `composite_score = Σ(weight_i × normalized_score_i)`
+4. Generate human-readable explanation highlighting top 3 factors
+5. Assign confidence score based on data completeness
+
+**Output Event:** `RANKING_COMPLETE`
+```python
+{
+    "agent_id": "ranking_agent",
+    "status": "success",
+    "payload": {
+        "ranked_symbols": [
+            {
+                "symbol": "NVDA",
+                "theme": "AI",
+                "composite_score": 0.87,
+                "rank": 1,
+                "confidence": 0.95,
+                "factors": [
+                    {
+                        "name": "momentum",
+                        "weight": 0.25,
+                        "raw_value": 32.4,
+                        "normalized_score": 0.85,
+                        "contribution": 0.212
+                    },
+                    {
+                        "name": "liquidity",
+                        "weight": 0.20,
+                        "raw_value": 45000000,
+                        "normalized_score": 0.90,
+                        "contribution": 0.180
+                    }
+                ],
+                "explanation": "NVDA: Strong momentum (0.85), Strong liquidity (0.90), Moderate value (0.62)"
+            }
+        ],
+        "ranking_timestamp": "2026-04-03T12:00:00Z",
+        "total_symbols": 50
+    }
+}
+```
+
+**Integration:**
+- Sits between `MARKET_SCANNED` and `DataAgent` processing
+- Re-rankable: can be called independently anytime to re-score symbolsexisting watch list
+- Decoder for strategy: StrategyAgent can use ranking confidence/explanations to adjust decision thresholds
+- Transparent: full factor breakdown enables learning and backtesting analysis
+
+**Key Design Decisions:**
+1. **Independent**: Not tied to MarketScannerAgent; can rank any symbol set
+2. **Explainable**: Returns full factor breakdown so users understand why symbol ranked where
+3. **Tunable**: All weights and thresholds configurable via YAML
+4. **Extensible**: New factors can be added without changing agent interface
+
+---
+
+### 7. StrategyAgent (renumbered from 7)
 
 **File:** `finance_service/agents/strategy_agent.py`  
 **Goal:** Generate actionable trade proposals by analyzing market indicators and news sentiment.
@@ -763,7 +1087,7 @@ Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
 | Agent | Frequency | Trigger |
 |-------|-----------|---------|
 | SchedulerAgent | Continuous background loop | Self |
-| MarketScannerAgent (Tier 1) | Daily | `MARKET_SCAN_TRIGGER` (discovery) |
+| MarketScannerAgent (Tier 1) | Daily (Discovery) | `MARKET_SCAN_TRIGGER` at pre-market (01:00 HK / 13:00 HK for US) |
 | MarketScannerAgent (Tier 2) | Every 15 min | `PRICE_MONITOR_TRIGGER` (price refresh) |
 | DataAgent | Per-symbol after each scan | `MARKET_SCANNED` / `DATA_REFRESH_TRIGGER` |
 | NewsAgent | Per-symbol after data fetch | `DATA_FETCH_COMPLETE` |
@@ -775,10 +1099,136 @@ Step 9:  SchedulerAgent emits DAILY_REPORT_TRIGGER  (end of day)
 | LearningAgent | Per trade | `TRADE_EXECUTED` |
 | HealthAgent | Per trade + daily schedule | `TRADE_EXECUTED` / `SCHEDULE` |
 | ExitAgent | ✅ Every 5 minutes | `EXIT_CHECK_TRIGGER` (reactive + strategic) |
+| TradingAgentsAnalyzer | Per-symbol after analysis ready | `ANALYSIS_COMPLETE` |
+| TradingAgentsAPI | Per LLM request | REST API (`POST /analyze`) |
+| RankingAgent | Per discovery batch | `MARKET_SCANNED` (re-ranking) |
+| MarketRegimeAgent | **Daily per-market** (60-min cache) | `PRE_SCAN_CONTEXT_REFRESH` (5 min pre-market) + On-demand from SymbolSelector |
+| MacroNewsAgent | **Daily per-market** (6-hour cache) | `PRE_SCAN_CONTEXT_REFRESH` (5 min pre-market) + On-demand from SymbolSelector |
+| SymbolSelectorAgent | **Daily per-market** (post-discovery) | `MARKET_SCANNED` with market param (after scanner, before per-symbol pipeline) |
 | TelegramAgent | Always on | User commands + incoming messages |
 
 ---
 
+---
+
+## Agent Run Frequencies and Scheduling
+
+### Overview
+
+AITradeAgent uses a **dual-market pre-market scan model** (Hong Kong + US) with cache pre-warming:
+
+1. **HK Pre-Market Scan** — 01:00 UTC+8 (30 min before HK market open at 09:30 HKT)
+2. **US Pre-Market Scan** — 13:00 UTC+8 (evening before US market open at 21:30 UTC / 09:30 EST next day)
+
+Both market scans follow the same **3-step workflow** with pre-warming:
+
+```
+Scheduler publishes PRE_SCAN_CONTEXT_REFRESH (market="HK"/"US")
+    ↓
+MarketRegimeAgent + MacroNewsAgent run in parallel (cache refresh)
+    ↓ [5-second delay for cache to warm]
+    ↓
+MarketScannerAgent triggers market scan (50+ symbols)
+    ↓
+SymbolSelectorAgent ranks candidates (LLM pre-selection → top 5-10)
+    ↓
+Per-symbol pipeline (DataAgent → NewsAgent + AnalysisAgent → etc.)
+```
+
+### Detailed Timing
+
+#### **Morning: HK Pre-Market Scan (01:00 UTC+8)**
+
+| Time | Event | Agents | Purpose |
+|------|-------|--------|---------|
+| 01:00 | PRE_SCAN_CONTEXT_REFRESH published | SchedulerAgent | Trigger cache pre-warm |
+| 01:00–01:02 | MarketRegimeAgent + MacroNewsAgent run (parallel) | MarketRegimeAgent, MacroNewsAgent | Compute `regime_hk`, `hk_sentiment_score`, cache results |
+| 01:02 | MARKET_SCAN_TRIGGER published | SchedulerAgent | Trigger HK symbol discovery |
+| 01:02–01:08 | MarketScannerAgent scans (~50 HK candidates) | MarketScannerAgent | Discover HK listing symbols matching themes |
+| 01:08 | MARKET_SCANNED event published | MarketScannerAgent | Publish candidates list with `market="HK"` |
+| 01:08–01:15 | SymbolSelectorAgent ranks top 5-10 via LLM | SymbolSelectorAgent | Use `regime_hk` + `hk_sentiment_score` for ranking |
+| 01:15–01:30 | Per-symbol pipeline (top 10 symbols) | DataAgent, NewsAgent, AnalysisAgent | Fetch data, fetch news, compute scores |
+| 01:30+ | Telegram report sent | TelegramAgent | Publish "\[HK\] Top Stock Rankings" to Telegram |
+
+**Result**: HK symbols ready for trading 30 min before market open; regime + macro context pre-cached.
+
+#### **Evening: US Pre-Market Scan (13:00 UTC+8 / 21:30 UTC)**
+
+Same workflow as HK scan:
+
+| Time (UTC+8) | Time (EST) | Event | Agents |
+|---|---|---|---|
+| 13:00 | 21:30 (Fri) | PRE_SCAN_CONTEXT_REFRESH published | SchedulerAgent |
+| 13:00–13:02 | 21:30–21:32 | MarketRegimeAgent + MacroNewsAgent run (parallel) | MarketRegimeAgent, MacroNewsAgent |
+| 13:02 | 21:32 | MARKET_SCAN_TRIGGER published | SchedulerAgent |
+| 13:02–13:08 | 21:32–21:38 | MarketScannerAgent scans (~50 US candidates) | MarketScannerAgent |
+| 13:08 | 21:38 | MARKET_SCANNED event published | MarketScannerAgent |
+| 13:08–13:15 | 21:38–21:45 | SymbolSelectorAgent ranks top 5-10 via LLM | SymbolSelectorAgent |
+| 13:15–13:30 | 21:45–22:00 | Per-symbol pipeline (top 10 symbols) | DataAgent, NewsAgent, AnalysisAgent |
+| 13:30+ | 22:00+ | Telegram report sent | TelegramAgent |
+
+**Result**: US symbols ready for trading 7+ hours before market open (overnight analysis); regime + macro context ready before market open.
+
+#### **Continuous Monitoring (24/7)**
+
+| Interval | Event | Agents | Purpose |
+|----------|-------|--------|---------|
+| Every 5 min | EXIT_CHECK_TRIGGER | ExitAgent | Monitor open positions, check exit conditions |
+| Every 15 min | PRICE_MONITOR_TRIGGER | MarketScannerAgent | Price refresh on top 50 symbols (intraday) |
+| Every 30 min | DATA_REFRESH_TRIGGER | DataAgent | Refresh OHLCV cache for all tracked symbols |
+| Every 4 hours | HEALTH_CHECK_TRIGGER | HealthAgent | System health monitoring, resource check |
+| Daily (08:05 UTC) | DAILY_REPORT_TRIGGER | HealthAgent | End-of-day portfolio summary + metrics |
+
+### Pre-Scan Context Refresh Mechanism (PRE_SCAN_CONTEXT_REFRESH)
+
+**New in Phase 4**: A new event `PRE_SCAN_CONTEXT_REFRESH` is published **5 minutes before** each pre-market scan to pre-warm the agent caches:
+
+```python
+# Example: SchedulerAgent._trigger_pre_market_scan_hk()
+await self.event_bus.publish(Event(
+    event_type=Events.PRE_SCAN_CONTEXT_REFRESH,
+    data={"market": "HK"}
+))
+logger.info("PRE_SCAN_CONTEXT_REFRESH published for HK")
+
+# MainOrchestratorAgent subscribes and routes to:
+# 1. MarketRegimeAgent.run({"market": "HK", "force_refresh": True})
+# 2. MacroNewsAgent.run({"market": "HK", "force_refresh": True})
+# Both run in parallel and update agent-level caches
+
+# After 5 sec delay, MARKET_SCAN_TRIGGER is published
+await asyncio.sleep(5)
+await self.event_bus.publish(Event(
+    event_type=Events.MARKET_SCAN_TRIGGER,
+    data={"market": "HK", "interval": "pre_market"}
+))
+```
+
+**Benefits**:
+- Regime + macro context already computed when SymbolSelector runs
+- No time wasted on LLM call waiting for regime/macro data
+- Cache hit rates improve (60-min and 6-hour TTLs respected)
+
+### Agent Run Schedule Summary
+
+**Daily Pre-Market Triggers**:
+- HK: 01:00 UTC+8 (every trading day)
+- US: 13:00 UTC+8 / 21:30 UTC (every trading day)
+
+**Per-Market Regime Run Frequency**:
+- `regime_us`: Computed daily at 13:00 UTC+8 (pre-warm) + on-demand when SymbolSelector needs it
+- `regime_hk`: Computed daily at 01:00 UTC+8 (pre-warm) + on-demand when SymbolSelector needs it
+
+**Per-Market Macro News Run Frequency**:
+- `us_sentiment_score`: Updated daily at 13:00 UTC+8 (pre-warm) + cached for 6 hours; re-fetched on-demand from SymbolSelector if cache miss
+- `hk_sentiment_score`: Updated daily at 01:00 UTC+8 (pre-warm) + cached for 6 hours; re-fetched on-demand from SymbolSelector if cache miss
+
+**Per-Market SymbolSelector (LLM Ranking) Run Frequency**:
+- Runs once per pre-market scan: 01:00 UTC+8 (HK) + 13:00 UTC+8 (US)
+- Returns top 5–10 symbols per market
+- LLM invocation cost: ~13k tokens per run
+
+---
 ## Configuration Reference
 
 **`finance.yaml` — key sections:**
@@ -882,7 +1332,13 @@ See [NEXT_STEPS.md](NEXT_STEPS.md) for the full roadmap. Top items:
 | ~~High~~ | ~~Wire `ExitAgent` into `SchedulerAgent` (every 5 min)~~ | ✅ Done — Tier 3 exit monitoring every 5 min |
 | ~~High~~ | ~~3-tier scanning architecture~~ | ✅ Done — daily discovery + 15-min price monitor + 5-min exits |
 | ~~Medium~~ | ~~Expand symbol universe to 100 symbols~~ | ✅ Done — 20 per theme across 5 themes |
-| Medium | Add `RankingAgent` as separate agent to produce richer output (scores, reasons) | Explainable, reusable ranking independent of scanner |
+| ~~High~~ | ~~Integrate Gemini LLM for regime analysis~~ | ✅ Done — TradingAgentsAnalyzer + Gemini 2.5 (Flash/Pro) |
+| ~~Medium~~ | ~~Add TradingAgents framework integration~~ | ✅ Done — LLM multi-agent analysis engine + REST API |
+| ~~Medium~~ | ~~Add `RankingAgent` as separate agent~~ | ✅ Done — Multi-factor ranking with 5-factor scoring (liquidity, momentum, value, growth, quality) |
+| ~~High~~ | ~~Add LLM-powered symbol pre-selection~~ | ✅ Done — `SymbolSelectorAgent` (Phase 3): 50→5-10 picks via gpt-4o-mini, enriched with market regime + macro context |
+| Medium | Implement position degradation alerts | Re-analyze held positions for thesis invalidation (via ExitAgent) |
+| Low | Add backtest harness for strategy evaluation | Historical performance validation |
+| Low | Add options analytics agent | Volatility surface analysis, pricing models |
 
 ---
 

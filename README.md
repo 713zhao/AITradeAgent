@@ -1,538 +1,199 @@
-# PicoClaw Trading Agent - picotradeagent
+# AITradeAgent
 
-A sophisticated AI-powered trading assistant that integrates with PicoClaw framework, providing automated market analysis, trading signals, risk management, and portfolio tracking. Built on Flask backend with paper trading simulation and real-time market data via yfinance.
+AI-powered trading assistant for market scanning, signal generation, risk checks, and paper-trade execution.
 
-## Quick Start
+## Minimal Startup
 
-### 1. Start the Finance Service
-
-The Finance Service is the backend that handles all market data, analysis, and trading operations.
+Install dependencies:
 
 ```bash
-cd /home/eric/.picoclaw/workspace/picotradeagent
-python3 run_finance_service.py
+pip install -r requirements.txt
 ```
 
-The service will start on `http://localhost:8801` and is ready to accept requests.
-
-**Verify service is running:**
-```bash
-curl http://localhost:8801/health
-```
-
-Expected response: `{"service":"finance","status":"ok"}`
-
-### 2. Key Entry Points
-
-#### Finance Service (run_finance_service.py)
-- **Purpose**: Main Flask backend for all trading operations
-- **Runs on**: `http://localhost:8801`
-- **Provides**: Market data, analysis, portfolio management, trade execution
-
-#### PicoClaw Connector (picoclaw_connector.py)
-- **Purpose**: Bridge between PicoClaw agents and Finance Service
-- **Usage**: Import and use in PicoClaw agent definitions
-- **Features**: Health checks, analysis, quotes, portfolio, performance, trade execution
-
-## API Endpoints
-
-### Health & Status
-- **GET `/health`** - Service health check
-  ```bash
-  curl http://localhost:8801/health
-  ```
-
-### Market Data
-- **GET `/quote/<symbol>`** - Get latest price quote
-  ```bash
-  curl http://localhost:8801/quote/AAPL
-  ```
-
-### Analysis
-- **POST `/analyze/<symbol>`** - Full technical analysis
-  ```bash
-  curl -X POST http://localhost:8801/analyze \
-    -H "Content-Type: application/json" \
-    -d '{"symbol":"AAPL","lookback_days":60}'
-  ```
-
-### Portfolio Management
-- **GET `/portfolio/state`** - Current portfolio status
-  ```bash
-  curl http://localhost:8801/portfolio/state
-  ```
-
-- **GET `/portfolio/performance`** - Portfolio performance metrics
-  ```bash
-  curl http://localhost:8801/portfolio/performance
-  ```
-
-- **POST `/portfolio/propose`** - Dry-run trade proposal validation
-  ```bash
-  curl -X POST http://localhost:8801/portfolio/propose \
-    -H "Content-Type: application/json" \
-    -d '{"symbol":"AAPL","action":"BUY","quantity":10,"confidence":0.85}'
-  ```
-
-- **POST `/portfolio/execute`** - Execute approved trade
-  ```bash
-  curl -X POST http://localhost:8801/portfolio/execute \
-    -H "Content-Type: application/json" \
-    -d '{"task_id":"123","approval_id":"user_approved_20260305"}'
-  ```
-
-## PicoClaw Integration
-
-The picotradeagent is designed to work with PicoClaw agents. Use the `picoclaw_connector.py` module:
-
-```python
-from picoclaw_connector import get_connector
-
-# Get connector instance
-connector = get_connector()
-
-# Check service health
-if connector.health_check():
-    print("Finance Service is running")
-
-# Analyze a stock symbol
-analysis = connector.analyze("AAPL")
-print(f"Signal: {analysis['decision']}")
-
-# Get quote
-quote = connector.get_quote("AAPL")
-print(f"Price: {quote['close']}")
-
-# Propose a trade (validation only)
-proposal = connector.propose_trade({
-    "symbol": "AAPL",
-    "action": "BUY",
-    "quantity": 10,
-    "confidence": 0.85
-})
-
-# Execute approved trade
-result = connector.execute_trade(
-    task_id="task_123",
-    approval_id="user_approved_20260305"
-)
-
-# Get portfolio state
-portfolio = connector.get_portfolio()
-print(f"Cash: ${portfolio['cash']:.2f}")
-print(f"Total Value: ${portfolio['total_value']:.2f}")
-
-# Get performance metrics
-perf = connector.get_performance()
-print(f"Returns: {perf['total_return']:.2%}")
-print(f"Sharpe: {perf['sharpe_ratio']:.2f}")
-```
-
-## System Architecture
-
-```
-picotradeagent/
-├── run_finance_service.py      ← Main entry point
-├── picoclaw_connector.py       ← Integration helper
-│
-├── finance_service/            ← Core backend
-│   ├── app.py                  Main Flask application
-│   ├── core/                   Configuration, logging, cache
-│   ├── data/                   Market data providers
-│   ├── indicators/             Technical analysis indicators
-│   ├── strategies/             Trading strategy implementations
-│   ├── brokers/                Broker configurations
-│   ├── execution/              Trade execution engine
-│   ├── risk/                   Risk management & validation
-│   ├── portfolio/              Portfolio tracking & accounting
-│   ├── storage/                Database interfaces
-│   ├── dashboard/              Web UI components
-│   └── ui/                     Frontend assets
-│
-├── picoclaw_config/            ← PicoClaw configuration
-│   ├── finance_system_prompt.md
-│   ├── finance_tool_policy.md
-│   ├── router_rules.yaml
-│   └── tool_schemas.json
-│
-├── config/                     ← Configuration files
-├── tests/                      ← Unit and integration tests
-├── doc/                        ← Documentation (all .md files except README)
-└── storage/                    ← Runtime data (cache, databases, logs)
-```
-
-## Agent Skills
-
-PicoClaw agents have access to the following skills via the Finance Service:
-
-### Data Collection
-- **data_agent_fetch** - Retrieve OHLCV market data for symbols
-
-### Analysis
-- **analysis_agent_indicators** - Calculate technical indicators (SMA, RSI, MACD, ATR, Bollinger)
-
-### Strategy
-- **strategy_agent_decide** - Generate BUY/SELL/HOLD signals with confidence scores
-
-### Risk Management
-- **risk_agent_validate** - Validate trades and calculate position sizing
-
-### Execution
-- **execution_agent_paper_trade** - Execute trades and update portfolio
-
-### Learning
-- **learning_agent_run** - Backtest strategies and optimize parameters
-
-### Engine Control
-- **engine_status** - Get portfolio status and metrics
-- **engine_positions** - Get open positions with P&L
-- **engine_trade_history** - Get trade records
-- **engine_set_focus** - Set trading theme, region, or watchlist
-- **engine_pause** - Pause automatic trading
-- **engine_resume** - Resume after pause
-- **engine_reset_portfolio** - Reset to initial cash
-- **engine_last_report** - Get daily or learning reports
-
-## Configuration
-
-### Environment Variables
-Set in `.env` or `picoclaw.env`:
+Start service:
 
 ```bash
-# Finance Service
-OPENBB_USE_YFINANCE=true
-OPENBB_PROVIDER=yfinance
-FINANCE_SERVICE_PORT=8801
-
-# PicoClaw (AI Models & Channels)
-OPENROUTER_API_KEY=your_key_here
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-
-# Telegram Integration
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-
-# Slack Integration
-SLACK_BOT_TOKEN=your_bot_token_here
-SLACK_APP_TOKEN=your_app_token_here
+./start.sh
 ```
 
-### Configuration Files
-- **config.json** - Main config in `~/.picoclaw/config.json`
-- **Tool Definitions** - `picoclaw_config/tool_schemas.json`
-- **Router Rules** - `picoclaw_config/router_rules.yaml`
+Or run in foreground:
 
-## Common Tasks
-
-### View Portfolio Status
 ```bash
-curl http://localhost:8801/portfolio/state | python3 -m json.tool
+python3 finance_service/run_finance_service.py
 ```
 
-### Get Latest Analysis
+Health check:
+
 ```bash
-curl -X POST http://localhost:8801/analyze \
+curl http://127.0.0.1:8801/health
+```
+
+Detailed startup docs: [docs/STARTUP.md](docs/STARTUP.md)
+
+## Manual Market Scan Trigger
+
+Trigger a scan (normal mode, market-hours enforced):
+
+```bash
+curl "http://127.0.0.1:8801/trigger?trigger_type=market-scan&market=US"
+```
+
+Trigger a scan with debug bypass (run even when market closed):
+
+```bash
+curl "http://127.0.0.1:8801/trigger?trigger_type=market-scan&market=US&debug_bypass_market_hours=true"
+```
+
+Trigger using last Friday as analysis date:
+
+```bash
+curl "http://127.0.0.1:8801/trigger?trigger_type=market-scan&market=US&debug_bypass_market_hours=true&debug_last_friday=true"
+```
+
+Trigger with explicit date:
+
+```bash
+curl "http://127.0.0.1:8801/trigger?trigger_type=market-scan&market=US&debug_bypass_market_hours=true&as_of_date=2026-04-24"
+```
+
+Check latest scan metadata:
+
+```bash
+curl http://127.0.0.1:8801/api/scan/last | python3 -m json.tool
+```
+
+## Key Endpoints
+
+```bash
+# Health
+curl http://127.0.0.1:8801/health
+
+# Quote
+curl http://127.0.0.1:8801/quote/AAPL
+
+# Analyze
+curl -X POST http://127.0.0.1:8801/analyze \
   -H "Content-Type: application/json" \
-  -d '{"symbol":"NVDA","lookback_days":30}' | python3 -m json.tool
+  -d '{"symbol":"AAPL","lookback_days":60}'
+
+# Portfolio state
+curl http://127.0.0.1:8801/portfolio/state
+
+# Portfolio performance
+curl http://127.0.0.1:8801/portfolio/performance
+
+# Trading history (all trades)
+curl http://127.0.0.1:8801/api/trades/history
+
+# Filter by period: today | this_week | this_month | this_year
+curl "http://127.0.0.1:8801/api/trades/history?period=today"
+curl "http://127.0.0.1:8801/api/trades/history?period=this_week"
+curl "http://127.0.0.1:8801/api/trades/history?period=this_month"
+curl "http://127.0.0.1:8801/api/trades/history?period=this_year"
+
+# Filter by specific date
+curl "http://127.0.0.1:8801/api/trades/history?date=2026-04-27"
+
+# Filter by symbol and/or side
+curl "http://127.0.0.1:8801/api/trades/history?symbol=AAPL&side=BUY"
+
+# Combine filters (e.g. this month, BUY only, max 50 results)
+curl "http://127.0.0.1:8801/api/trades/history?period=this_month&side=BUY&limit=50"
 ```
 
-### Check Trading History
+Response includes `filter`, `summary` (count/buys/sells/total_trade_value) and a `trades` list.
+
+## Project Layout
+
+```text
+AITradeAgent/
+├── start.sh
+├── requirements.txt
+├── config/
+├── docs/
+├── finance_service/
+│   ├── run_finance_service.py
+│   └── app.py
+├── scripts/
+│   ├── tools/
+│   ├── tests/
+│   ├── backtest/
+│   ├── setup/
+│   ├── integration/
+│   └── ops/
+├── tests/
+└── logs/
+```
+
+## Service Management (systemd)
+
+The service is registered as a systemd user service and **auto-starts at boot**.
+Unit file location: `~/.config/systemd/user/aitrade.service`
+
 ```bash
-curl "http://localhost:8801/portfolio/trades?limit=10" | python3 -m json.tool
+# Check status
+systemctl --user status aitrade.service
+
+# Start / Stop / Restart
+systemctl --user start aitrade.service
+systemctl --user stop aitrade.service
+systemctl --user restart aitrade.service
+
+# Enable / disable auto-start at boot
+systemctl --user enable aitrade.service
+systemctl --user disable aitrade.service
+
+# Tail runtime log
+tail -f logs/finance_service_restart.log
 ```
 
-### Reset Portfolio to Initial State
+The service uses `Restart=on-failure` — auto-recovers after crashes.
+`Linger=yes` is set on the user account so the service starts at boot even without a login session.
+
+## Common Commands
+
 ```bash
-curl -X POST http://localhost:8801/portfolio/reset | python3 -m json.tool
+# Run tests
+pytest tests/ -v
+
+# Tail runtime log
+tail -f logs/finance_service_restart.log
+
+# Manual stop (prefer systemctl stop when systemd is managing the service)
+pkill -f run_finance_service.py
 ```
 
-## Testing
+## Notes
 
-Run tests to verify the system:
+- The project uses a single dependency file: `requirements.txt`.
+- `start.sh` writes PID to `logs/finance.pid`. Use `systemctl --user restart aitrade.service` instead when systemd is managing the service.
+- Scan summaries are sent to Telegram when Telegram config is enabled.
 
+## Hourly Portfolio Report
+
+A background daemon automatically generates and sends hourly portfolio reports while any market is open.
+
+**What's included:**
+- Current equity, cash position, and P&L
+- Open positions with unrealized gains/losses
+- Strategy performance assessment (vs. 20% CAGR, 1.0 Sharpe ratio targets)
+- Recommended actions based on backtest metrics
+- Data freshness indicator
+- Telegram notifications (optional)
+
+**How it works:**
+- `scripts/progress_monitor_daemon.py` — background scheduler process
+- `scripts/heartbeat_report.py` — generates the rich portfolio report
+- Runs every 60 minutes during market hours (HK: 09:00-16:00, US: 09:00-16:00 ET)
+
+**Manual test:**
 ```bash
-# Run all tests
-python3 -m pytest tests/ -v
-
-# Run specific test file
-python3 -m pytest tests/test_finance_service.py -v
-
-# Run with coverage
-python3 -m pytest tests/ --cov=finance_service
+python3 scripts/heartbeat_report.py
 ```
 
-## Monitoring
-
-The Finance Service logs to:
-- **Console**: Direct output to terminal
-- **File**: `finance_service.log` in project root
-- **SQLite DB**: `storage/finance.db` for trade logs
-
-Check status:
-```bash
-# View logs
-tail -f finance_service.log
-
-# Check running process
-ps aux | grep run_finance_service
-
-# Monitor port
-netstat -tuln | grep 8801
-```
-
-## Project Structure
-
-- **run_finance_service.py** - Service launcher (START HERE)
-- **picoclaw_connector.py** - Agent integration library
-- **finance_service/** - Core backend implementation
-- **picoclaw_config/** - PicoClaw integration configuration
-- **tests/** - Test suite and validation scripts
-- **doc/** - Documentation (development notes, architecture, planning)
-- **config/** - Configuration defaults
-- **storage/** - Runtime data storage (databases, caches, logs)
-
-## Troubleshooting
-
-### Service won't start
-```bash
-# Check if port 8801 is already in use
-lsof -i :8801
-
-# Kill existing process
-pkill -f run_finance_service
-
-# Start fresh
-python3 run_finance_service.py
-```
-
-### Connection refused when accessing from another machine
-```bash
-# Check firewall rules
-sudo ufw status
-
-# If needed, allow port 8801
-sudo ufw allow 8801/tcp
-```
-
-### Data caching issues
-```bash
-# Clear cache
-rm -rf storage/cache/*
-
-# Restart service
-pkill -f run_finance_service
-python3 run_finance_service.py
-```
-
-## Performance Tips
-
-1. **Use caching** - Market data is cached to reduce API load
-2. **Batch requests** - Request multiple symbols in single queries when possible
-3. **Adjust lookback** - Use shorter lookback_days for faster analysis
-4. **Monitor logs** - Check `finance_service.log` for performance bottlenecks
-
-## Security
-
-- ✅ Paper trading only - No real money at risk
-- ✅ API validation - All inputs validated
-- ✅ Error isolation - Errors don't crash the service
-- ✅ Audit logging - All trades logged with timestamps
-- ✅ Rate limiting - Built-in request throttling
-
-## Support
-
-For issues or questions:
-1. Check logs: `tail -f finance_service.log`
-2. Verify service health: `curl http://localhost:8801/health`
-3. Review configuration in `~/.picoclaw/config.json`
-4. Test endpoints manually with curl
-5. Check documentation in `doc/` folder
-
-## License
-
-MIT License - See LICENSE file for details
-## Project Cleanup (April 28, 2026)
-
-The project root has been reorganized for better maintainability:
-
-### Changes Made:
-1. **Removed unused files:**
-   - `finance_service.out` (large log file, 21MB)
-   - `finance.pid` (process ID file)
-   - `test_approval_sync.py` and `test_approval_workflow.py` (test files)
-   - `.env.example` (kept `.env.template` as comprehensive reference)
-
-2. **Consolidated dependencies:**
-   - Merged `requirements_ui.txt` into `requirements.txt`
-   - Removed duplicate package specifications
-
-3. **Created scripts/ folder:**
-   - Moved 23 utility, analysis, and deployment scripts
-   - Created [scripts/README.md](./scripts/README.md) with script documentation
-   - Organized scripts by category: Deployment, Analysis, Trading, Telegram Agents, Inspection, Development
-
-### Updated Project Structure:
-```
-picotradeagent/
-├── run_finance_service.py      ← Main entry point (KEEP IN ROOT)
-├── picoclaw_connector.py       ← Integration helper (KEEP IN ROOT)
-├── run_paper_trading.py        ← Main pipeline scripts (KEEP IN ROOT)
-├── run_simple.py               ← Main pipeline scripts (KEEP IN ROOT)
-├── setup.sh                    ← Setup script (KEEP IN ROOT)
-├── start_all.sh                ← Startup scripts (KEEP IN ROOT)
-├── start_paper_trading.sh      ← Startup scripts (KEEP IN ROOT)
-├── setup_paper_trading.py      ← Setup scripts (KEEP IN ROOT)
-├── run_finance_service.py      → Launch script (KEEP IN ROOT)
-│
-├── scripts/                    ← NEWLY ORGANIZED
-│   ├── README.md              ← Script documentation
-│   ├── Deployment scripts     (docker-*.sh, run_dashboard.sh, etc)
-│   ├── Analysis scripts       (optimize_*, analyze_*, check_*, etc)
-│   ├── Trading scripts        (simulate_trade.py, manual_*.py, etc)
-│   ├── Telegram agents        (telegram_*.py)
-│   └── Inspection utilities   (validate_system.py, show_*.py, etc)
-│
-├── finance_service/            ← Core backend (unchanged)
-├── picoclaw_config/            ← PicoClaw configuration (unchanged)
-├── config/                     ← Configuration files (unchanged)
-├── tests/                      ← Testing suite (unchanged)
-├── doc/                        ← Documentation (unchanged)
-└── storage/                    ← Runtime data (unchanged)
-```
-
-### Environment Configuration:
-- **`.env`** - Active configuration (with your secrets)
-- **`.env.template`** - Comprehensive template for new environments
-
-### For Contributors:
-When adding new scripts:
-- **Main pipeline scripts** → Keep in project root
-- **Utility/analysis scripts** → Move to `scripts/` folder
-- **Update `scripts/README.md`** with the new script description
-
-
-## Final Project Structure (Post-Reorganization - April 28, 2026)
-
-The project has been fully reorganized for optimal maintainability and clarity:
-
-### Root Directory (7 files - Minimal!)
-```
-picotradeagent/
-├── start_all.sh                ← MAIN STARTUP SCRIPT (orchestrator)
-├── README.md                   ← Documentation
-├── requirements.txt            ← Consolidated dependencies
-├── AGENTS.md                   ← AI agents configuration
-├── docker-compose.yml          ← Docker configuration
-├── Dockerfile                  ← Container definitions
-└── Dockerfile.ui               ← UI container definition
-```
-
-### Scripts Folder (Organized by Category)
-```
-scripts/
-├── README.md                   ← Script documentation
-
-├── MAIN ENTRY POINTS:
-│   ├── run_finance_service.py  ← Finance backend launcher
-│   ├── run_paper_trading.py    ← Paper trading pipeline
-│   ├── run_simple.py           ← Simple execution mode
-│   ├── setup_paper_trading.py  ← Trading setup utility
-│   └── progress_monitor.py     ← Progress monitoring
-
-├── STARTUP & SETUP:
-│   ├── setup.sh                ← Initial project setup
-│   ├── start_paper_trading.sh  ← Paper trading startup
-│   ├── run_dashboard.sh        ← Dashboard launcher
-│   └── run_network_mode.sh     ← Network mode launcher
-
-├── DEPLOYMENT:
-│   ├── docker-deploy.sh        ← Docker deployment
-│   └── docker-verify.sh        ← Deployment verification
-
-├── ANALYSIS & OPTIMIZATION:
-│   ├── analyze_regime_detection.py
-│   ├── analyze_fundamentals_distribution.py
-│   ├── quick_regime_analysis.py
-│   ├── optimize_drawdown.py
-│   └── optimize_parameters.py
-
-├── TRADING & SIGNALS:
-│   ├── check_current_signals.py
-│   ├── check_sma20_signals.py
-│   ├── simulate_trade.py
-│   ├── manual_buy_asml.py
-│   └── reset_and_book_asml.py
-
-├── TELEGRAM AGENTS:
-│   ├── telegram_forwarder_agent.py
-│   ├── telegram_notifier_agent.py
-│   └── telegram_watch_agent.py
-
-└── UTILITIES:
-    ├── show_finance_backtest.py
-    ├── show_tables.py
-    ├── validate_system.py
-    ├── verify_fixes.py
-    ├── inspect_cache.py
-    ├── get_latest_backtest.py
-    ├── describe_backtest.py
-    ├── notify_telegram.py
-    └── add_cov.py
-```
-
-### Test Directory
-```
-tests/
-├── pytest.ini                  ← pytest configuration (moved from root)
-├── test_*.py                   ← Test modules
-└── ...
-```
-
-### Startup Flow
-```
-1. USER: ./start_all.sh
-2. Script activates venv
-3. Script launches: python3 scripts/run_finance_service.py
-4. (Optional) Script launches: bash scripts/run_dashboard.sh
-```
-
-### Why This Structure?
-- **Minimal Root**: Only startup orchestrator and docs in root
-- **Organized Scripts**: All utilities grouped by category in scripts/
-- **Clear Entry Points**: start_all.sh is the single entry point for users
-- **Easy Maintenance**: New scripts go to scripts/README.md for documentation
-- **Test Organization**: pytest.ini with test suite in tests/
-
-### Adding New Scripts
-1. Develop your utility script
-2. Place in `scripts/` folder
-3. Update `scripts/README.md` with description and category
-4. If it's a new main entry point, update `start_all.sh` references
-
-### Running the Service
-```bash
-# Start everything (Finance Service + Dashboard)
-./start_all.sh
-
-# Or start components individually
-python3 scripts/run_finance_service.py
-bash scripts/run_dashboard.sh
-```
-
-### Running Tests
-```bash
-# From project root or tests directory
-python3 -m pytest tests/ -v
-
-# With coverage
-python3 -m pytest tests/ --cov=finance_service
-```
-
-### Viewing Trading History
-The system provides a built-in terminal script to quickly view all `SELL` transactions and historical liquidations from your live portfolio.
-
-To view your sell trades:
-```bash
-source venv/bin/activate
-python3 scripts/list_sell_trades.py
-```
-*Note: This strictly pulls from your live operational database. It will not show trades from offline backtest simulations.*
+**Troubleshooting:**
+If the hourly report stops working, the most common cause is **merge conflicts** in `scripts/heartbeat_report.py`. This manifests as import/syntax errors. To fix:
+1. Check file for git merge markers: `grep -n "<<<<<<< HEAD\|=======\|>>>>>>> master" scripts/heartbeat_report.py`
+2. Resolve conflicts, keeping the richer version from the `master` branch
+3. Verify syntax: `python3 -m py_compile scripts/heartbeat_report.py`
+4. Test: `python3 scripts/heartbeat_report.py`

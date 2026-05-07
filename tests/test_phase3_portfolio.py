@@ -24,16 +24,22 @@ from finance_service.portfolio.equity_calculator import EquityCalculator
 # =====================
 
 @pytest.fixture
-def trade_repository():
-    """Create fresh trade repository."""
-    return TradeRepository()
-
+def test_db():
+    """Create fresh in-memory database for each test."""
+    from finance_service.storage.database import Database
+    db = Database(":memory:")
+    db.initialize_schema()
+    return db
 
 @pytest.fixture
-def portfolio_manager():
-    """Create portfolio manager with standard initial cash."""
-    return PortfolioManager(initial_cash=100000.0)
+def trade_repository(test_db):
+    """Create fresh trade repository with isolated database."""
+    return TradeRepository(use_db=True, db=test_db)
 
+@pytest.fixture
+def portfolio_manager(trade_repository):
+    """Create portfolio manager with standard initial cash and isolated repository."""
+    return PortfolioManager(initial_cash=100000.0, repository=trade_repository)
 
 @pytest.fixture
 def equity_calculator():

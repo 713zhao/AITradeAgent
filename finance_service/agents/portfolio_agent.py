@@ -81,6 +81,7 @@ class PortfolioAgent(Agent):
         # Extract stop_loss and take_profit if provided
         stop_loss = trade_info.get("stop_loss")
         take_profit = trade_info.get("take_profit")
+        reason = trade_info.get("reason", "Executed Trade")
         trade_id = trade_info.get("trade_id") or f"exec_{int(datetime.utcnow().timestamp()*1000)}"
 
         logger.info(f"[PORTFOLIO DEBUG] Parsed: symbol={symbol}, side={side}, quantity={quantity}, price={price}, trade_id={trade_id}")
@@ -98,7 +99,7 @@ class PortfolioAgent(Agent):
                 trade = self.repository.create_trade(
                     task_id=trade_id,
                     symbol=symbol, side="BUY", quantity=quantity, price=price,
-                    decision={}, confidence=1.0, reason="Executed Trade",
+                    decision={}, confidence=1.0, reason=reason,
                     stop_loss=stop_loss, take_profit=take_profit
                 )
                 position = self.repository.get_position(symbol)
@@ -126,13 +127,36 @@ class PortfolioAgent(Agent):
                 self.repository.update_position(symbol, current_price=price)
             elif side == "SELL":
                 logger.info(f"[PORTFOLIO DEBUG] Creating SELL trade for {symbol}")
+                
+                # Fetch position before selling to calculate PnL and hold time for the notification
+                position = self.repository.get_position(symbol)
+                realized_pnl = 0.0
+                pnl_pct = 0.0
+                hold_days = 0
+                if position:
+                    realized_pnl = (price - position.avg_cost) * quantity
+                    pnl_pct = ((price - position.avg_cost) / position.avg_cost) * 100 if position.avg_cost > 0 else 0
+                    
+                    # Calculate holding period if trades exist
+                    if position.trades:
+                        first_trade_id = position.trades[0]
+                        first_trade = self.repository.get_trade(first_trade_id)
+                        if first_trade and first_trade.filled_at:
+                            hold_time = datetime.utcnow() - first_trade.filled_at
+                            hold_days = hold_time.days
+                
                 trade = self.repository.create_trade(
                     task_id=trade_id,
                     symbol=symbol, side="SELL", quantity=quantity, price=price,
-                    decision={}, confidence=1.0, reason="Executed Trade",
+                    decision={}, confidence=1.0, reason=reason,
                     stop_loss=stop_loss, take_profit=take_profit
                 )
-                position = self.repository.get_position(symbol)
+                
+                # Store calculated PnL in trade_info for HealthAgent to use
+                trade_info['realized_pnl'] = realized_pnl
+                trade_info['pnl_pct'] = pnl_pct
+                trade_info['hold_days'] = hold_days
+                
                 if position:
                     new_qty = position.quantity - quantity
                     if new_qty == 0:

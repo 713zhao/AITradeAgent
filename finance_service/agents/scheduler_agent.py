@@ -60,11 +60,17 @@ class SchedulerAgent(Agent):
                 self._trigger_health_check,
                 timedelta(hours=4)
             )
+            # Hourly portfolio summary — market hours only (Tier 4)
+            await self._schedule_task(
+                "hourly_portfolio_report",
+                self._trigger_hourly_portfolio_report,
+                timedelta(hours=1)
+            )
             # Daily summary after market close: run at 16:05 UTC+8 (08:05 UTC) daily
             await self._schedule_daily_at("daily_report", "08:05", self._trigger_daily_report)
-            # Pre-market scans (30min before market open)
-            await self._schedule_daily_at("pre_market_scan_hk", "01:30", self._trigger_pre_market_scan_hk)
-            await self._schedule_daily_at("pre_market_scan_us", "13:30", self._trigger_pre_market_scan_us)
+            # Market-open scans (fire at market open; pre-warm happens inside, then scan)
+            await self._schedule_daily_at("pre_market_scan_hk", "01:30", self._trigger_pre_market_scan_hk)  # HK opens 09:30 HKT = 01:30 UTC
+            await self._schedule_daily_at("pre_market_scan_us", "13:30", self._trigger_pre_market_scan_us)  # US opens 09:30 ET = 13:30 UTC
             
             logger.info("SchedulerAgent tasks initiated.")
             return AgentReport(agent_id=self.agent_id, status="success", message="SchedulerAgent started.")
@@ -129,6 +135,11 @@ class SchedulerAgent(Agent):
         await self.event_bus.publish(Event(event_type=Events.DAILY_REPORT_TRIGGER, data={}))
         logger.info("Published DAILY_REPORT_TRIGGER event.")
 
+    async def _trigger_hourly_portfolio_report(self):
+        """Tier 4: Hourly portfolio summary — only sent when a market is open."""
+        await self.event_bus.publish(Event(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, data={}))
+        logger.info("Published HOURLY_PORTFOLIO_TRIGGER event.")
+
     async def _schedule_daily_at(self, task_name: str, time_utc_str: str, coro: Callable[..., Awaitable[None]]):
         """Schedule a coroutine to run daily at a specific UTC time (HH:MM)."""
         # Compute initial delay until next occurrence of the target time
@@ -161,22 +172,40 @@ class SchedulerAgent(Agent):
         logger.info(f"Scheduled daily task {task_name} at {time_utc_str} UTC (first run in {initial_delay/3600:.1f} hours)")
 
     async def _trigger_pre_market_scan_hk(self):
-        """Trigger pre-market scan for Hong Kong (30min before 09:30 HKT)."""
+        """Trigger pre-market scan for Hong Kong (30min before 09:30 HKT).
+        Pre-warms MarketRegimeAgent + MacroNewsAgent 5 minutes before scanner.
+        """
+        # Step 1: Pre-warm regime and macro context for HK (cache refresh)
+        await self.event_bus.publish(Event(event_type=Events.PRE_SCAN_CONTEXT_REFRESH, data={"market": "HK"}))
+        logger.info("Published PRE_SCAN_CONTEXT_REFRESH for HK pre-market (pre-warming regime + macro)")
+        # Give orchestrator ~5 seconds to warm cache before scanner runs
+        await asyncio.sleep(5)
+        # Step 2: Trigger market scanner (bypass_market_hours_scan: scheduler fires at open, no need to re-check)
         await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
-            "interval": "pre_market",
+            "interval": "market_open",
             "send_telegram_report": True,
-            "market": "HK"
+            "market": "HK",
+            "bypass_market_hours_scan": True,
         }))
-        logger.info("Published MARKET_SCAN_TRIGGER for HK pre-market")
+        logger.info("Published MARKET_SCAN_TRIGGER for HK market open")
 
     async def _trigger_pre_market_scan_us(self):
-        """Trigger pre-market scan for US (30min before 09:30 local time)."""
+        """Trigger pre-market scan for US (30min before 09:30 local time).
+        Pre-warms MarketRegimeAgent + MacroNewsAgent 5 minutes before scanner.
+        """
+        # Step 1: Pre-warm regime and macro context for US (cache refresh)
+        await self.event_bus.publish(Event(event_type=Events.PRE_SCAN_CONTEXT_REFRESH, data={"market": "US"}))
+        logger.info("Published PRE_SCAN_CONTEXT_REFRESH for US pre-market (pre-warming regime + macro)")
+        # Give orchestrator ~5 seconds to warm cache before scanner runs
+        await asyncio.sleep(5)
+        # Step 2: Trigger market scanner (bypass_market_hours_scan: scheduler fires at open, no need to re-check)
         await self.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={
-            "interval": "pre_market",
+            "interval": "market_open",
             "send_telegram_report": True,
-            "market": "US"
+            "market": "US",
+            "bypass_market_hours_scan": True,
         }))
-        logger.info("Published MARKET_SCAN_TRIGGER for US pre-market")
+        logger.info("Published MARKET_SCAN_TRIGGER for US market open")
 
     async def stop(self):
         """Stops all scheduled tasks."""

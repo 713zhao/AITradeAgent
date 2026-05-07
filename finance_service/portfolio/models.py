@@ -37,8 +37,6 @@ class Position:
         updated_at: Last update timestamp
         trades: List of Trade IDs that make up this position
         metadata: Additional data (decision_id, reason, etc.)
-        stop_loss_price: Stop loss price (from trade decision)
-        take_profit_price: Take profit price (from trade decision)
     """
     symbol: str
     quantity: float
@@ -50,48 +48,43 @@ class Position:
     metadata: Dict[str, Any] = field(default_factory=dict)
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
-    # USD conversion rate: 1 unit of position's local currency = usd_fx_rate USD.
-    # USD-denominated symbols keep default 1.0. Refreshed daily by portfolio_agent.
-    usd_fx_rate: float = 1.0
-
+    
     @property
     def entry_price(self) -> float:
         """Alias for avg_cost to maintain compatibility with broker-style code."""
         return self.avg_cost
-
+    
     @entry_price.setter
     def entry_price(self, value: float):
         """Allow setting entry_price as alias for avg_cost."""
         self.avg_cost = value
+    
+    @staticmethod
+    def _fx(symbol: str) -> float:
+        """FX divisor: HK stocks trade in HKD; returns HKD/USD rate so values are in USD."""
+        return 7.78 if (symbol or "").endswith('.HK') else 1.0
 
     def market_value(self) -> float:
-        """Market value in local currency (e.g. HKD for .HK symbols). Used for cash tracking."""
+        """Current market value of position, normalised to USD."""
+        # Guard against NaN or infinite current_price
         if self.current_price is None or not isinstance(self.current_price, (int, float)) or self.current_price != self.current_price or self.current_price in (float('inf'), float('-inf')):
             return 0.0
-        return self.quantity * self.current_price
-
-    def market_value_usd(self) -> float:
-        """Market value in USD (applies usd_fx_rate). Used for portfolio equity reporting."""
-        return self.market_value() * self.usd_fx_rate
-
+        return self.quantity * self.current_price / self._fx(self.symbol)
+    
     def cost_basis(self) -> float:
-        """Cost basis in local currency (avg_cost * qty). Used for cash tracking."""
-        return self.quantity * self.avg_cost
-
-    def cost_basis_usd(self) -> float:
-        """Cost basis in USD (avg_cost * qty * usd_fx_rate). Used for portfolio equity reporting."""
-        return self.quantity * self.avg_cost * self.usd_fx_rate
-
+        """Total cost of position (avg_cost * qty), normalised to USD."""
+        return self.quantity * self.avg_cost / self._fx(self.symbol)
+    
     def unrealized_pnl(self) -> float:
-        """Unrealized profit/loss in USD."""
-        return self.market_value_usd() - self.cost_basis_usd()
-
+        """Unrealized profit/loss."""
+        return self.market_value() - self.cost_basis()
+    
     def unrealized_pnl_pct(self) -> float:
-        """Unrealized P&L as percentage (currency-neutral: computed from local prices)."""
-        if self.avg_cost == 0:
+        """Unrealized P&L as percentage."""
+        if self.cost_basis() == 0:
             return 0.0
-        return ((self.current_price - self.avg_cost) / abs(self.avg_cost)) * 100
-
+        return (self.unrealized_pnl() / abs(self.cost_basis())) * 100
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return {
@@ -100,18 +93,14 @@ class Position:
             "avg_cost": self.avg_cost,
             "entry_price": self.avg_cost,  # alias for compatibility
             "current_price": self.current_price,
-            "usd_fx_rate": self.usd_fx_rate,
-            "market_value": self.market_value_usd(),   # USD value for API consumers
-            "local_market_value": self.market_value(), # local currency value
-            "cost_basis": self.cost_basis_usd(),       # USD cost basis
+            "market_value": self.market_value(),
+            "cost_basis": self.cost_basis(),
             "unrealized_pnl": self.unrealized_pnl(),
             "unrealized_pnl_pct": self.unrealized_pnl_pct(),
             "opened_at": self.opened_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "trades": self.trades,
             "metadata": self.metadata,
-            "stop_loss_price": self.stop_loss_price,
-            "take_profit_price": self.take_profit_price,
         }
 
 
@@ -249,12 +238,12 @@ class Portfolio:
             self.current_cash = self.initial_cash
     
     def gross_position_value(self) -> float:
-        """Total market value of all positions in USD."""
-        return sum(pos.market_value_usd() for pos in self.positions.values())
-
+        """Total market value of all positions (long + short)."""
+        return sum(pos.market_value() for pos in self.positions.values())
+    
     def net_position_value(self) -> float:
-        """Net market value of positions in USD (long - short)."""
-        return sum(pos.market_value_usd() for pos in self.positions.values())
+        """Net market value of positions (long - short)."""
+        return sum(pos.market_value() for pos in self.positions.values())
     
     def total_equity(self) -> float:
         """Total portfolio equity = cash + position values."""
@@ -265,12 +254,20 @@ class Portfolio:
         return sum(pos.unrealized_pnl() for pos in self.positions.values())
     
     def realized_pnl(self) -> float:
-        """Total realized P&L in USD (derived from total equity and unrealized PnL)."""
-        return self.total_pnl() - self.unrealized_pnl()
-
+        """Total realized P&L from closed positions."""
+        # Realized P&L = Initial cash - closing trade value
+        # For now, calculate from trades that are closed
+        initial_spent = sum(
+            trade.quantity * trade.price 
+            for trade in self.trades 
+            if trade.side == "BUY" and trade.status == TradeStatus.FILLED
+        )
+        realized = self.initial_cash - initial_spent - self.current_cash
+        return realized
+    
     def total_pnl(self) -> float:
-        """Total P&L in USD = total equity - initial capital."""
-        return self.total_equity() - self.initial_cash
+        """Total P&L = realized + unrealized."""
+        return self.realized_pnl() + self.unrealized_pnl()
     
     def total_return_pct(self) -> float:
         """Total return as percentage of initial capital."""

@@ -22,12 +22,13 @@ class TradeRepository:
     Can be extended with SQLite persistence (Phase 3+).
     """
     
-    def __init__(self, use_db: bool = True):
+    def __init__(self, use_db: bool = True, db: Optional[Any] = None):
         """
         Initialize repository.
         
         Args:
             use_db: If True, enable persistence using portfolio database.
+            db: Optional Database instance (for testing with custom DB).
         """
         self.trades: List[Trade] = []
         self.positions: Dict[str, Position] = {}
@@ -35,7 +36,7 @@ class TradeRepository:
         self.db = None
         if use_db:
             try:
-                self.db = get_portfolio_db()
+                self.db = db if db is not None else get_portfolio_db()
                 self._load_from_db()
             except Exception as e:
                 logger.error(f"Failed to initialize database for TradeRepository: {e}")
@@ -300,7 +301,43 @@ class TradeRepository:
     def get_filled_trades(self) -> List[Trade]:
         """Get all filled trades."""
         return [t for t in self.trades if t.status == TradeStatus.FILLED]
-    
+
+    def get_all_trades(self) -> List[Dict[str, Any]]:
+        """Return all trades as dicts, sorted by ordered_at ascending."""
+        return [t.to_dict() for t in sorted(self.trades, key=lambda t: t.ordered_at)]
+
+    def get_trades_by_date_range(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        symbol: Optional[str] = None,
+        side: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return trades filtered by date range, symbol, and/or side.
+
+        Args:
+            start: Inclusive lower bound (UTC). None = no lower bound.
+            end:   Inclusive upper bound (UTC). None = no upper bound.
+            symbol: Filter by ticker symbol (case-insensitive).
+            side:   Filter by BUY or SELL (case-insensitive).
+        Returns:
+            List of trade dicts sorted by ordered_at ascending.
+        """
+        result = []
+        for t in sorted(self.trades, key=lambda t: t.ordered_at):
+            ts = t.ordered_at
+            if start and ts < start:
+                continue
+            if end and ts > end:
+                continue
+            if symbol and t.symbol.upper() != symbol.upper():
+                continue
+            if side and t.side.upper() != side.upper():
+                continue
+            result.append(t.to_dict())
+        return result
+
     def update_trade_status(
         self,
         trade_id: str,

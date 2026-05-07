@@ -218,6 +218,7 @@ class Events:
     ANALYSIS_STARTED = "analysis_started"
     ANALYSIS_COMPLETE = "analysis_complete"
     ANALYSIS_FAILED = "analysis_failed" # Add failure event
+    MARKET_REGIME_UPDATED = "market_regime_updated"  # Market regime change notification
     
     # Decision events (now Trade Proposals)
     TRADE_PROPOSAL_GENERATED = "trade_proposal_generated" # Renamed from DECISION_MADE
@@ -257,6 +258,9 @@ class Events:
     LEARNING_COMPLETE = "learning_complete" # New event for learning agent
     LEARNING_FEEDBACK = "learning_feedback" # Optional feedback event
     
+    # Regime events
+    MARKET_REGIME_UPDATED = "market_regime_updated"  # Market regime classification updated
+    
     # System query/response events
     GET_SYSTEM_STATUS = "get_system_status"
     GET_PORTFOLIO_STATE = "get_portfolio_state"
@@ -269,7 +273,9 @@ class Events:
     DATA_REFRESH_TRIGGER = "data_refresh_trigger"  # Trigger to refresh data for existing symbols
     PRICE_MONITOR_TRIGGER = "price_monitor_trigger"  # Tier 2: lightweight price refresh (every 15 min)
     DAILY_REPORT_TRIGGER = "daily_report_trigger"
+    HOURLY_PORTFOLIO_TRIGGER = "hourly_portfolio_trigger"  # Hourly portfolio summary (market hours only)
     HEALTH_CHECK_TRIGGER = "health_check_trigger"
+    PRE_SCAN_CONTEXT_REFRESH = "pre_scan_context_refresh"  # Pre-warm MarketRegimeAgent + MacroNewsAgent before scanner
 
 # Global event bus instance (lazy-loaded singleton)
 # For backward compatibility, provide a direct reference

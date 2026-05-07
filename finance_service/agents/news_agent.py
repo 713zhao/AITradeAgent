@@ -16,6 +16,7 @@ from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.agent_interface import Agent, AgentReport
 from dataclasses import asdict
 from finance_service.core.event_bus import Event, Events, get_event_bus
+from finance_service.llm import LLMManager, LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,8 @@ class NewsAgent(Agent):
             os.path.dirname(__file__), "..", "storage", "news_cache.sqlite"
         )
         self._cache = _NewsCache(os.path.abspath(_cache_path))
+        self._llm_manager: Optional[LLMManager] = None
+        self._init_llm()
         logger.info("NewsAgent initialized")
 
     @property
@@ -120,6 +123,48 @@ class NewsAgent(Agent):
     @property
     def goal(self) -> str:
         return "Monitor news and sentiment for specified symbols to identify catalysts."
+
+    def _init_llm(self):
+        """Initialize LLM if configured and enabled for sentiment enhancement."""
+        try:
+            llm_enabled = self.config.get("llm", "enabled", default=False)
+            if not llm_enabled:
+                logger.debug("LLM disabled; NewsAgent will use VADER only")
+                return
+
+            module_enabled = self.config.get("llm", "modules/news_sentiment/enabled", default=False)
+            if not module_enabled:
+                logger.debug("News sentiment LLM module disabled")
+                return
+
+            llm_config = LLMConfig(
+                provider=self.config.get("llm", "provider", default="openrouter"),
+                api_key_env=self.config.get("llm", "api_key_env", default="OPENROUTER_API_KEY"),
+                base_url=self.config.get("llm", "base_url", default=None),
+                default_model=self.config.get("llm", "modules/news_sentiment/model",
+                                              default=self.config.get("llm", "model", default="openrouter/auto")),
+                temperature=self.config.get("llm", "modules/news_sentiment/temperature", default=0.4),
+                max_tokens=1000,
+                timeout=self.config.get("llm", "timeout", default=30),
+                max_retries=self.config.get("llm", "max_retries", default=3),
+            )
+
+            # Override from environment variables if present
+            if os.getenv("LLM_PROVIDER"):
+                llm_config.provider = os.getenv("LLM_PROVIDER")
+            if os.getenv("GOOGLE_API_KEY"):
+                llm_config.api_key_env = "GOOGLE_API_KEY"
+            if os.getenv("TA_DEEP_THINK_MODEL"):
+                llm_config.default_model = os.getenv("TA_DEEP_THINK_MODEL")
+
+            self._llm_manager = LLMManager(llm_config)
+            if self._llm_manager.validate():
+                logger.info("NewsAgent LLM initialized for sentiment enhancement")
+            else:
+                logger.warning("NewsAgent LLM validation failed; using VADER only")
+                self._llm_manager = None
+        except Exception as e:
+            logger.debug(f"Failed to init LLM for NewsAgent: {e}")
 
     # ─── Public entry point ───────────────────────────────────────────────────
 

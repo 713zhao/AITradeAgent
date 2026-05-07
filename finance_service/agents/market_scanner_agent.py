@@ -33,8 +33,8 @@ class MarketScannerAgent(Agent):
 
     def __init__(self, config_engine: YAMLConfigEngine):
         self.config = config_engine
-        self._whitelist_enabled = self.config.get("finance", "universe/whitelist/enabled", default=False)
-        self._whitelist_symbols = set(self.config.get("finance", "universe/whitelist/symbols", default=[]))
+        self._whitelist_enabled = self.config.get("universe", "whitelist/enabled", default=False)
+        self._whitelist_symbols = set(self.config.get("universe", "whitelist/symbols", default=[]))
         self.event_bus = get_event_bus()
         self._score_cache: Dict[str, float] = {}
         # Watchlist: populated by discovery scan, consumed by price monitor
@@ -48,7 +48,7 @@ class MarketScannerAgent(Agent):
         self._load_watchlist()
         # DEBUG: Log config sections and universe
         all_sections = list(self.config._config.keys()) if hasattr(self.config, '_config') else 'no _config'
-        finance_section = self.config.get("finance", None, default=None)
+        finance_section = self.config.get_section("finance")
         if finance_section:
             universe_data = finance_section.get("universe") if isinstance(finance_section, dict) else None
         else:
@@ -60,12 +60,12 @@ class MarketScannerAgent(Agent):
 
     def get_all_symbols(self) -> List[str]:
         """Get all configured symbols from universe."""
-        symbols = self.config.get("finance", "universe/all_symbols", default=[])
+        symbols = self.config.get("universe", "all_symbols", default=[])
         return list(set(symbols))
 
     def get_symbols_by_theme(self, theme: str) -> List[str]:
         """Get symbols for a specific theme."""
-        themes = self.config.get("finance", "universe/themes", default=[])
+        themes = self.config.get("universe", "themes", default=[])
         for t in themes:
             if isinstance(t, dict) and t.get("name", "").lower() == theme.lower():
                 return list(set(t.get("symbols", [])))
@@ -74,7 +74,7 @@ class MarketScannerAgent(Agent):
 
     def get_available_themes(self) -> List[str]:
         """Get all available theme names."""
-        themes = self.config.get("finance", "universe/themes", default=[])
+        themes = self.config.get("universe", "themes", default=[])
         logger.info(f"[DBG THEMES] themes={themes}, type={type(themes)}")
         return [t.get("name", "") for t in themes if isinstance(t, dict)]
 
@@ -143,9 +143,9 @@ class MarketScannerAgent(Agent):
             AgentReport with ranked symbols and ratings
         """
         # DEBUG: Log config values early
-        raw_themes = self.config.get("finance", "universe/themes", default=[])
+        raw_themes = self.config.get("universe", "themes", default=[])
         logger.info(f"[RUN DEBUG] raw_themes count: {len(raw_themes) if isinstance(raw_themes, list) else 'not list'}, include_themes={include_themes}")
-        top_n = self.config.get("finance", "scanner/discovery_top_n_per_theme", default=limit)
+        top_n = self.config.get("scanner", "discovery_top_n_per_theme", default=limit)
         logger.info(f"[Discovery] Running full scan: themes={include_themes}, top_n={top_n}, min_liq={min_liquidity}")
         flow("MarketScanner", "START", f"full scan: {len(self.get_available_themes())} themes, top_n={top_n}")
 
@@ -227,15 +227,16 @@ class MarketScannerAgent(Agent):
                                        force_held: bool = False) -> AgentReport:
         """
         Tier 2 — Lightweight price refresh for watchlist + held positions.
-
-        Fetches only the latest price using 2-min intraday bars so P&L reflects
-        live market prices (not yesterday's close).
+        
+        Fetches only the latest price (no full OHLCV history needed).
         Does NOT re-run news/analysis/strategy.
-
+        
         Args:
             data_agent: DataAgent for fetching current quotes
             held_symbols: Symbols from PortfolioAgent (always included)
-            force_held: If True, always include held positions even when market closed
+        
+        Returns:
+            AgentReport with price snapshots
         """
         # Merge watchlist + held positions (dedup)
         symbols_to_check = list(self._watchlist_symbols)
@@ -244,26 +245,25 @@ class MarketScannerAgent(Agent):
                 if s not in symbols_to_check:
                     symbols_to_check.append(s)
 
-        # Market-aware filtering
+        # Market-aware filtering: only include symbols whose primary market is open
         from finance_service.utils.market_hours import is_hk_market_open, is_us_market_open
         hk_open = is_hk_market_open()
         us_open = is_us_market_open()
         held_set = set(held_symbols or [])
-        # Only skip if both markets are closed AND there are no held positions to update
-        if not (hk_open or us_open) and not force_held and not held_set:
-            logger.info("[PriceMonitor] Both markets closed and no held positions; skipping fetch.")
+        if not (hk_open or us_open) and not force_held:
+            logger.info("[PriceMonitor] Both markets closed; skipping fetch.")
             return AgentReport(
                 agent_id=self.agent_id,
                 status="success",
                 message="Markets closed; no price fetch.",
                 payload={"prices": [], "count": 0}
             )
-
+        # Filter to open-market symbols only; force_held bypasses filter for held positions
+        original_count = len(symbols_to_check)
         filtered_symbols = []
         for sym in symbols_to_check:
-            # ALWAYS include held symbols (they need price updates regardless of market hours)
-            if sym in held_set:
-                filtered_symbols.append(sym)
+            if force_held and sym in held_set:
+                filtered_symbols.append(sym)  # always include held positions
             elif sym.endswith('.HK'):
                 if hk_open:
                     filtered_symbols.append(sym)
@@ -272,10 +272,8 @@ class MarketScannerAgent(Agent):
                     filtered_symbols.append(sym)
         symbols_to_check = filtered_symbols
 
-        logger.info(
-            f"[PriceMonitor] Refreshing prices for {len(symbols_to_check)} symbols "
-            f"(watchlist={len(self._watchlist_symbols)}, held={len(held_symbols or [])})"
-        )
+        logger.info(f"[PriceMonitor] Refreshing prices for {len(symbols_to_check)} symbols "
+                     f"(watchlist={len(self._watchlist_symbols)}, held={len(held_symbols or [])})")
 
         if not symbols_to_check:
             return AgentReport(
@@ -288,19 +286,19 @@ class MarketScannerAgent(Agent):
         prices: List[Dict[str, Any]] = []
         if data_agent:
             try:
-                # Batch fetch intraday prices (2-min bars for live P&L):
-                # period="1d" gives today's intraday data so iloc[-1] is the
-                # actual current price, not yesterday's close.
+                # Batch fetch intraday prices (2-min bars for live P&L) — period="1d" gives
+                # today's intraday data so iloc[-1] is the actual current price, not yesterday's close
                 logger.info(f"[PriceMonitor] Batch fetching {len(symbols_to_check)} symbols (intraday 2m, period=1d)")
-
+                
+                # Call provider.fetch_ohlcv directly (uses batching and delays)
                 results = await asyncio.to_thread(
                     data_agent.provider.fetch_ohlcv,
                     symbols_to_check,
                     period="1d",
                     interval="2m",
                 )
-
-                # Extract latest prices (do NOT cache intraday data into daily cache)
+                
+                # Extract latest prices (do NOT cache intraday data into the daily cache)
                 for symbol, df in results.items():
                     if df is None or df.empty or 'Close' not in df.columns:
                         continue
@@ -319,9 +317,9 @@ class MarketScannerAgent(Agent):
                         "timestamp": datetime.utcnow().isoformat(),
                     })
                 logger.info(f"[PriceMonitor] Batch fetch produced {len(prices)}/{len(symbols_to_check)} valid price updates")
-
             except Exception as e:
                 logger.error(f"[PriceMonitor] Batch fetch failed: {e}", exc_info=True)
+                # Fallback to individual fetches if batch fails entirely
                 logger.info("[PriceMonitor] Falling back to individual fetch method")
                 prices = []
                 for symbol in symbols_to_check:
@@ -351,12 +349,14 @@ class MarketScannerAgent(Agent):
         try:
             await self.event_bus.publish(Event(
                 event_type=Events.PRICE_REFRESH_COMPLETE,
-                data={"prices": prices, "count": len(prices)}
+                data=asdict(report)
             ))
         except Exception as e:
             logger.error(f"Error publishing PRICE_REFRESH_COMPLETE: {e}", exc_info=True)
 
         return report
+
+    # ─── Internal methods ──────────────────────────────────────────
 
     async def _fetch_quick_quote(self, symbol: str, data_agent=None) -> Optional[Dict[str, Any]]:
         """Fetch latest price for a single symbol (lightweight)."""
@@ -366,7 +366,7 @@ class MarketScannerAgent(Agent):
         try:
             report = await data_agent.run(
                 symbol=symbol,
-                interval="5m",
+                interval="1d",
                 use_cache=True,
                 emit_events=False
             )
@@ -627,3 +627,19 @@ class MarketScannerAgent(Agent):
         stats = self.get_stats()
         return (f"MarketScannerAgent(symbols={stats['total_symbols']}, "
                 f"themes={stats['total_themes']}, watchlist={stats['watchlist_count']})")
+
+    # ─── TEST COMPATIBILITY ────────────────────────────────────────────────
+
+    def scan_universe(self, include_themes: Optional[List[str]] = None) -> List[str]:
+        """
+        Synchronous wrapper for compatibility: return list of symbols to scan.
+        This returns the configured symbols (or by theme) without performing
+        the full discovery scan which requires a data_agent.
+        """
+        if include_themes:
+            symbols = []
+            for theme in include_themes:
+                symbols.extend(self.get_symbols_by_theme(theme))
+            return list(set(symbols))
+        else:
+            return self.get_all_symbols()

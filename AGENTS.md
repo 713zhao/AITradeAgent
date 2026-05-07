@@ -35,7 +35,7 @@ Other important directories:
 
 Dependencies are managed via `pip`.
 - Core dependencies: `requirements.txt`
-- UI dependencies (for Streamlit dashboard): `requirements_ui.txt`
+- UI dependencies (for Streamlit dashboard): `requirements.txt`
 
 ## 4. Essential Commands
 
@@ -44,7 +44,7 @@ Dependencies are managed via `pip`.
   ```bash
   ./setup.sh
   ```
-  *(Note: This script creates a `venv` and installs `requirements.txt` and `requirements_ui.txt`)*
+  *(Note: This script creates a `venv` and installs `requirements.txt` and `requirements.txt`)*
 
 ### Run
 - **Start only the finance service:**

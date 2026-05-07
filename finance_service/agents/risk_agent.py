@@ -420,21 +420,28 @@ class RiskAgent(Agent):
             results = []
             
             for proposal_data in proposals_data:
-                proposal = TradeProposal(**proposal_data)
-                
-                # Use the quantity calculated by the strategy; fallback to 1.0 if missing
-                trade_quantity = proposal.quantity if proposal.quantity is not None else 1.0
-                
-                risk_check_result = self._check_trade(
-                    trade_id=f"trade_{proposal.symbol}_{datetime.utcnow().timestamp()}",
-                    symbol=proposal.symbol,
-                    quantity=trade_quantity,
-                    price=proposal.target_price or 1.0,
-                    portfolio_equity=portfolio_equity,
-                    current_positions=current_positions,
-                    confidence=proposal.confidence,
-                )
-                results.append(risk_check_result)
+                try:
+                    proposal = TradeProposal(**proposal_data)
+                    
+                    # Use the quantity calculated by the strategy; fallback to 1.0 if missing
+                    trade_quantity = proposal.quantity if proposal.quantity is not None else 1.0
+                    
+                    logger.info(f"[RISK DEBUG] Checking trade: symbol={proposal.symbol}, quantity={trade_quantity}, price={proposal.target_price}, confidence={proposal.confidence}, portfolio_equity={portfolio_equity:.2f}")
+                    
+                    risk_check_result = self._check_trade(
+                        trade_id=f"trade_{proposal.symbol}_{datetime.utcnow().timestamp()}",
+                        symbol=proposal.symbol,
+                        quantity=trade_quantity,
+                        price=proposal.target_price or 1.0,
+                        portfolio_equity=portfolio_equity,
+                        current_positions=current_positions,
+                        confidence=proposal.confidence,
+                    )
+                    logger.info(f"[RISK DEBUG] Result: passed={risk_check_result.passed}, violations={risk_check_result.violations_count()}, approval_required={risk_check_result.approval_required}")
+                    results.append(risk_check_result)
+                except Exception as e:
+                    logger.error(f"[RISK DEBUG] Error checking proposal {proposal_data.get('symbol')}: {e}", exc_info=True)
+                    continue
             
             # Aggregate results
             any_approval_required = any(r.approval_required for r in results)
@@ -453,7 +460,9 @@ class RiskAgent(Agent):
             # Cash sufficiency check: reject if total trade cost exceeds available cash
             if decision == "APPROVED" and proposals_data:
                 p = proposals_data[0]
-                trade_cost = (p.get("quantity") or 0) * (p.get("target_price") or 0)
+                _sym = p.get("symbol", "")
+                _fx = 7.78 if _sym.endswith('.HK') else 1.0  # HKD→USD for HK stocks
+                trade_cost = (p.get("quantity") or 0) * (p.get("target_price") or 0) / _fx
                 if trade_cost > available_cash:
                     decision = "REJECTED"
                     message = (f"Insufficient cash: trade costs ${trade_cost:,.2f} "

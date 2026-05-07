@@ -16,7 +16,14 @@ from finance_service.core.event_bus import get_event_bus, Event, Events
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.scheduler_agent import SchedulerAgent
 from finance_service.agents.market_scanner_agent import MarketScannerAgent
+from finance_service.agents.market_regime_agent import MarketRegimeAgent
+from finance_service.agents.macro_news_agent import MacroNewsAgent
+from finance_service.agents.symbol_selector_agent import SymbolSelectorAgent
 from finance_service.agents.data_agent import DataAgent
+from finance_service.agents.fundamentals_agent import FundamentalsAgent
+from finance_service.agents.options_data_agent import OptionsDataAgent
+from finance_service.agents.options_strategy_agent import OptionsStrategyAgent
+from finance_service.agents.regime_agent import RegimeAgent
 from finance_service.agents.news_agent import NewsAgent
 from finance_service.agents.analysis_agent import AnalysisAgent
 from finance_service.agents.strategy_agent import StrategyAgent
@@ -27,6 +34,8 @@ from finance_service.agents.health_agent import HealthAgent
 from finance_service.agents.telegram_agent import TelegramAgent
 from finance_service.tools.approval_gate import get_approval_gate
 from finance_service.agents.exit_agent import ExitAgent
+from finance_service.agents.learning_agent import LearningAgent
+from finance_service.agents.ranking_agent import RankingAgent
 from finance_service.agents.agent_interface import AgentReport
 from finance_service.portfolio.trade_repository import TradeRepository
 
@@ -43,13 +52,17 @@ class MainOrchestratorAgent:
     """Orchestrates all agents and handles event routing."""
 
     def __init__(self, config: Dict[str, Any]):
-        self.config_engine = AppConfig()
+        from finance_service.core.yaml_config import YAMLConfigEngine
+        self.config_engine = YAMLConfigEngine(config_dir="config")
         self.config = config
         self.event_bus = get_event_bus()  # Get the singleton
         self.repository = TradeRepository()
         # Agents will be initialized in startup_orchestrator
         self.scheduler_agent: Optional[SchedulerAgent] = None
         self.market_scanner_agent: Optional[MarketScannerAgent] = None
+        self.market_regime_agent: Optional[MarketRegimeAgent] = None
+        self.macro_news_agent: Optional[MacroNewsAgent] = None
+        self.symbol_selector_agent: Optional[SymbolSelectorAgent] = None
         self.data_agent: Optional[DataAgent] = None
         self.news_agent: Optional[NewsAgent] = None
         self.analysis_agent: Optional[AnalysisAgent] = None
@@ -60,6 +73,13 @@ class MainOrchestratorAgent:
         self.health_agent: Optional[HealthAgent] = None
         self.telegram_agent: Optional[TelegramAgent] = None
         self.exit_agent: Optional[ExitAgent] = None
+        self.last_scan_meta: Dict[str, Any] = {
+            "status": "never",
+            "triggered_at": None,
+            "market": None,
+            "debug_bypass_market_hours": False,
+            "as_of_date": None,
+        }
 
     async def run(self):
         """Main run loop - not used; agents run as background tasks."""
@@ -80,13 +100,13 @@ class MainOrchestratorAgent:
             "initial_cash": config_engine.get("finance", "portfolio/initial_cash", default=100000.0),
         }
         # Only add Telegram config from YAML if present; otherwise TelegramAgent will use .env via Config fallback
-        telegram_token = config_engine.get("telegram", "bot_token", default=None)
+        telegram_token = config_engine.get("notifications", "telegram/bot_token", default=None)
         if telegram_token:
             simple_config["telegram_bot_token"] = telegram_token
-        telegram_chat = config_engine.get("telegram", "chat_id", default=None)
+        telegram_chat = config_engine.get("notifications", "telegram/chat_id", default=None)
         if telegram_chat:
             simple_config["telegram_chat_id"] = telegram_chat
-        telegram_thread = config_engine.get("telegram", "message_thread_id", default=None)
+        telegram_thread = config_engine.get("notifications", "telegram/message_thread_id", default=None)
         if telegram_thread is not None:
             simple_config["telegram_message_thread_id"] = telegram_thread
         # Build risk policy dict from YAML risk section (to satisfy RiskAgent)
@@ -104,6 +124,7 @@ class MainOrchestratorAgent:
             "min_position_size_usd",
             "allow_short_selling",
             "margin_enabled",
+            "approval_required_pct",
         ]
         for field in risk_fields:
             val = config_engine.get("finance", f"risk/{field}", default=None)
@@ -119,19 +140,53 @@ class MainOrchestratorAgent:
         self.scheduler_agent = SchedulerAgent(simple_config)
         self.market_scanner_agent = MarketScannerAgent(config_engine)
         self.data_agent = DataAgent(config_engine)
+        # New LLM-powered context agents
+        self.market_regime_agent = MarketRegimeAgent(config_engine, data_agent=self.data_agent, market_scanner=self.market_scanner_agent)
+        self.macro_news_agent = MacroNewsAgent(config_engine)
         self.news_agent = NewsAgent(config_engine)
+        # FundamentalsAgent: fetch fundamental metrics (Phase 4)
+        self.fundamentals_agent = FundamentalsAgent(config_engine)
+        # OptionsDataAgent: fetch options chains (Phase 5)
+        self.options_data_agent = OptionsDataAgent(config_engine)
+        # OptionsStrategyAgent: generate options-enhanced proposals (Phase 5)
+        self.options_strategy_agent = OptionsStrategyAgent(config_engine)
+        # RegimeAgent: optional LLM market regime classifier (Phase 1)
+        self.regime_agent = RegimeAgent(config_engine)
         # AnalysisAgent: uses default indicator periods; no config needed
         self.analysis_agent = AnalysisAgent()
+        # SymbolSelectorAgent: LLM-powered ranking with market context (Phase X)
+        self.symbol_selector_agent = SymbolSelectorAgent(
+            config_engine=config_engine,
+            data_agent=self.data_agent,
+            market_scanner=self.market_scanner_agent,
+            market_regime_agent=self.market_regime_agent,
+            macro_news_agent=self.macro_news_agent,
+            analysis_agent=self.analysis_agent,
+            news_agent=self.news_agent
+        )
         # StrategyAgent: needs config_engine and portfolio_agent (injected after)
         self.strategy_agent = StrategyAgent(config_engine, portfolio_agent=None)
         # RiskAgent: uses simple_config with policy dict
         self.risk_agent = RiskAgent(simple_config, portfolio_agent=None)
-        # ExecutionAgent: simple config
-        self.execution_agent = ExecutionAgent(simple_config)
+        
+        # Broker (Phase 7): create from config
+        broker_type = config_engine.get("finance", "execution/broker", default="paper")
+        broker_config = config_engine.get_section("finance").get("execution", {}).get("broker_config", {})
+        from finance_service.brokers.factory import BrokerFactory
+        broker = BrokerFactory.create(broker_type, broker_config)
+        # Connect broker
+        await broker.connect()
+        logger.info(f"Broker connected: {broker_type}")
+        
+        # ExecutionAgent: now takes broker instance
+        self.execution_agent = ExecutionAgent(broker)
+        
         # PortfolioAgent: needs simple_config and data_agent
         self.portfolio_agent = PortfolioAgent(simple_config, data_agent=self.data_agent)
         # HealthAgent: uses config_engine
         self.health_agent = HealthAgent(config_engine)
+        # LearningAgent: ML model training and inference (Phase 6)
+        self.learning_agent = LearningAgent(config_engine)
         # TelegramAgent: uses simple_config
         self.telegram_agent = TelegramAgent(simple_config)
         # ExitAgent: monitors held positions for exit conditions
@@ -148,6 +203,8 @@ class MainOrchestratorAgent:
         self.risk_agent.portfolio_agent = self.portfolio_agent
         self.health_agent.portfolio_agent = self.portfolio_agent
         self.health_agent.telegram_agent = self.telegram_agent
+        self.health_agent.market_scanner_agent = self.market_scanner_agent
+        self.health_agent.data_agent = self.data_agent
         self.portfolio_agent.repository = self.repository
 
         # Inject dependencies
@@ -171,27 +228,89 @@ class MainOrchestratorAgent:
         await self.event_bus.subscribe(Events.POSITION_DEGRADED, self.handle_position_degraded)  # strategic exit
         await self.event_bus.subscribe(Events.PRICE_MONITOR_TRIGGER, self.handle_price_monitor)  # Tier 2
         await self.event_bus.subscribe(Events.APPROVAL_REQUIRED, self.handle_approval_required)
+        await self.event_bus.subscribe(Events.PRE_SCAN_CONTEXT_REFRESH, self.handle_pre_scan_context_refresh)
+        await self.event_bus.subscribe(Events.DAILY_REPORT_TRIGGER, self.handle_daily_report)
+        await self.event_bus.subscribe(Events.HOURLY_PORTFOLIO_TRIGGER, self.handle_hourly_portfolio_report)
 
-        # Start background agents
+        # Start background agents (those with continuous loops)
         asyncio.create_task(self.scheduler_agent.run())
         asyncio.create_task(self.telegram_agent.run())
         logger.info("Orchestrator startup complete. All agents initialized and scheduled.")
 
     # Event handlers
+    async def handle_pre_scan_context_refresh(self, event: Event):
+        """Pre-warm MarketRegimeAgent and MacroNewsAgent caches before the discovery scan runs."""
+        market = event.data.get("market", "US")
+        logger.info(f"[PreWarm] Refreshing MarketRegimeAgent + MacroNewsAgent for {market} market...")
+        try:
+            regime_report, macro_report = await asyncio.gather(
+                self.market_regime_agent.run({"force_refresh": True}),
+                self.macro_news_agent.run({"force_refresh": True}),
+                return_exceptions=True,
+            )
+            regime_ok = not isinstance(regime_report, Exception) and regime_report and regime_report.status == "success"
+            macro_ok = not isinstance(macro_report, Exception) and macro_report and macro_report.status == "success"
+            logger.info(f"[PreWarm] Done — regime: {'✓' if regime_ok else '✗'}  macro: {'✓' if macro_ok else '✗'}")
+        except Exception as e:
+            logger.error(f"[PreWarm] Context refresh failed: {e}")
+
     async def handle_market_scan_trigger(self, event: Event):
         logger.info("Received MARKET_SCAN_TRIGGER")
-        # Check market hours: if both US and HK closed, skip scan entirely
+        event_data_in = event.data or {}
+        triggered_at = datetime.utcnow().isoformat()
+        self.last_scan_meta = {
+            "status": "triggered",
+            "triggered_at": triggered_at,
+            "market": event_data_in.get("market", "US"),
+            "debug_bypass_market_hours": bool(event_data_in.get("debug_bypass_market_hours", False)),
+            "as_of_date": event_data_in.get("as_of_date"),
+            "enforce_market_hours_for_scan": None,
+        }
+
+        # Configurable market-hours gate (can be disabled for debug scans)
+        enforce_market_hours = self.config_engine.get(
+            "finance", "scanner/enforce_market_hours_for_scan", default=True
+        )
+        self.last_scan_meta["enforce_market_hours_for_scan"] = bool(enforce_market_hours)
+        debug_bypass_market_hours = bool(event_data_in.get("debug_bypass_market_hours", False))
+        bypass_market_hours_scan = bool(event_data_in.get("bypass_market_hours_scan", False))
+        market_for_scan = event_data_in.get("market", "US")
+
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
-        if not (is_us_market_open() or is_hk_market_open()):
-            logger.info("Markets closed (US and HK). Skipping market scan.")
-            return
+        if enforce_market_hours and not debug_bypass_market_hours and not bypass_market_hours_scan:
+            hk_open = is_hk_market_open()
+            us_open = is_us_market_open()
+            # For market-specific scans, only check the relevant market
+            if market_for_scan == "HK" and not hk_open:
+                logger.info("HK market closed. Skipping HK market scan.")
+                self.last_scan_meta["status"] = "skipped"
+                self.last_scan_meta["reason"] = "hk_market_closed"
+                return
+            elif market_for_scan != "HK" and not us_open and not hk_open:
+                logger.info("Markets closed (US and HK). Skipping market scan.")
+                self.last_scan_meta["status"] = "skipped"
+                self.last_scan_meta["reason"] = "markets_closed"
+                return
+
+        if debug_bypass_market_hours:
+            logger.info("Debug bypass enabled: running market scan even though markets may be closed.")
+        elif bypass_market_hours_scan:
+            logger.info(f"Scheduler bypass: running {market_for_scan} market scan at scheduled market-open time.")
+
         # Trigger scanner with DataAgent for proper ranking
         report = await self.market_scanner_agent.run(data_agent=self.data_agent)
+        self.last_scan_meta["scanner_report_status"] = report.status
+        self.last_scan_meta["scanner_message"] = report.message
+        self.last_scan_meta["symbols_discovered"] = len((report.payload or {}).get("symbols", []))
         if report.status == "success" or report.status == "opportunity":
             # Publish the payload as event data; include status in payload if needed
             event_data = report.payload.copy()
             event_data["status"] = report.status
             event_data["message"] = report.message
+            # Pass optional trigger context downstream
+            event_data["market"] = event_data_in.get("market", "US")
+            if event_data_in.get("as_of_date"):
+                event_data["as_of_date"] = event_data_in.get("as_of_date")
             await self.event_bus.publish(Event(event_type=Events.MARKET_SCANNED, data=event_data))
 
     async def handle_market_scanned(self, event: Event):
@@ -199,39 +318,61 @@ class MainOrchestratorAgent:
         # Event data is directly the payload from MarketScannerAgent, with possible additional fields
         symbols = event.data.get("symbols", [])
         rated_symbols = event.data.get("rated_symbols", [])
-        logger.info(f"Processing {len(symbols)} symbols: {symbols}")
+        market = event.data.get("market", "US")
+        logger.info(f"Processing {len(symbols)} symbols [{market}]: {symbols}")
+
+        # Use SymbolSelectorAgent (LLM) to rank and filter candidates
+        if (self.symbol_selector_agent and getattr(self.symbol_selector_agent, '_llm_manager', None)):
+            try:
+                logger.info("Invoking SymbolSelectorAgent for ranking...")
+                selector_report = await self.symbol_selector_agent.run({"symbols": symbols, "market": market})
+                if selector_report.status == "success":
+                    rankings = selector_report.payload.get("rankings", [])
+                    llm_summary = selector_report.payload.get("llm_summary", "")
+                    tokens_used = selector_report.payload.get("tokens_used", 0)
+                    market_context = selector_report.payload.get("market_context", {})
+                    selected_symbols = [r["symbol"] for r in rankings[:5]]  # top 5 per market
+                    logger.info(f"SymbolSelector ranked {len(selected_symbols)} symbols (from {len(symbols)}) using {tokens_used} tokens")
+                    symbols = selected_symbols  # override processing list
+                    # Send LLM analysis result to Telegram (with regime + macro context)
+                    if self.telegram_agent and self.telegram_agent.enabled:
+                        asyncio.create_task(self._send_llm_ranking_to_telegram(
+                            rankings, llm_summary, tokens_used, market_context, market
+                        ))
+                else:
+                    logger.warning(f"SymbolSelector failed: {selector_report.message}; using original list")
+            except Exception as e:
+                logger.error(f"SymbolSelector error: {e}; proceeding with unfiltered list")
+        else:
+            logger.info("SymbolSelector not available; proceeding with unfiltered list")
 
         # Send market scan summary to Telegram (always; includes details and ranked scores)
         if self.telegram_agent and self.telegram_agent.enabled:
             chat_id = self.telegram_agent.chat_id
             if chat_id:
                 # Build detailed ranked summary with composite scores
+                import html as _html
                 preview_symbols = rated_symbols[:50] if rated_symbols else []
                 details = []
-                
-                # Pre-load symbol names from cache for the scan report
-                _scan_name_cache: dict = {}
-                from pathlib import Path as _Path
-                _names_path = _Path(__file__).parent.parent / "memory" / "symbol_names.json"
-                if _names_path.exists():
-                    try:
-                        import json as _json
-                        _scan_name_cache = _json.loads(_names_path.read_text())
-                    except Exception:
-                        pass
 
                 for item in preview_symbols:
                     sym = item.get("symbol", "")
                     score = item.get("rating", 0)
                     rank = item.get("rank", 0)
-                    name = (_scan_name_cache.get(sym) or sym)[:20]
                     snap = await self._get_symbol_snapshot(sym)
+                    yf_symbol = sym.replace(".", "-")
+                    quote_url = f"https://finance.yahoo.com/quote/{yf_symbol}"
                     if snap:
-                        price = snap.get('price', 0)
-                        details.append(f"{rank:2d}. {sym:<6}  {name:<20}  ${price:7.2f}  (score={score:.3f})")
+                        price = snap.get("price", 0)
+                        full_name = _html.escape(snap.get("full_name") or sym)
+                        details.append(
+                            f'{rank:2d}. <a href="{quote_url}">{_html.escape(sym)}</a> [{full_name}]  ${price:7.2f} (score={score:.3f})'
+                        )
                     else:
-                        details.append(f"{rank:2d}. {sym:<6}  {name:<20}  N/A        (score={score:.3f})")
-                
+                        details.append(
+                            f'{rank:2d}. <a href="{quote_url}">{_html.escape(sym)}</a> [N/A]  N/A (score={score:.3f})'
+                        )
+
                 # Header with ranking info
                 total_count = len(symbols)
                 header = f"📊 Daily Market Scan – Top {min(50, total_count)} Symbols (Ranked by Composite Score)\n"
@@ -244,17 +385,29 @@ class MainOrchestratorAgent:
                 message = header + "\n".join(details) + footer
                 
                 try:
-                    await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+                    await self.telegram_agent.send_message(chat_id=chat_id, message=message, parse_mode="HTML")
                     logger.info("Sent market scan summary to Telegram")
                 except Exception as e:
                     logger.error(f"Failed to send market scan Telegram: {e}")
                 # Also send top analysis summary in background (does not block)
-                asyncio.create_task(self._send_top_analysis_summary(symbols))
+                # Temporarily disabled until method is implemented
+                # asyncio.create_task(self._send_top_analysis_summary(symbols))
 
         # Use 365-day lookback (1 year) to ensure enough trading days for SMA200
         from datetime import datetime, timedelta
-        end_date = datetime.now().date()
+        as_of_date = event.data.get("as_of_date")
+        if as_of_date:
+            try:
+                end_date = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+                logger.info(f"Using debug as_of_date for scan: {as_of_date}")
+            except ValueError:
+                logger.warning(f"Invalid as_of_date format {as_of_date}, expected YYYY-MM-DD. Falling back to today.")
+                end_date = datetime.now().date()
+        else:
+            end_date = datetime.now().date()
         start_date = end_date - timedelta(days=365)
+        self.last_scan_meta["as_of_date_resolved"] = end_date.isoformat()
+        self.last_scan_meta["lookback_start_date"] = start_date.isoformat()
         fetch_errors: list = []
         for symbol in symbols:
             # Data fetch (1d)
@@ -263,6 +416,13 @@ class MainOrchestratorAgent:
                 logger.warning(f"Data fetch failed for {symbol}: {data_report.message}")
                 fetch_errors.append(f"{symbol}: {data_report.message}")
                 continue
+            # Fundamentals fetch (optional, parallel with news)
+            fundamentals_report = None
+            if self.config_engine.get("finance", "data/fetch_fundamentals", default=False):
+                fundamentals_report = await self.fundamentals_agent.run({"symbol": symbol})
+                if fundamentals_report.status != "success":
+                    logger.debug(f"Fundamentals unavailable for {symbol}: {fundamentals_report.message}")
+                    fundamentals_report = None
             # News fetch
             news_report = await self.news_agent.run(symbol=symbol)
             # Analysis
@@ -270,22 +430,84 @@ class MainOrchestratorAgent:
             if analysis_report.status != "success":
                 logger.warning(f"Analysis failed for {symbol}: {analysis_report.message}")
                 continue
+            
+            # Attach fundamentals to analysis payload for strategy if available
+            if fundamentals_report and fundamentals_report.status == "success":
+                analysis_report.payload["fundamentals"] = fundamentals_report.payload.get("analysis", {})
+            
+            # Regime classification (if enabled)
+            if self.config_engine.get("llm", "modules/market_regime/enabled", default=False):
+                try:
+                    regime_report = await self.regime_agent.run({
+                        "symbol": symbol,
+                        "ohlcv_data": data_report.payload.get("dataframe"),
+                        "indicators": analysis_report.payload.get("indicators_snapshot", {}).get("indicators", {})
+                    })
+                    if regime_report and regime_report.payload:
+                        logger.debug(f"Regime for {symbol}: {regime_report.payload.get('regime', {}).get('regime')}")
+                except Exception as e:
+                    logger.warning(f"RegimeAgent skipped for {symbol}: {e}")
+            
             # Strategy
             strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=symbol)
             if strategy_report.status != "success":
                 logger.warning(f"Strategy failed for {symbol}: {strategy_report.message}")
                 continue
-            # Risk
-            proposals = strategy_report.payload.get("proposals", [])
-            if not proposals:
+            
+            # --- Phase 5: Options Strategy Enhancement ---
+            base_proposals = strategy_report.payload.get("proposals", [])
+            final_proposals = base_proposals  # default to base
+            
+            options_enabled = self.config_engine.get("finance", "options/enabled", default=False)
+            logger.info(f"[ORCHESTRATOR] Options enabled config value: {options_enabled}, base_proposals count: {len(base_proposals)}")
+            if options_enabled and base_proposals:
+                try:
+                    # Get current portfolio position (if any)
+                    position = None
+                    if self.portfolio_agent:
+                        portfolio_report = await self.portfolio_agent.run(event_type=Events.GET_PORTFOLIO_STATE, payload={})
+                        if portfolio_report.status == "success":
+                            for pos in portfolio_report.payload.get("positions", []):
+                                if pos.get("symbol") == symbol:
+                                    position = pos
+                                    break
+                    # Fetch options chain
+                    options_chain_report = await self.options_data_agent.run({"symbol": symbol})
+                    if options_chain_report.status == "success":
+                        # Generate options-enhanced proposals
+                        options_payload = await self.options_strategy_agent.run({
+                            "base_proposal": base_proposals[0],
+                            "options_chain": options_chain_report.payload["options_chain"],
+                            "portfolio_position": position,
+                        })
+                        if options_payload.status == "success":
+                            options_proposals = options_payload.payload.get("options_proposals", [])
+                            if options_proposals:
+                                final_proposals = options_proposals
+                                logger.info(f"Options strategy generated {len(options_proposals)} proposal(s) for {symbol}")
+                except Exception as e:
+                    logger.warning(f"Options pipeline failed for {symbol}: {e}")
+            
+            if not final_proposals:
+                logger.info(f"[ORCHESTRATOR] No proposals for {symbol}, skipping")
                 continue
-            proposal = proposals[0]  # best proposal
-            risk_report = await self.risk_agent.run(proposal)
+            proposal = final_proposals[0]  # best proposal
+            logger.info(f"[ORCHESTRATOR] Proposal details: symbol={proposal.get('symbol')}, action={proposal.get('action')}, quantity={proposal.get('quantity')}, confidence={proposal.get('confidence')}")
+            try:
+                risk_report = await self.risk_agent.run(proposal)
+                logger.info(f"[ORCHESTRATOR] RiskAgent returned: status={risk_report.status}, decision={risk_report.payload.get('decision')}")
+            except Exception as e:
+                logger.error(f"[ORCHESTRATOR] RiskAgent call failed: {e}", exc_info=True)
+                continue
+            logger.info(f"Risk report for {symbol}: status={risk_report.status}, decision={risk_report.payload.get('decision')}, passed={risk_report.payload.get('all_passed')}, approval_required={risk_report.payload.get('any_approval_required')}")
             if risk_report.payload.get("decision") == "APPROVED":
-                # Guard: only execute during market hours
+                # Guard: only execute during the relevant market's hours
                 from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
-                if not (is_us_market_open() or is_hk_market_open()):
-                    logger.warning(f"Skipping execution for {symbol}: markets closed")
+                _sym_is_hk = symbol.endswith(".HK")
+                _market_open = is_hk_market_open() if _sym_is_hk else is_us_market_open()
+                if not _market_open:
+                    _mkt_name = "HK" if _sym_is_hk else "US"
+                    logger.warning(f"Skipping execution for {symbol}: {_mkt_name} market closed")
                     continue
                 # Send pre-execution Telegram notification before placing the trade
                 if self.telegram_agent and self.telegram_agent.enabled:
@@ -293,6 +515,29 @@ class MainOrchestratorAgent:
                         _snap = analysis_report.payload.get("indicators_snapshot") if analysis_report else None
                         _news_score = news_report.payload.get("sentiment_score") if (news_report and news_report.status == "success") else None
                         _news_cats = news_report.payload.get("catalysts") if (news_report and news_report.status == "success") else None
+                        # Fetch company name from yfinance (best-effort; cached in prior scan)
+                        _company_name = None
+                        _pf_cash = None
+                        _pf_equity = None
+                        try:
+                            _sym_snap = await self._get_symbol_snapshot(symbol)
+                            if _sym_snap:
+                                _company_name = _sym_snap.get("full_name")
+                        except Exception:
+                            pass
+                        # Fetch live portfolio cash/equity for the notification
+                        try:
+                            if self.portfolio_agent:
+                                _pf_report = await asyncio.wait_for(
+                                    self.portfolio_agent.get_detailed_portfolio_state(),
+                                    timeout=2.0
+                                )
+                                if _pf_report.status == "success":
+                                    _em = _pf_report.payload.get("equity_metrics", {})
+                                    _pf_cash = _em.get("current_cash")
+                                    _pf_equity = _em.get("total_equity")
+                        except Exception:
+                            pass
                         await self.telegram_agent.send_pre_execution_notification(
                             symbol=proposal.get("symbol", "?"),
                             action=proposal.get("action", "BUY"),
@@ -304,6 +549,9 @@ class MainOrchestratorAgent:
                             indicators_snapshot=_snap,
                             news_sentiment=_news_score,
                             news_catalysts=_news_cats,
+                            company_name=_company_name,
+                            portfolio_cash=_pf_cash,
+                            portfolio_equity=_pf_equity,
                         )
                     except Exception as _tg_err:
                         logger.warning(f"Pre-execution Telegram notification failed: {_tg_err}")
@@ -313,6 +561,11 @@ class MainOrchestratorAgent:
             # else: require approval, skip for now
 
         # Send error summary to Telegram if any data fetches failed
+        self.last_scan_meta["status"] = "completed"
+        self.last_scan_meta["completed_at"] = datetime.utcnow().isoformat()
+        self.last_scan_meta["processed_symbols"] = len(symbols)
+        self.last_scan_meta["fetch_errors_count"] = len(fetch_errors)
+
         if fetch_errors and self.health_agent:
             asyncio.create_task(
                 self.health_agent.send_error_alert(
@@ -429,7 +682,7 @@ class MainOrchestratorAgent:
             if price_dict:
                 self.portfolio_agent.repository.update_position_prices(price_dict)
                 logger.info(f"Applied {len(price_dict)} price updates to portfolio")
-            logger.info(f"Price monitor complete: {scan_report.message}")
+        logger.info(f"Price monitor complete: {scan_report.message}")
 
         # ── Intra-day entry evaluation (Tier 2 buy decisions) ───────────────
         intraday_entries = self.config_engine.get("strategy", "enable_intraday_entries", default=True)
@@ -448,12 +701,15 @@ class MainOrchestratorAgent:
         start_date = end_date - timedelta(days=365)
 
         for symbol in watchlist_symbols:
+            # Only evaluate symbols whose market is currently open
             _is_hk = symbol.endswith(".HK")
             if _is_hk and not is_hk_market_open():
                 continue
             if not _is_hk and not is_us_market_open():
                 continue
 
+            # Skip symbols already at max position size (strategy_agent handles this too,
+            # but short-circuit here saves redundant data fetches)
             try:
                 data_report = await self.data_agent.run(
                     symbol=symbol, interval="1d", start_date=start_date, end_date=end_date
@@ -486,16 +742,37 @@ class MainOrchestratorAgent:
 
                 logger.info(f"[Tier2-Entry] {symbol}: APPROVED BUY — proceeding to execution")
 
-                if not (is_us_market_open() or is_hk_market_open()):
-                    logger.warning(f"[Tier2-Entry] Markets closed before execution of {symbol}, skipping")
-                    continue
+                # Pre-execution Telegram notification
+                if self.telegram_agent and self.telegram_agent.enabled:
+                    try:
+                        snapshot = await self._get_symbol_snapshot(symbol)
+                        _company_name = (snapshot or {}).get("full_name")
+                        _pf_cash, _pf_equity = None, None
+                        try:
+                            _pf = await asyncio.wait_for(
+                                self.portfolio_agent.get_detailed_portfolio_state(), timeout=2.0
+                            )
+                            if _pf.status == "success":
+                                _pf_cash   = _pf.payload.get("equity_metrics", {}).get("current_cash")
+                                _pf_equity = _pf.payload.get("equity_metrics", {}).get("total_equity")
+                        except Exception:
+                            pass
+                        await self.telegram_agent.send_pre_execution_notification(
+                            symbol=symbol,
+                            action=proposal.get("action"),
+                            quantity=proposal.get("quantity"),
+                            price=proposal.get("target_price"),
+                            confidence=proposal.get("confidence", 0),
+                            rationale=proposal.get("rationale", "Intra-day entry: rule conditions met"),
+                            company_name=_company_name,
+                            portfolio_cash=_pf_cash,
+                            portfolio_equity=_pf_equity,
+                        )
+                    except Exception as _e:
+                        logger.warning(f"[Tier2-Entry] Pre-execution notification failed: {_e}")
 
-                exec_report = await self.execution_agent.run(risk_report)
-                if exec_report and exec_report.status == "success":
-                    await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload))
-                    logger.info(f"[Tier2-Entry] Trade executed for {symbol}")
-                else:
-                    logger.warning(f"[Tier2-Entry] Execution failed for {symbol}: {exec_report.message if exec_report else 'no report'}")
+                task_id = f"TIER2-{symbol}-{int(datetime.utcnow().timestamp())}"
+                await self.execute_trade_proposal(proposal, task_id)
 
             except Exception as e:
                 logger.error(f"[Tier2-Entry] Error evaluating {symbol}: {e}", exc_info=True)
@@ -550,7 +827,7 @@ class MainOrchestratorAgent:
             proposal_summary = f"{action} {quantity} shares of {symbol} @ ${price}"
             
             # Get approval gate and request approval
-            approval_gate = get_approval_gate("telegram")
+            approval_gate = await get_approval_gate("telegram")
             if not approval_gate.enabled:
                 logger.warning("Approval gate not enabled, executing trade anyway")
                 await self.execute_trade_proposal(proposal, task_id)
@@ -575,32 +852,51 @@ class MainOrchestratorAgent:
             logger.error(f"Error handling approval required: {e}", exc_info=True)
     
     async def execute_trade_proposal(self, proposal: Dict[str, Any], task_id: str):
-        """Execute a trade proposal after approval"""
+        """Execute a trade proposal after Telegram approval, using real broker."""
         try:
             from datetime import datetime
-            
-            execution_result = {
-                "trade_id": task_id,
-                "symbol": proposal.get("symbol"),
-                "action": proposal.get("action"),
-                "quantity": proposal.get("quantity", 1.0),
-                "filled_price": proposal.get("target_price"),
-                "status": "FILLED",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-            
-            # Send execution notification
-            await self.telegram_agent.send_message(
-                f"✅ Trade Executed: {proposal.get('action')} {proposal.get('quantity')} {proposal.get('symbol')} @ ${proposal.get('target_price')}"
+            from finance_service.agents.agent_interface import AgentReport
+            from finance_service.core.models import TradeProposal
+            from dataclasses import asdict
+
+            trade_proposal = TradeProposal(
+                symbol=proposal.get("symbol", ""),
+                action=proposal.get("action", "BUY"),
+                quantity=proposal.get("quantity", 1.0),
+                target_price=proposal.get("target_price"),
+                confidence=proposal.get("confidence", 1.0),
             )
-            
-            # Publish trade executed event
-            await self.event_bus.publish(__import__('finance_service.core.event_bus', fromlist=['Event']).Event(
-                event_type=__import__('finance_service.core.event_bus', fromlist=['Events']).Events.TRADE_EXECUTED,
-                data={"trade_info": execution_result}
-            ))
-            
-            logger.info(f"Trade {task_id} execution completed")
+            risk_report = AgentReport(
+                agent_id="approval_gate",
+                status="success",
+                message="Manual approval granted",
+                payload={
+                    "trade_proposals": [asdict(trade_proposal)],
+                    "risk_assessments": [],
+                    "all_passed": True,
+                    "decision": "APPROVED",
+                },
+            )
+            exec_report = await self.execution_agent.run(risk_report)
+            if exec_report.status == "success":
+                execution_result = exec_report.payload.get("execution_result", {})
+                await self.event_bus.publish(Event(
+                    event_type=Events.TRADE_EXECUTED,
+                    data=exec_report.payload,
+                ))
+                if self.telegram_agent and self.telegram_agent.enabled:
+                    status = execution_result.get("status", "?")
+                    filled = execution_result.get("filled_price", proposal.get("target_price"))
+                    await self.telegram_agent.send_message(
+                        f"✅ Trade Executed: {proposal.get('action')} {proposal.get('quantity')} "
+                        f"{proposal.get('symbol')} @ ${filled} [{status}]"
+                    )
+            else:
+                if self.telegram_agent and self.telegram_agent.enabled:
+                    await self.telegram_agent.send_message(
+                        f"❌ Trade execution failed: {exec_report.message}"
+                    )
+            logger.info(f"Trade {task_id} execution completed: {exec_report.status}")
         except Exception as e:
             logger.error(f"Error executing trade proposal: {e}", exc_info=True)
 
@@ -627,6 +923,14 @@ class MainOrchestratorAgent:
         # Route to HealthAgent for periodic health check and daily summary
         await self.health_agent.run(event_type=Events.SCHEDULE, payload={})
 
+    async def handle_daily_report(self, event: Event):
+        """Dispatch DAILY_REPORT_TRIGGER to HealthAgent."""
+        await self.health_agent.run(event_type=Events.DAILY_REPORT_TRIGGER, payload={})
+
+    async def handle_hourly_portfolio_report(self, event: Event):
+        """Dispatch HOURLY_PORTFOLIO_TRIGGER to HealthAgent."""
+        await self.health_agent.run(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, payload={})
+
     # Helper methods
     async def _get_symbol_snapshot(self, symbol: str) -> Optional[Dict]:
         try:
@@ -640,64 +944,82 @@ class MainOrchestratorAgent:
             close = last["Close"]
             change = ((close - prev_close) / prev_close) * 100 if prev_close else None
             volume = last.get("Volume")
+            full_name = symbol
+            try:
+                info = ticker.info or {}
+                full_name = info.get("longName") or info.get("shortName") or symbol
+            except Exception:
+                pass
+
             return {
                 "symbol": symbol,
                 "price": float(close),
                 "change": float(change) if change is not None else None,
-                "volume": int(volume) if volume is not None else None
+                "volume": int(volume) if volume is not None else None,
+                "full_name": full_name,
             }
         except Exception as e:
             logger.debug(f"Snapshot fetch failed for {symbol}: {e}")
             return None
 
-    async def _send_top_analysis_summary(self, symbols: List[str]):
-        symbols_to_check = symbols[:20]
-        results = []
-        for sym in symbols_to_check:
-            try:
-                data_report = await self.data_agent.run(symbol=sym, interval="1d", start_date=None, end_date=None, emit_events=False)
-                if data_report.status != "success" or "dataframe" not in data_report.payload:
-                    continue
-                df = data_report.payload["dataframe"]
-                analysis_report = await self.analysis_agent.run(data_payload=df, symbol=sym)
-                if analysis_report.status != "success":
-                    continue
-                strategy_report = await self.strategy_agent.run(analysis_report.payload, symbol=sym)
-                if strategy_report.status != "success":
-                    continue
-                proposals = strategy_report.payload.get("proposals", [])
-                if not proposals:
-                    continue
-                prop = proposals[0]
-                price = prop.get("price") or self._get_latest_price_from_df(df)
-                results.append({
-                    "symbol": sym,
-                    "action": prop.get("action", "WAIT"),
-                    "confidence": prop.get("confidence", 0.0),
-                    "price": price
-                })
-            except Exception as e:
-                logger.debug(f"Quick analysis skipped for {sym}: {e}")
-                continue
 
-        results.sort(key=lambda x: (0 if x["action"] == "BUY" else 1, -x.get("confidence", 0)))
-        top10 = results[:10]
-        if not top10:
+    async def _send_llm_ranking_to_telegram(
+        self,
+        rankings: list,
+        llm_summary: str,
+        tokens_used: int = 0,
+        market_context: dict = None,
+        market: str = "US",
+    ):
+        """Send LLM stock ranking analysis to Telegram, including regime + macro context."""
+        if not rankings:
+            return
+        if not (self.telegram_agent and self.telegram_agent.enabled):
+            return
+        chat_id = self.telegram_agent.chat_id
+        if not chat_id:
             return
 
-        lines = [f"🏆 Top {len(top10)} Candidates (quick analysis)"]
-        for r in top10:
-            lines.append(f"• {r['symbol']}: {r['action']} @ ${r['price']:.2f} (conf: {r['confidence']:.2f})")
-        message = "\n".join(lines)
+        try:
+            market_context = market_context or {}
+            market_flag = "🇺🇸" if market == "US" else "🇭🇰"
+            lines = [f"🤖 LLM Stock Ranking Analysis {market_flag} {market}"]
+            if tokens_used:
+                lines.append(f"💰 Tokens used: {tokens_used:,}")
 
-        if self.telegram_agent and self.telegram_agent.enabled:
-            chat_id = self.telegram_agent.chat_id
-            if chat_id:
-                try:
-                    await self.telegram_agent.send_message(chat_id=chat_id, message=message)
-                    logger.info("Sent top analysis summary to Telegram")
-                except Exception as e:
-                    logger.error(f"Failed to send top analysis Telegram: {e}")
+            # --- Regime context block ---
+            regime = market_context.get("regime", {})
+            if regime:
+                risk_icon = "🟢" if regime.get("risk_on") else "🔴"
+                vol = regime.get("volatility_regime", "?")
+                trend = regime.get("trend_strength", "?")
+                lines.append("")
+                lines.append(f"🌐 Regime: {risk_icon} " + ("Risk-ON" if regime.get("risk_on") else "Risk-OFF") + f" | Vol: {vol} | Trend: {trend}")
+
+            # --- Macro sentiment block ---
+            macro_sent = market_context.get("macro_sentiment_score")
+            if macro_sent is not None:
+                sent_icon = "🟢" if macro_sent > 0.2 else ("🔴" if macro_sent < -0.2 else "🟡")
+                lines.append(f"📰 Macro Sentiment: {sent_icon} {macro_sent:+.2f}")
+
+            if llm_summary:
+                lines.append("")
+                lines.append("📝 " + llm_summary)
+
+            lines.append("")
+            lines.append("🏆 Top Picks:")
+            for i, r in enumerate(rankings[:10], 1):
+                symbol = r.get("symbol", "?")
+                action = r.get("action", "?")
+                price = r.get("price", 0.0) or 0.0
+                conf = r.get("confidence", 0.0) or 0.0
+                lines.append(f"{i}. {symbol}: {action} @ ${price:.2f} (conf: {conf:.2f})")
+
+            message = "\n".join(lines)
+            await self.telegram_agent.send_message(chat_id=chat_id, message=message)
+            logger.info(f"Sent LLM ranking to Telegram ({market})")
+        except Exception as e:
+            logger.error(f"Failed to send LLM ranking Telegram: {e}")
 
     def _get_latest_price_from_df(self, df) -> float:
         try:
@@ -784,74 +1106,44 @@ def create_app():
             return jsonify({"error": "Orchestrator not initialized"}), 503
         trigger_type = request.args.get("trigger_type")
         if trigger_type == "market-scan":
-            await _orchestrator.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data={}))
-            return jsonify({"status": "queued", "trigger": "market_scan"})
-        elif trigger_type == "hourly-report" or trigger_type == "status-report":
-            await _orchestrator.event_bus.publish(Event(event_type=Events.GET_SYSTEM_STATUS, data={}))
+            market = request.args.get("market", "US")
+            debug_bypass_market_hours = request.args.get("debug_bypass_market_hours", "false").lower() in ("1", "true", "yes", "on")
+            debug_last_friday = request.args.get("debug_last_friday", "false").lower() in ("1", "true", "yes", "on")
+            as_of_date = request.args.get("as_of_date")
+
+            if debug_last_friday and not as_of_date:
+                today = datetime.utcnow().date()
+                # Python weekday: Monday=0 .. Sunday=6, Friday=4
+                days_since_friday = (today.weekday() - 4) % 7
+                as_of_date = (today - timedelta(days=days_since_friday)).isoformat()
+
+            payload = {
+                "market": market,
+                "debug_bypass_market_hours": debug_bypass_market_hours,
+            }
+            if as_of_date:
+                payload["as_of_date"] = as_of_date
+            await _orchestrator.event_bus.publish(Event(event_type=Events.MARKET_SCAN_TRIGGER, data=payload))
+            return jsonify({
+                "status": "queued",
+                "trigger": "market_scan",
+                "market": market,
+                "debug_bypass_market_hours": debug_bypass_market_hours,
+                "as_of_date": as_of_date,
+            })
+        elif trigger_type == "hourly-report":
+            await _orchestrator.event_bus.publish(Event(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, data={}))
             return jsonify({"status": "queued", "trigger": "hourly_report"})
-        elif trigger_type == "price-monitor":
-            await _orchestrator.event_bus.publish(Event(event_type=Events.PRICE_MONITOR_TRIGGER, data={}))
-            return jsonify({"status": "queued", "trigger": "price_monitor"})
         else:
             return jsonify({"error": "unknown trigger_type"}), 400
 
 
-    @app.route("/api/report/hourly", methods=["GET", "POST"])
-    async def api_report_hourly():
-        """Generate and send hourly portfolio report via Telegram."""
+    @app.route("/api/scan/last")
+    async def api_scan_last():
         global _orchestrator
         if not _orchestrator:
             return jsonify({"error": "Orchestrator not initialized"}), 503
-        
-        try:
-            # Get portfolio state
-            portfolio_report = await _orchestrator.portfolio_agent.get_detailed_portfolio_state()
-            if portfolio_report.status != "success":
-                return jsonify({"error": "Failed to get portfolio state"}), 500
-            
-            payload = portfolio_report.payload
-            metrics = payload.get("equity_metrics", {})
-            positions = payload.get("positions", [])
-            
-            # Generate report message
-            report_lines = ["📊 *Hourly Portfolio Report*\n"]
-            report_lines.append(f"💰 *Summary*")
-            report_lines.append(f"Equity: ${metrics.get('total_equity', 0):,.0f}")
-            report_lines.append(f"Return: {metrics.get('total_return_pct', 0):.2f}%")
-            report_lines.append(f"P&L: ${metrics.get('unrealized_pnl', 0):,.0f}")
-            report_lines.append(f"Positions: {len(positions)}")
-            report_lines.append(f"Drawdown: {metrics.get('drawdown_pct', 0):.2f}%\n")
-            
-            # Top 5 gainers
-            gainers = sorted([p for p in positions if p.get('unrealized_pnl_pct', 0) > 0], 
-                           key=lambda x: x.get('unrealized_pnl_pct', 0), reverse=True)[:5]
-            if gainers:
-                report_lines.append("📈 *Top Gainers*")
-                for pos in gainers:
-                    report_lines.append(f"{pos.get('symbol', '?')}: +{pos.get('unrealized_pnl_pct', 0):.2f}%")
-                report_lines.append("")
-            
-            # Top 5 losers
-            losers = sorted([p for p in positions if p.get('unrealized_pnl_pct', 0) < 0], 
-                          key=lambda x: x.get('unrealized_pnl_pct', 0))[:5]
-            if losers:
-                report_lines.append("📉 *Top Losers*")
-                for pos in losers:
-                    report_lines.append(f"{pos.get('symbol', '?')}: {pos.get('unrealized_pnl_pct', 0):.2f}%")
-            
-            message = "\n".join(report_lines)
-            
-            # Send via Telegram if available
-            if _orchestrator.telegram_agent and _orchestrator.telegram_agent.enabled:
-                chat_id = _orchestrator.telegram_agent.chat_id
-                if chat_id:
-                    await _orchestrator.telegram_agent.send_message(chat_id=chat_id, message=message)
-                    return jsonify({"status": "success", "message": "Hourly report sent via Telegram", "payload": payload})
-            
-            return jsonify({"status": "success", "message": "Hourly report generated (Telegram not configured)", "payload": payload})
-        except Exception as e:
-            logger.exception("Error generating hourly report")
-            return jsonify({"error": str(e)}), 500
+        return jsonify(_sanitize_floats({"status": "success", "data": _orchestrator.last_scan_meta}))
 
     @app.route("/api/dashboard/overview")
     async def api_dashboard_overview():
@@ -998,6 +1290,89 @@ def create_app():
         metrics = report.payload.get("equity_metrics", {})
         return jsonify(_sanitize_floats({"status": "success", "data": metrics}))
 
+    @app.route("/api/trades/history")
+    async def api_trades_history():
+        """
+        Return trade history with optional filters.
+
+        Query params:
+            period  : today | this_week | this_month | this_year  (default: all)
+            date    : YYYY-MM-DD  — override period with a specific day
+            symbol  : filter by ticker (e.g. ARM)
+            side    : BUY or SELL
+            limit   : max records to return (default 200)
+        """
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+
+        from datetime import date, timedelta, timezone
+
+        try:
+            period = request.args.get("period", "all").lower()
+            date_param = request.args.get("date")
+            symbol = request.args.get("symbol")
+            side = request.args.get("side")
+            try:
+                limit = int(request.args.get("limit", 200))
+            except (ValueError, TypeError):
+                limit = 200
+
+            now_utc = datetime.utcnow()
+            today_utc = now_utc.date()
+            start: Optional[datetime] = None
+            end: Optional[datetime] = None
+
+            if date_param:
+                try:
+                    d = date.fromisoformat(date_param)
+                    start = datetime(d.year, d.month, d.day, 0, 0, 0)
+                    end   = datetime(d.year, d.month, d.day, 23, 59, 59)
+                except ValueError:
+                    return jsonify({"error": f"Invalid date format: {date_param}. Use YYYY-MM-DD."}), 400
+            elif period == "today":
+                start = datetime(today_utc.year, today_utc.month, today_utc.day, 0, 0, 0)
+            elif period == "this_week":
+                week_start = today_utc - timedelta(days=today_utc.weekday())
+                start = datetime(week_start.year, week_start.month, week_start.day, 0, 0, 0)
+            elif period == "this_month":
+                start = datetime(today_utc.year, today_utc.month, 1, 0, 0, 0)
+            elif period == "this_year":
+                start = datetime(today_utc.year, 1, 1, 0, 0, 0)
+            # else "all" — no date bounds
+
+            repo = _orchestrator.portfolio_agent.repository
+            trades = repo.get_trades_by_date_range(start=start, end=end, symbol=symbol, side=side)
+            trades = trades[-limit:]  # newest N
+
+            # Build simple summary counts
+            buys  = sum(1 for t in trades if t.get("side", "").upper() == "BUY")
+            sells = sum(1 for t in trades if t.get("side", "").upper() == "SELL")
+            total_value = sum(
+                (t.get("quantity") or 0) * (t.get("price") or 0)
+                for t in trades
+            )
+
+            return jsonify(_sanitize_floats({
+                "status": "success",
+                "filter": {
+                    "period": date_param if date_param else period,
+                    "symbol": symbol,
+                    "side": side,
+                    "limit": limit,
+                },
+                "summary": {
+                    "count": len(trades),
+                    "buys": buys,
+                    "sells": sells,
+                    "total_trade_value": total_value,
+                },
+                "trades": trades,
+            }))
+        except Exception as e:
+            logger.error(f"api_trades_history error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
     @app.route("/api/market/watchlist")
     async def api_market_watchlist():
         """Return the current market scanner watchlist with ratings and latest prices (top 10)."""
@@ -1006,42 +1381,28 @@ def create_app():
             return jsonify({"error": "Orchestrator not initialized"}), 503
         try:
             scanner = _orchestrator.market_scanner_agent
+            data_agent = _orchestrator.data_agent
             watchlist = scanner.get_watchlist()  # [{symbol, theme, rating, rank}, ...]
             if not watchlist:
                 return jsonify({"status": "success", "data": [], "message": "Watchlist empty"})
-            # Sort by rank and take top 10
-            watchlist = sorted(watchlist, key=lambda x: x.get("rank", 9999))[:10]
             symbols = [item["symbol"] for item in watchlist]
-            # Fetch latest prices directly via yfinance (simple and reliable)
-            import yfinance as yf
-            prices = {}
-            for sym in symbols:
-                try:
-                    ticker = yf.Ticker(sym)
-                    # Try to get a recent quote; use fast info if available
-                    info = ticker.info
-                    price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
-                    if price is None:
-                        # Fallback to 1-day history
-                        hist = ticker.history(period="1d")
-                        if not hist.empty:
-                            price = hist['Close'].iloc[-1]
-                    prices[sym] = price
-                except Exception as e:
-                    logger.warning(f"yfinance failed for {sym}: {e}")
-                    prices[sym] = None
+            # Fetch latest prices (blocking I/O -> run in thread)
+            prices = await asyncio.to_thread(data_agent.fetch_latest_prices, symbols)
             # Combine
-            result = []
+            combined = []
             for item in watchlist:
                 sym = item["symbol"]
-                result.append({
+                combined.append({
                     "symbol": sym,
                     "theme": item.get("theme"),
                     "rating": item.get("rating"),
                     "rank": item.get("rank"),
                     "current_price": prices.get(sym)
                 })
-            return jsonify(_sanitize_floats({"status": "success", "data": result}))
+            # Sort by rank (ascending) and take top 10
+            combined.sort(key=lambda x: x["rank"] if isinstance(x["rank"], (int, float)) else 9999)
+            top10 = combined[:10]
+            return jsonify(_sanitize_floats({"status": "success", "data": top10}))
         except Exception as e:
             logger.exception("Error fetching watchlist")
             return jsonify({"error": str(e)}), 500
@@ -1056,6 +1417,27 @@ def create_app():
             await _orchestrator.scheduler_agent.handle_market_scan_trigger()
             return jsonify({"status": "success", "message": "Market scan triggered"})
         except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/admin/force_scan", methods=["POST"])
+    async def admin_force_scan():
+        """Force a market scan, bypassing market-hours check."""
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+        try:
+            report = await _orchestrator.market_scanner_agent.run(data_agent=_orchestrator.data_agent)
+            if report.status in ("success", "opportunity"):
+                event_data = report.payload.copy()
+                event_data["status"] = report.status
+                event_data["message"] = report.message
+                from finance_service.core.event_bus import Event, Events
+                await _orchestrator.event_bus.publish(Event(event_type=Events.MARKET_SCANNED, data=event_data))
+                return jsonify({"status": "success", "message": report.message, "symbols": event_data.get("symbols", [])})
+            else:
+                return jsonify({"status": report.status, "message": report.message})
+        except Exception as e:
+            logger.error(f"Force scan error: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
 
     return app

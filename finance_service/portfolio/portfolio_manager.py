@@ -27,15 +27,16 @@ class PortfolioManager:
     - Manage portfolio equity
     """
     
-    def __init__(self, initial_cash: float = 100000.0):
+    def __init__(self, initial_cash: float = 100000.0, repository: Optional[TradeRepository] = None):
         """
         Initialize portfolio manager.
         
         Args:
             initial_cash: Starting balance
+            repository: Optional TradeRepository (for testing with custom DB)
         """
         self.initial_cash = initial_cash
-        self.repository = TradeRepository()
+        self.repository = repository if repository is not None else TradeRepository()
         self.equity_calculator = EquityCalculator()
         self.updated_at = datetime.utcnow()
     

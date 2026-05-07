@@ -515,8 +515,7 @@ async def main():
     end = datetime.strptime(args.end_date, "%Y-%m-%d")
     
     config = YAMLConfigEngine(args.config_dir)
-    if not config.validate():
-        logger.error("Config validation failed"); sys.exit(1)
+    config.load()  # Load config
     
     runner = BacktestRunner(config, initial_capital=args.capital, strategy_name=args.strategy)
     

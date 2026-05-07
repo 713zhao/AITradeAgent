@@ -6,14 +6,29 @@ import json
 
 @dataclass
 class Position:
-    """Represents a stock position"""
+    """Represents a position (stock or option)"""
     symbol: str
     qty: float
     avg_cost: float
     current_price: float
+    # Option-specific fields (None for stock)
+    option_type: Optional[str] = None  # 'CALL' or 'PUT'
+    strike: Optional[float] = None
+    expiration: Optional[str] = None  # YYYY-MM-DD
+    delta: Optional[float] = None  # Greeks
+    gamma: Optional[float] = None
+    theta: Optional[float] = None
+    vega: Optional[float] = None
     
     @property
     def market_value(self) -> float:
+        """Calculate current market value.
+        For options, multiply by 100 (contract multiplier) if underlying price is per-share.
+        However, `current_price` for options should be per-contract price (dollar amount), not per-share.
+        We'll assume `current_price` is per-share for stocks and per-contract for options.
+        """
+        if self.option_type:
+            return self.qty * self.current_price  # qty = number of contracts, price = per-contract premium
         return self.qty * self.current_price
     
     @property

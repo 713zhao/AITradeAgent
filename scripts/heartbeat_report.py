@@ -33,6 +33,7 @@ DRAWDOWN_LIMIT_PCT = -20.0
 # ── Data fetchers ────────────────────────────────────────────────────────────
 
 def get_portfolio_state():
+    """Fetch portfolio state from the live service API."""
     try:
         resp = requests.get(f"{API_BASE}/portfolio/state", timeout=10)
         resp.raise_for_status()
@@ -43,6 +44,7 @@ def get_portfolio_state():
 
 
 def get_market_status():
+    """Check if HK and US markets are open."""
     try:
         now_hk = datetime.now(pytz.timezone("Asia/Hong_Kong"))
         is_weekday = now_hk.weekday() < 5
@@ -91,6 +93,7 @@ def get_symbol_names(symbols: list) -> dict:
 
 
 def get_backtest_result(strategy_name: str = None):
+    """Fetch the latest backtest result for a strategy."""
     if not BACKTEST_DB.exists():
         return None
     try:
@@ -103,9 +106,18 @@ def get_backtest_result(strategy_name: str = None):
                 "ORDER BY created_at DESC LIMIT 1",
                 (f"%{strategy_name}%",),
             )
+            row = cur.fetchone()
+            # If not found, fallback to "default" strategy results
+            if not row:
+                cur.execute(
+                    "SELECT * FROM backtest_runs WHERE run_name LIKE ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    ("%default%",),
+                )
+                row = cur.fetchone()
         else:
             cur.execute("SELECT * FROM backtest_runs ORDER BY created_at DESC LIMIT 1")
-        row = cur.fetchone()
+            row = cur.fetchone()
         conn.close()
         return dict(row) if row else None
     except Exception as e:
@@ -114,13 +126,17 @@ def get_backtest_result(strategy_name: str = None):
 
 
 def get_active_strategy():
+    """Get the active strategy name from config."""
     cfg = WORKSPACE / "config" / "finance.yaml"
     if not cfg.exists():
         return "sma50_trend_regime"
-    for line in cfg.read_text().splitlines():
-        stripped = line.strip()
-        if stripped.startswith("type:") and "sma" in stripped.lower():
-            return stripped.split(":", 1)[1].strip()
+    try:
+        for line in cfg.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("type:") and "sma" in stripped.lower():
+                return stripped.split(":", 1)[1].strip()
+    except Exception:
+        pass
     return "sma50_trend_regime"
 
 
@@ -136,6 +152,7 @@ def _fmt_pnl(upnl: float) -> str:
 
 
 def build_assessment_lines(bt: dict) -> list:
+    """Build assessment lines from backtest results."""
     cagr   = bt.get("cagr_pct", 0.0)
     sharpe = bt.get("sharpe_ratio", 0.0)
     dd     = bt.get("max_drawdown_pct", 0.0)
@@ -160,6 +177,7 @@ def build_assessment_lines(bt: dict) -> list:
 
 
 def build_recommendations(bt: dict) -> list:
+    """Build recommendations based on backtest results."""
     cagr   = bt.get("cagr_pct", 0.0)
     sharpe = bt.get("sharpe_ratio", 0.0)
     dd     = bt.get("max_drawdown_pct", 0.0)
@@ -179,6 +197,7 @@ def build_recommendations(bt: dict) -> list:
 
 
 def send_telegram(message: str) -> bool:
+    """Send message to Telegram if configured."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id   = os.getenv("TELEGRAM_CHAT_ID")
     if not bot_token or not chat_id:
@@ -197,6 +216,7 @@ def send_telegram(message: str) -> bool:
 
 
 def build_report(data: dict, market: dict) -> str:
+    """Build the rich portfolio report."""
     m            = data.get("equity_metrics", {})
     _raw_pos     = data.get("positions", [])
     last_updated = data.get("last_updated")
@@ -219,12 +239,12 @@ def build_report(data: dict, market: dict) -> str:
     upnl_sign      = "+" if unrealized_pnl > 0 else ""
 
     open_markets = []
-    if market["us"]:
+    if market.get("us"):
         open_markets.append("🇺🇸 US")
-    if market["hk"]:
+    if market.get("hk"):
         open_markets.append("🇭🇰 HK")
     market_str = (" & ".join(open_markets) + " market open") if open_markets else "markets closed"
-
+    
     now_utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
     if last_updated:
@@ -293,6 +313,7 @@ def build_report(data: dict, market: dict) -> str:
 
 
 def main():
+    """Main entry point."""
     data = get_portfolio_state()
     if data is None:
         print("[heartbeat] Could not fetch metrics from API — is the service running?", flush=True)
