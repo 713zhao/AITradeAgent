@@ -141,6 +141,7 @@ class TradeProposal:
     confidence: float
     target_price: Optional[float] = None
     stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
     timestamp: datetime = datetime.utcnow()
     rationale: Optional[List[str]] = None
     quantity: Optional[float] = None  # Number of shares/units to trade

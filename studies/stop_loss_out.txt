@@ -1,0 +1,28 @@
+NVDA: 26 entries
+PLTR: 27 entries
+TSM: 22 entries
+CRWD: 21 entries
+MSFT: 26 entries
+AAPL: 19 entries
+GOOGL: 30 entries
+AMZN: 30 entries
+META: 26 entries
+NFLX: 20 entries
+ADBE: 17 entries
+ASML: 28 entries
+AVGO: 25 entries
+CSCO: 30 entries
+INTU: 35 entries
+QCOM: 32 entries
+TMUS: 27 entries
+VRTX: 27 entries
+LQDA: 35 entries
+MSTR: 22 entries
+Study complete. Summary:
+                 mean     std  count  ...     max  win_rate  avg_holding_days
+strategy                              ...                                    
+atr            0.0275  0.1017    524  ...  0.3770    0.4828           16.8817
+fixed_pct      0.0043  0.0223    524  ...  0.0300    0.4294            2.6374
+partial_trail  0.1506  0.5048    524  ...  5.6117    0.3378           11.0210
+
+[3 rows x 8 columns]
