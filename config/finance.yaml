@@ -447,3 +447,26 @@ scanner:
   price_monitor_top_n: 50
   price_monitor_interval_minutes: 15
   discovery_interval: daily
+
+# LLM Configuration for AI-powered analysis
+llm:
+  enabled: true
+  provider: google
+  model: gemini-2.5-flash
+  api_key_env: GOOGLE_API_KEY
+  temperature: 0.3
+  max_tokens: 2000
+  timeout_seconds: 30
+  retry_count: 3
+  
+  # Module-specific settings
+  modules:
+    news_sentiment:
+      enabled: false
+      description: "Analyze news sentiment for market trends"
+    market_regime:
+      enabled: false
+      description: "Detect market regime using LLM analysis"
+    pattern_analysis:
+      enabled: false
+      description: "Analyze trading patterns with AI"
