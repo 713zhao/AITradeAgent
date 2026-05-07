@@ -512,11 +512,11 @@ llm:
   max_retries: 3
   modules:
     news_sentiment:
-      enabled: false
+      enabled: true
       model: gemini-2.5-flash
       temperature: 0.4
     market_regime:
-      enabled: false
+      enabled: true
       model: gemini-2.5-flash
       temperature: 0.3
 symbol_selector:
