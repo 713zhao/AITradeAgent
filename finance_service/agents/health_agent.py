@@ -261,6 +261,10 @@ class HealthAgent(Agent):
         quantity = result.get("quantity", 0)
         price = result.get("filled_price", result.get("price", 0))
         status = result.get("status", "??")
+        reason = result.get("reason", "")
+        realized_pnl = result.get("realized_pnl", 0.0)
+        pnl_pct = result.get("pnl_pct", 0.0)
+        hold_days = result.get("hold_days", 0)
         
         # Get current portfolio info for context (with timeout to avoid blocking)
         portfolio_summary = "Portfolio info unavailable"

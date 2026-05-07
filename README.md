@@ -168,3 +168,32 @@ pkill -f run_finance_service.py
 - The project uses a single dependency file: `requirements.txt`.
 - `start.sh` writes PID to `logs/finance.pid`. Use `systemctl --user restart aitrade.service` instead when systemd is managing the service.
 - Scan summaries are sent to Telegram when Telegram config is enabled.
+
+## Hourly Portfolio Report
+
+A background daemon automatically generates and sends hourly portfolio reports while any market is open.
+
+**What's included:**
+- Current equity, cash position, and P&L
+- Open positions with unrealized gains/losses
+- Strategy performance assessment (vs. 20% CAGR, 1.0 Sharpe ratio targets)
+- Recommended actions based on backtest metrics
+- Data freshness indicator
+- Telegram notifications (optional)
+
+**How it works:**
+- `scripts/progress_monitor_daemon.py` — background scheduler process
+- `scripts/heartbeat_report.py` — generates the rich portfolio report
+- Runs every 60 minutes during market hours (HK: 09:00-16:00, US: 09:00-16:00 ET)
+
+**Manual test:**
+```bash
+python3 scripts/heartbeat_report.py
+```
+
+**Troubleshooting:**
+If the hourly report stops working, the most common cause is **merge conflicts** in `scripts/heartbeat_report.py`. This manifests as import/syntax errors. To fix:
+1. Check file for git merge markers: `grep -n "<<<<<<< HEAD\|=======\|>>>>>>> master" scripts/heartbeat_report.py`
+2. Resolve conflicts, keeping the richer version from the `master` branch
+3. Verify syntax: `python3 -m py_compile scripts/heartbeat_report.py`
+4. Test: `python3 scripts/heartbeat_report.py`
