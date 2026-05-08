@@ -48,6 +48,7 @@ class Position:
     metadata: Dict[str, Any] = field(default_factory=dict)
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
+    usd_fx_rate: Optional[float] = None
     
     @property
     def entry_price(self) -> float:
@@ -75,6 +76,14 @@ class Position:
         """Total cost of position (avg_cost * qty), normalised to USD."""
         return self.quantity * self.avg_cost / self._fx(self.symbol)
     
+    def market_value_usd(self) -> float:
+        """Alias for market_value() — normalized to USD."""
+        return self.market_value()
+
+    def cost_basis_usd(self) -> float:
+        """Alias for cost_basis() — normalized to USD."""
+        return self.cost_basis()
+
     def unrealized_pnl(self) -> float:
         """Unrealized profit/loss."""
         return self.market_value() - self.cost_basis()

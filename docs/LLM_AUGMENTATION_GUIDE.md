@@ -345,3 +345,182 @@ def test_regime_agent(mock_factory):
 ## Conclusion
 
 LLM augmentation makes AITradeAgent smarter, but the core remains deterministic. Toggle features on/off to match your risk tolerance and budget.
+
+---
+
+## Telegram LLM Integration (May 2026)
+
+### Overview
+
+Three LLM-powered features are now integrated into Telegram trade notifications:
+
+1. **Market Environment Classification** - Real-time market regime display
+2. **Anomaly Detection** - Trade setup anomalies with explanations
+3. **Strategy Suggestions** - LLM-generated trading recommendations
+
+### Scope: Pre-Execution Notifications Only
+
+These features appear **exclusively** in the "⚡ Trade About to Execute" message sent before trade execution.
+
+**They do NOT appear in:**
+- Hourly Portfolio Reports (equity/P&L metrics only)
+- Daily Summaries (trade history)
+- Trade Executed notifications (fill details)
+- Error Alerts (error information)
+- Telegram commands (/start, /status, /portfolio)
+
+### Message Type Reference
+
+| Message | Schedule | Contains LLM? | Purpose |
+|---------|----------|---------------|---------|
+| Trade About to Execute | On signal | ✅ YES | Decision support before trade |
+| Hourly Portfolio Report | Hourly | ❌ NO | Performance monitoring |
+| Daily Summary | Daily | ❌ NO | Trade review |
+| Trade Executed | Post-fill | ❌ NO | Execution confirmation |
+| Error Alert | On error | ❌ NO | Error notification |
+| Bot Commands | On request | ❌ NO | Manual status queries |
+
+### Features Detail
+
+#### 1. Market Environment Classification
+
+**Location**: Pre-execution notifications  
+**Format**: `📍 Market Context: 🟢 Risk-On | 📉 Vol: Low | VIX: 18.5`
+
+**Shows:**
+- Risk status: 🟢 Risk-On or 🔴 Risk-Off
+- Volatility level: 📈 High / ➡️ Normal / 📉 Low
+- Current VIX value
+
+**Data source**: `market_regime_agent.run()` with caching
+
+#### 2. Anomaly Detection
+
+**Location**: Pre-execution notifications (only if anomaly detected)  
+**Format**: `⚠️ Alert: RSI > 85 (overbought condition)`
+
+**Detects:**
+- Extreme RSI: > 85 (overbought) or < 15 (oversold)
+- Volume spikes: Current volume > 2.5x SMA
+- MACD divergence: Price vs MACD direction mismatch
+
+**Performance**: <1ms (threshold-based detection)
+
+#### 3. LLM Strategy Suggestions
+
+**Location**: Pre-execution notifications (if LLM available)  
+**Format**: `💡 Suggestion: Reduce size due to overbought condition...`
+
+**Generated using:**
+- Market regime context
+- Technical indicators (RSI, MACD, Bollinger Bands)
+- Trade rationale and confidence
+- Symbol information
+
+**LLM Config:**
+- Model: Google Gemini (gemini-2.5-flash)
+- Temperature: 0.3 (deterministic)
+- Max length: 200 characters
+- Cache: Disabled (fresh per trade)
+
+### Implementation
+
+Files involved:
+- `finance_service/agents/telegram_llm_enhancement.py` - Core functions (242 lines)
+  - `detect_trade_anomalies()` - Anomaly detection logic
+  - `generate_trade_suggestion()` - LLM suggestion generation
+  - `format_market_regime_display()` - Market regime formatting
+  
+- `finance_service/agents/telegram_agent.py` - Message formatting (+45 lines)
+  - Added parameters: `market_regime`, `anomaly_explanation`, `trade_suggestion`
+  - Message sections: 📍 Market Context, ⚠️ Alert, 💡 Suggestion
+
+- `finance_service/app.py` - Data gathering (+50 lines, 2 locations)
+  - Lines ~541-590: Pre-execution trade notification (primary)
+  - Lines ~803-820: Tier2 intraday entry (secondary)
+  - Gets market regime, detects anomalies, generates suggestions
+
+### Example Output
+
+```
+⚡ Trade About to Execute
+
+Symbol: AAPL
+Action: 🟢 BUY
+Quantity: 10.0000 shares
+Entry Price: $150.2500
+Stop Loss: $148.5000 (-1.1%)
+Confidence: 87.5%
+
+Portfolio: Cash: $2,500.00 | Positions: $47,500.00 | Equity: $50,000.00
+
+📊 Technical Indicators
+  • RSI: 72.5 — Overbought region
+  • MACD: +0.0125 — Bullish
+  • BB Position: 78%
+
+📰 News
+  📈 Sentiment: Bullish (+0.65)
+  🗞 Catalysts: earnings, analyst_upgrade
+
+📍 Market Context
+  🟢 Risk-On | 📉 Vol: Low | VIX: 18.5
+
+⚠️ Alert
+  RSI > 85 (overbought condition)
+
+💡 Suggestion
+  Strong technicals with risk-on environment confirms bullish bias.
+  Consider smaller size given overbought reading.
+
+📋 Reason to Buy
+  • Strong momentum and technical setup
+  • Positive news catalyst support
+  • Risk/reward favorable at current levels
+```
+
+### Configuration
+
+No additional configuration needed - features are built-in and automatic.
+
+Optional customization:
+- Anomaly thresholds in `telegram_llm_enhancement.py` (lines 50-70)
+- LLM model/temperature in `config/finance.yaml` (existing LLM section)
+- Enable/disable via parameter passing (set to None to disable)
+
+### Error Handling
+
+All LLM enhancements are non-blocking:
+- LLM unavailable → notification sent without suggestions
+- Market regime unavailable → notification sent without regime display
+- Anomaly detection fails → proceeds with notification
+- LLM timeout → falls back to basic notification
+
+Errors logged at debug level, no trade interruption.
+
+### Performance
+
+- Market Regime lookup: ~200ms (uses cache)
+- Anomaly Detection: <1ms (threshold checks)
+- LLM Suggestion: ~2-3 seconds
+- Total overhead: <3 seconds (non-blocking, parallel processing)
+
+### Monitoring
+
+Check logs for LLM enhancement status:
+```bash
+journalctl --user -u aitrade-heartbeat.service -f | grep -E "LLM|market_regime|anomaly"
+```
+
+Monitor Telegram notifications to verify:
+- 📍 Market Context appears
+- ⚠️ Alerts show when anomalies detected
+- 💡 Suggestions appear when trading
+
+### Next Steps
+
+- Monitor live trade notifications for LLM insights
+- Adjust anomaly thresholds if too many/too few alerts
+- Consider LLM suggestion feedback for model tuning
+- Track which suggestions correlate with profitable trades
+

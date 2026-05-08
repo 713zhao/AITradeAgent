@@ -17,6 +17,7 @@ import pandas as pd
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import get_event_bus
 from finance_service.core.yaml_config import YAMLConfigEngine
+from finance_service.utils.llm_analysis_logger import get_llm_analysis_logger
 from finance_service.agents.data_agent import DataAgent
 from finance_service.agents.market_scanner_agent import MarketScannerAgent
 from finance_service.agents.market_regime_agent import MarketRegimeAgent
@@ -227,6 +228,20 @@ class SymbolSelectorAgent(Agent):
             self._cache = result
             self._cache_key = cache_key
             self._cache_expiry = datetime.utcnow() + timedelta(hours=self.cache_ttl_hours)
+            
+            # Log ranking results
+            try:
+                llm_logger = get_llm_analysis_logger()
+                llm_logger.log_symbol_selector_ranking(
+                    market=market if market in ['US', 'HK'] else 'US',
+                    candidate_count=len(candidate_data_list),
+                    ranked_symbols=rankings[:10],  # Top 10
+                    llm_token_usage={'total_tokens': tokens_used} if tokens_used else None,
+                    ranking_data={'market_context': market_context, 'llm_summary': llm_summary}
+                )
+            except Exception as _log_err:
+                logger.debug(f"Failed to log symbol selector ranking: {_log_err}")
+            
 
             return AgentReport(
                 agent_id=self.agent_id,

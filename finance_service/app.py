@@ -538,6 +538,49 @@ class MainOrchestratorAgent:
                                     _pf_equity = _em.get("total_equity")
                         except Exception:
                             pass
+                        # ── LLM Enhancements: Market Regime, Anomaly Detection, Trade Suggestions ──
+                        _market_regime = None
+                        _anomaly_explanation = None
+                        _trade_suggestion = None
+
+                        try:
+                            # Get current market regime
+                            if self.market_regime_agent:
+                                regime_report = await asyncio.wait_for(
+                                    self.market_regime_agent.run({"force_refresh": False}),
+                                    timeout=2.0
+                                )
+                                if regime_report and regime_report.status == "success":
+                                    _market_regime = regime_report.payload
+
+                            # Detect anomalies in the trade setup
+                            from finance_service.agents.telegram_llm_enhancement import (
+                                detect_trade_anomalies,
+                                generate_trade_suggestion
+                            )
+
+                            _anomaly_result = detect_trade_anomalies(
+                                indicators_snapshot=_snap,
+                                target_price=proposal.get("target_price"),
+                                current_price=_snap.current_price if _snap else None
+                            )
+                            if _anomaly_result.has_anomaly:
+                                _anomaly_explanation = _anomaly_result.explanation
+
+                            # Generate LLM trade suggestion
+                            if self.regime_agent and self.regime_agent._llm_manager:
+                                _trade_suggestion = await generate_trade_suggestion(
+                                    llm_manager=self.regime_agent._llm_manager,
+                                    symbol=proposal.get("symbol", "?"),
+                                    action=proposal.get("action", "BUY"),
+                                    confidence=proposal.get("confidence", 0.0),
+                                    market_regime=_market_regime,
+                                    indicators_snapshot=_snap,
+                                    rationale=proposal.get("rationale")
+                                )
+                        except Exception as _llm_err:
+                            logger.debug(f"LLM enhancement failed (non-blocking): {_llm_err}")
+
                         await self.telegram_agent.send_pre_execution_notification(
                             symbol=proposal.get("symbol", "?"),
                             action=proposal.get("action", "BUY"),
@@ -767,6 +810,9 @@ class MainOrchestratorAgent:
                             company_name=_company_name,
                             portfolio_cash=_pf_cash,
                             portfolio_equity=_pf_equity,
+            market_regime=_market_regime,
+            anomaly_explanation=_anomaly_explanation,
+            trade_suggestion=_trade_suggestion,
                         )
                     except Exception as _e:
                         logger.warning(f"[Tier2-Entry] Pre-execution notification failed: {_e}")

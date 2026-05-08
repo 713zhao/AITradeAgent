@@ -142,6 +142,9 @@ class TelegramAgent(Agent):
         company_name: str = None,
         portfolio_cash: float = None,
         portfolio_equity: float = None,
+        market_regime: dict = None,
+        anomaly_explanation: str = None,
+        trade_suggestion: str = None,
     ):
         """Send a Telegram notification before a trade is executed, with full technical detail."""
         if not self.enabled or not self.bot:
@@ -295,6 +298,21 @@ class TelegramAgent(Agent):
 
         if news_lines:
             lines += ["", "📰 *News:*"] + news_lines
+
+        # ── Market Regime ──────────────────────────────────────────
+        if market_regime:
+            from finance_service.agents.telegram_llm_enhancement import format_market_regime_display
+            regime_display = format_market_regime_display(market_regime)
+            if regime_display:
+                lines += ["", "📍 *Market Context:*", f"  {regime_display}"]
+
+        # ── Anomalies & Warnings ───────────────────────────────────
+        if anomaly_explanation:
+            lines += ["", "⚠️ *Alert:*", f"  {anomaly_explanation}"]
+
+        # ── LLM Suggestion ──────────────────────────────────────────
+        if trade_suggestion:
+            lines += ["", trade_suggestion]
 
         lines += ["", "📋 *Reason to Buy:*", reasons]
 

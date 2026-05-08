@@ -205,6 +205,47 @@ The diagram shows the event-driven pipeline with these key timing patterns:
 
 ---
 
+### TelegramLLM Enhancement Components (May 2026 - Real-time Notifications ✅)
+
+**File:** `finance_service/agents/telegram_llm_enhancement.py`
+
+| Component | Purpose |
+|-----------|---------|
+| `detect_trade_anomalies()` | ✅ Detects RSI extremes (>85 overbought, <15 oversold), volume spikes (>2.5x avg), MACD divergence |
+| `generate_trade_suggestion()` | ✅ LLM-powered trade context analysis (Gemini 2.5-flash, temperature: 0.3) |
+| `format_market_regime_display()` | ✅ Formats market regime with emoji (🟢 Risk-On/🔴 Risk-Off), volatility level, VIX |
+| `AnomalyDetection` dataclass | ✅ Container for anomaly detection results |
+
+**Integration Flow:**
+```
+Pre-execution order → RISK_CHECK_COMPLETE (approved)
+  ↓
+app.py line 541-590:
+  • Fetch MarketRegimeAgent data (regime, VIX, SMA trends)
+  • Call detect_trade_anomalies(indicators_snapshot)
+  • Call generate_trade_suggestion(llm_manager, symbol, action, confidence, market_regime)
+  ↓
+telegram_agent.send_pre_execution_notification() receives enriched data:
+  • 📍 Market Context: regime display + market conditions
+  • ⚠️ Alert: anomaly explanation (if any)
+  • 💡 Suggestion: LLM-generated trade reasoning
+```
+
+**LLM Enhancement Details:**
+- **LLM Model:** Gemini 2.5-flash (Google AI, temperature: 0.3 for consistency)
+- **Non-blocking:** Failures via try/except logger.debug (execution proceeds regardless)
+- **Caching:** Market regime cached 60-min TTL (60-min refresh via PRE_SCAN_CONTEXT_REFRESH)
+- **Performance:** ~300-500 tokens per call (~1-2 sec latency), parallelized with execution
+- **Scope:** Pre-execution notifications ONLY (hourly reports, executed trades do NOT include LLM)
+
+**Telegram Message Enrichment Example:**
+- Before: Symbol, quantity, price, stop-loss, confidence, all technical indicators, news sentiment
+- After: + Market regime (🟢 Risk-On, VIX 15.2) + Anomaly alerts (⚠️ Volume spike 3.3x) + LLM suggestion (💡 "Setup confirms...")
+
+> **Related Docs:** [TELEGRAM_LLM_IMPLEMENTATION.md](../TELEGRAM_LLM_IMPLEMENTATION.md) · [TELEGRAM_MESSAGE_TYPES.md](../TELEGRAM_MESSAGE_TYPES.md)
+
+---
+
 ## Event Bus — All Events
 
 ```

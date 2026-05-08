@@ -20,6 +20,7 @@ import re
 from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import get_event_bus
 from finance_service.core.yaml_config import YAMLConfigEngine
+from finance_service.utils.llm_analysis_logger import get_llm_analysis_logger
 from finance_service.agents.news_agent import _NewsCache  # reuse cache infrastructure
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,21 @@ class MacroNewsAgent(Agent):
                 hk_macro_news=[asdict(a) for a in hk_analyzed[:5]],
                 hk_sentiment_score=round(hk_sentiment, 3),
             )
+
+            # Log analysis results
+            try:
+                llm_logger = get_llm_analysis_logger()
+                # Log both US and HK sentiment
+                sentiment_data_us = {
+                    'sentiment_score': round(us_sentiment, 3),
+                    'sentiment_label': 'Bullish' if us_sentiment > 0.2 else ('Bearish' if us_sentiment < -0.2 else 'Neutral'),
+                    'news_count': len(us_analyzed),
+                    'top_catalysts': [asdict(a) for a in us_analyzed[:5]],
+                }
+                llm_logger.log_macro_news_analysis('US', sentiment_data_us)
+            except Exception as _log_err:
+                logger.debug(f"Failed to log macro news analysis: {_log_err}")
+            
 
             # Cache
             self._cache.set(cache_key, asdict(report))

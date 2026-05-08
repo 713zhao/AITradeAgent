@@ -19,6 +19,7 @@ from finance_service.agents.agent_interface import Agent, AgentReport
 from finance_service.core.event_bus import get_event_bus
 from finance_service.core.yaml_config import YAMLConfigEngine
 from finance_service.agents.data_agent import DataAgent
+from finance_service.utils.llm_analysis_logger import get_llm_analysis_logger
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +231,15 @@ class MarketRegimeAgent(Agent):
             # Cache result
             self._cache = payload_out
             self._cache_expiry = datetime.utcnow() + timedelta(minutes=self.cache_ttl_minutes)
+
+            # Log analysis results
+            try:
+                llm_logger = get_llm_analysis_logger()
+                market = "US"  # Default to US
+                llm_logger.log_market_regime_analysis(market, asdict(regime_us), indices_dict)
+            except Exception as _log_err:
+                logger.debug(f"Failed to log market regime analysis: {_log_err}")
+            
 
             return AgentReport(
                 agent_id=self.agent_id,
