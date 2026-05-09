@@ -601,3 +601,267 @@ ID: `{analysis.trade_id}`
             
         except Exception as e:
             logger.debug(f"Telegram notification failed: {e}")
+
+    # ==================== LAYER 2: WEEKLY PATTERN ANALYSIS ====================
+
+    async def layer2_analyze_patterns(self, week_ending_str: str) -> Dict[str, 'TradeAnalysisLayer2']:
+        """
+        Analyze trading patterns from a full week using LLM.
+        Identifies root causes, success factors, and recommendations.
+        
+        Args:
+            week_ending_str: ISO format date string for end of week (e.g., "2026-05-09")
+            
+        Returns:
+            Dictionary mapping pattern_type -> TradeAnalysisLayer2
+        """
+        try:
+            # Import here to avoid circular dependency
+            from finance_service.ml.learning_models import (
+                aggregate_trades_by_pattern, 
+                insert_trade_analysis_layer2,
+                TradeAnalysisLayer2,
+                migrate_learning_layer2
+            )
+            
+            logger.info(f"📊 Starting Layer 2 analysis for week ending {week_ending_str}")
+            
+            # Ensure Layer 2 table exists
+            db = self.get_db()
+            if db:
+                migrate_learning_layer2(db)
+            
+            # Aggregate Layer 1 trades by pattern type
+            aggregated = aggregate_trades_by_pattern(db, week_ending_str)
+            
+            if not aggregated:
+                logger.warning(f"No trades found for week ending {week_ending_str}")
+                return {}
+            
+            results = {}
+            
+            # Analyze each pattern separately
+            for pattern_type, stats in aggregated.items():
+                logger.info(f"🔍 Analyzing pattern: {pattern_type} ({stats['sample_size']} trades)")
+                
+                # Skip patterns with insufficient sample size
+                if stats['sample_size'] < 2:
+                    logger.warning(f"⏭️  Skipping {pattern_type}: only {stats['sample_size']} trade(s)")
+                    continue
+                
+                # Prepare context for LLM
+                analysis_result = await self._analyze_single_pattern_layer2(
+                    pattern_type,
+                    week_ending_str,
+                    stats,
+                    db
+                )
+                
+                if analysis_result:
+                    results[pattern_type] = analysis_result
+                    
+                    # Persist to database
+                    if db:
+                        insert_trade_analysis_layer2(db, analysis_result)
+                    
+                    # Send coaching notification
+                    await self._notify_telegram_layer2(analysis_result)
+            
+            logger.info(f"✅ Layer 2 analysis complete: {len(results)} patterns analyzed")
+            
+            # Publish LEARNING_ANALYSIS_COMPLETE event
+            event_bus = get_event_bus()
+            if event_bus:
+                await event_bus.publish(
+                    Events.LEARNING_ANALYSIS_COMPLETE,
+                    {'week_ending': week_ending_str, 'patterns_analyzed': len(results)}
+                )
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Layer 2 analysis failed: {e}", exc_info=True)
+            return {}
+
+    async def _analyze_single_pattern_layer2(
+        self, 
+        pattern_type: str, 
+        week_ending_str: str,
+        stats: Dict[str, Any],
+        db
+    ) -> Optional['TradeAnalysisLayer2']:
+        """Analyze a single pattern type using LLM."""
+        try:
+            from finance_service.ml.learning_models import TradeAnalysisLayer2
+            
+            # Load prompt template
+            prompt_template = self._load_prompt_template_layer2()
+            if not prompt_template:
+                logger.error("Failed to load Layer 2 prompt template")
+                return None
+            
+            # Format trade details for display
+            winning_trades_details = self._format_trades_for_llm(
+                stats.get('trades', [])[:3], 
+                filter_score_min=6
+            )
+            losing_trades_details = self._format_trades_for_llm(
+                stats.get('trades', [])[-3:], 
+                filter_score_max=4
+            )
+            
+            # Calculate additional metrics
+            min_score = min([t[1] for t in stats.get('trades', [])] or [0])
+            max_score = max([t[1] for t in stats.get('trades', [])] or [0])
+            
+            # Substitute variables in prompt
+            prompt = self._format_layer2_analysis_prompt(
+                prompt_template,
+                pattern_type=pattern_type,
+                week_start=(datetime.fromisoformat(week_ending_str) - timedelta(days=6)).isoformat(),
+                week_ending=week_ending_str,
+                sample_size=stats['sample_size'],
+                win_rate=stats['win_rate'],
+                winning_trades=stats['winning_trades'],
+                losing_trades=stats['losing_trades'],
+                avg_entry_score=stats['avg_entry_score'],
+                avg_skill_ratio=stats['avg_skill_ratio'],
+                min_entry_score=min_score,
+                max_entry_score=max_score,
+                winning_trades_details=winning_trades_details,
+                losing_trades_details=losing_trades_details,
+                neutral_trades_details="[Neutral trades omitted for brevity]"
+            )
+            
+            # Call LLM with 10 second timeout for weekly analysis
+            llm_response = await asyncio.wait_for(
+                self._call_gemini_for_layer2_analysis(prompt),
+                timeout=10.0
+            )
+            
+            if not llm_response:
+                logger.warning(f"Empty LLM response for pattern {pattern_type}")
+                return None
+            
+            # Parse JSON response
+            json_data = self._parse_json_response(llm_response)
+            if not json_data:
+                logger.warning(f"Failed to parse JSON for pattern {pattern_type}")
+                return None
+            
+            # Create TradeAnalysisLayer2 object
+            analysis = TradeAnalysisLayer2(
+                pattern_type=pattern_type,
+                week_ending=datetime.fromisoformat(week_ending_str),
+                sample_size=stats['sample_size'],
+                win_rate=stats['win_rate'],
+                avg_win_pct=stats['avg_entry_score'],  # Using entry score as proxy
+                avg_loss_pct=100 - stats['win_rate'],
+                profit_factor=max(1.0, stats['win_rate'] / max(1, 100 - stats['win_rate'])),
+                expectancy=(stats['win_rate'] * stats['avg_entry_score']) + 
+                           ((100 - stats['win_rate']) * (100 - stats['avg_entry_score'])),
+                root_causes=json_data.get('root_causes', []),
+                success_factors=json_data.get('success_factors', []),
+                recommendations=json_data.get('recommendations', []),
+                llm_response=json_data
+            )
+            
+            logger.info(f"✅ Layer 2 analysis for {pattern_type}: {analysis.win_rate}% win rate")
+            return analysis
+            
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱️ Layer 2 LLM timeout for pattern {pattern_type}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to analyze pattern {pattern_type}: {e}")
+            return None
+
+    def _load_prompt_template_layer2(self) -> Optional[str]:
+        """Load Layer 2 analysis prompt template."""
+        try:
+            template_path = Path(__file__).parent.parent / "ml" / "trade_analysis_layer2.md"
+            if template_path.exists():
+                with open(template_path, 'r') as f:
+                    return f.read()
+            else:
+                logger.warning(f"Layer 2 prompt template not found at {template_path}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to load Layer 2 prompt template: {e}")
+            return None
+
+    def _format_layer2_analysis_prompt(self, template: str, **kwargs) -> str:
+        """Format Layer 2 LLM prompt by substituting variables."""
+        formatted = template
+        for key, value in kwargs.items():
+            placeholder = "{" + key.upper() + "}"
+            formatted = formatted.replace(placeholder, str(value))
+        return formatted
+
+    async def _call_gemini_for_layer2_analysis(self, prompt: str) -> Optional[str]:
+        """Call Gemini 2.5-pro for Layer 2 analysis (more capable model)."""
+        try:
+            if not hasattr(self, 'gemini_client') or not self.gemini_client:
+                logger.warning("Gemini client not available")
+                return None
+            
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.5-pro-exp-05-21",
+                contents=prompt,
+                config=self.gemini_generation_config
+            )
+            
+            return response.text if response else None
+            
+        except Exception as e:
+            logger.error(f"Layer 2 Gemini API error: {e}")
+            return None
+
+    def _format_trades_for_llm(self, trades: List, filter_score_min: int = 0, filter_score_max: int = 10) -> str:
+        """Format trade details for LLM display."""
+        formatted_trades = []
+        for i, trade in enumerate(trades[:5], 1):  # Limit to 5 trades
+            # trade is a tuple: (pattern_type, entry_score, skill_ratio, mistakes)
+            if len(trade) >= 2:
+                entry_score = trade[1]
+                if filter_score_min <= entry_score <= filter_score_max:
+                    formatted_trades.append(f"  Trade {i}: Entry Score {entry_score:.1f}/10")
+        
+        return "\n".join(formatted_trades) if formatted_trades else "  (None in this range)"
+
+    async def _notify_telegram_layer2(self, analysis: 'TradeAnalysisLayer2') -> None:
+        """Send Layer 2 analysis summary via Telegram."""
+        try:
+            if not hasattr(self, 'telegram_agent') or not self.telegram_agent:
+                return
+            
+            # Format message
+            root_causes_text = "\n".join([f"• {rc}" for rc in analysis.root_causes[:3]])
+            success_factors_text = "\n".join([f"• {sf}" for sf in analysis.success_factors[:3]])
+            
+            message = f"""
+📈 **Weekly Pattern Analysis: {analysis.pattern_type.replace('_', ' ').title()}**
+
+📊 **Statistics** (Week of {analysis.week_ending.isoformat()})
+🎯 Win Rate: {analysis.win_rate:.0f}%
+📈 Profit Factor: {analysis.profit_factor:.2f}
+🔢 Sample Size: {analysis.sample_size} trades
+
+🔴 **Root Causes of Failure:**
+{root_causes_text}
+
+🟢 **Success Factors:**
+{success_factors_text}
+
+💡 **Key Coaching Notes:**
+{analysis.llm_response.get('coaching_notes', 'Continue monitoring this pattern')}
+
+⚡ **Next Week Focus:**
+{analysis.llm_response.get('next_week_focus', 'Apply recommendations above')}
+"""
+            
+            await self.telegram_agent.send_message(message)
+            
+        except Exception as e:
+            logger.debug(f"Layer 2 Telegram notification failed: {e}")
+

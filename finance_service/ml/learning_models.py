@@ -261,3 +261,215 @@ def query_trade_analysis_by_symbol(db, symbol: str, limit: int = 100) -> List[Di
     except Exception as e:
         print(f"Failed to query trade analyses: {e}")
         return []
+
+
+# ==================== LAYER 2: WEEKLY PATTERN ANALYSIS ====================
+
+def migrate_learning_layer2(db) -> bool:
+    """Ensure trade_analysis_layer2 table exists with proper schema."""
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_analysis_layer2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_type TEXT NOT NULL,
+                week_ending TEXT NOT NULL,
+                sample_size INTEGER NOT NULL,
+                win_rate REAL NOT NULL CHECK (win_rate >= 0 AND win_rate <= 100),
+                avg_win_pct REAL NOT NULL,
+                avg_loss_pct REAL NOT NULL,
+                profit_factor REAL NOT NULL,
+                expectancy REAL NOT NULL,
+                root_causes TEXT NOT NULL DEFAULT '[]',
+                success_factors TEXT NOT NULL DEFAULT '[]',
+                recommendations TEXT NOT NULL DEFAULT '[]',
+                llm_response TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(pattern_type, week_ending)
+            )
+        ''')
+        
+        # Create indexes for efficient queries
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer2_pattern ON trade_analysis_layer2(pattern_type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer2_week ON trade_analysis_layer2(week_ending)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer2_created ON trade_analysis_layer2(created_at)')
+        
+        db.connection.commit()
+        print("✅ Layer 2 migration successful")
+        return True
+    except Exception as e:
+        print(f"⚠️ Layer 2 migration error: {e}")
+        return False
+
+
+def insert_trade_analysis_layer2(db, analysis: TradeAnalysisLayer2) -> bool:
+    """Insert Layer 2 analysis result into database."""
+    try:
+        cursor = db.connection.cursor()
+        data = analysis.to_db_tuple()
+        
+        cursor.execute('''
+            INSERT OR REPLACE INTO trade_analysis_layer2
+            (pattern_type, week_ending, sample_size, win_rate, avg_win_pct, avg_loss_pct,
+             profit_factor, expectancy, root_causes, success_factors, recommendations, llm_response, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', data)
+        
+        db.connection.commit()
+        print(f"✅ Layer 2 analysis inserted: {analysis.pattern_type} for week {analysis.week_ending.isoformat()}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to insert Layer 2 analysis: {e}")
+        return False
+
+
+def get_trade_analysis_layer2(db, pattern_type: str, week_ending_str: str) -> Optional[Dict[str, Any]]:
+    """Retrieve Layer 2 analysis for specific pattern and week."""
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute('''
+            SELECT id, pattern_type, week_ending, sample_size, win_rate, avg_win_pct, 
+                   avg_loss_pct, profit_factor, expectancy, root_causes, success_factors,
+                   recommendations, llm_response, created_at
+            FROM trade_analysis_layer2
+            WHERE pattern_type = ? AND week_ending = ?
+        ''', (pattern_type, week_ending_str))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return {
+            'id': row[0],
+            'pattern_type': row[1],
+            'week_ending': row[2],
+            'sample_size': row[3],
+            'win_rate': row[4],
+            'avg_win_pct': row[5],
+            'avg_loss_pct': row[6],
+            'profit_factor': row[7],
+            'expectancy': row[8],
+            'root_causes': json.loads(row[9]),
+            'success_factors': json.loads(row[10]),
+            'recommendations': json.loads(row[11]),
+            'llm_response': json.loads(row[12]),
+            'created_at': row[13]
+        }
+    except Exception as e:
+        print(f"Failed to retrieve Layer 2 analysis: {e}")
+        return None
+
+
+def query_trade_analysis_layer2_recent(db, days: int = 30, min_sample_size: int = 3) -> List[Dict[str, Any]]:
+    """Query recent Layer 2 analyses with sufficient statistics."""
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute('''
+            SELECT pattern_type, week_ending, sample_size, win_rate, avg_win_pct, 
+                   avg_loss_pct, profit_factor, expectancy, root_causes, success_factors,
+                   recommendations, llm_response, created_at
+            FROM trade_analysis_layer2
+            WHERE datetime(created_at) > datetime('now', ? || ' days')
+            AND sample_size >= ?
+            ORDER BY created_at DESC
+        ''', (f'-{days}', min_sample_size))
+        
+        rows = cursor.fetchall()
+        results = []
+        for row in rows:
+            results.append({
+                'pattern_type': row[0],
+                'week_ending': row[1],
+                'sample_size': row[2],
+                'win_rate': row[3],
+                'avg_win_pct': row[4],
+                'avg_loss_pct': row[5],
+                'profit_factor': row[6],
+                'expectancy': row[7],
+                'root_causes': json.loads(row[8]),
+                'success_factors': json.loads(row[9]),
+                'recommendations': json.loads(row[10]),
+                'llm_response': json.loads(row[11]),
+                'created_at': row[12]
+            })
+        
+        return results
+    except Exception as e:
+        print(f"Failed to query Layer 2 analyses: {e}")
+        return []
+
+
+def aggregate_trades_by_pattern(db, week_ending_str: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Aggregate all Layer 1 trades from a week by pattern type.
+    Returns statistics needed for Layer 2 analysis.
+    """
+    try:
+        cursor = db.connection.cursor()
+        
+        # Get all trades from the week
+        cursor.execute('''
+            SELECT pattern_type, entry_score, skill_vs_luck_ratio, mistakes
+            FROM trade_analysis
+            WHERE DATE(created_at) BETWEEN 
+                DATE(?, '-6 days') AND DATE(?)
+            ORDER BY pattern_type
+        ''', (week_ending_str, week_ending_str))
+        
+        rows = cursor.fetchall()
+        
+        # Group by pattern and calculate statistics
+        pattern_stats = {}
+        for row in rows:
+            pattern = row[0]
+            entry_score = row[1]
+            skill_ratio = row[2]
+            
+            if pattern not in pattern_stats:
+                pattern_stats[pattern] = {
+                    'trades': [],
+                    'count': 0,
+                    'entry_scores': [],
+                    'skill_ratios': [],
+                    'winning': 0,
+                    'losing': 0,
+                    'total_profit_pct': 0.0,
+                    'total_loss_pct': 0.0
+                }
+            
+            pattern_stats[pattern]['trades'].append(row)
+            pattern_stats[pattern]['count'] += 1
+            pattern_stats[pattern]['entry_scores'].append(entry_score)
+            pattern_stats[pattern]['skill_ratios'].append(skill_ratio)
+            
+            # Entry score > 6 is considered a "win", < 4 is a "loss"
+            if entry_score >= 6:
+                pattern_stats[pattern]['winning'] += 1
+            elif entry_score < 4:
+                pattern_stats[pattern]['losing'] += 1
+        
+        # Calculate final statistics
+        aggregated = {}
+        for pattern, stats in pattern_stats.items():
+            count = stats['count']
+            winning = stats['winning']
+            losing = stats['losing']
+            
+            win_rate = (winning / count * 100) if count > 0 else 0
+            avg_entry_score = sum(stats['entry_scores']) / count if count > 0 else 0
+            avg_skill_ratio = sum(stats['skill_ratios']) / count if count > 0 else 0
+            
+            aggregated[pattern] = {
+                'sample_size': count,
+                'win_rate': round(win_rate, 2),
+                'avg_entry_score': round(avg_entry_score, 2),
+                'avg_skill_ratio': round(avg_skill_ratio, 3),
+                'winning_trades': winning,
+                'losing_trades': losing,
+                'trades': stats['trades']
+            }
+        
+        return aggregated
+    except Exception as e:
+        print(f"Failed to aggregate trades: {e}")
+        return {}

@@ -237,6 +237,31 @@ class MainOrchestratorAgent:
                 logger.warning("⚠️  Layer 1 migration was skipped (table may already exist)")
         except Exception as e:
             logger.error(f"Layer 1 initialization failed: {e}")
+        # ─── INITIALIZATION: Set up Layer 2 weekly pattern analysis scheduler ───
+        try:
+            from finance_service.ml.learning_models import migrate_learning_layer2
+            from finance_service.ml.layer2_scheduler import Layer2Scheduler
+            
+            db = get_portfolio_db()
+            if migrate_learning_layer2(db):
+                logger.info("✅ Layer 2 pattern analysis table ready")
+            else:
+                logger.warning("⚠️  Layer 2 migration was skipped (table may already exist)")
+            
+            # Initialize and start Layer 2 scheduler (runs Sundays at 20:00 UTC)
+            self.layer2_scheduler = Layer2Scheduler(
+                learning_agent=self.learning_agent,
+                run_day=6,  # Sunday
+                run_hour=20,  # 20:00 UTC
+                run_minute=0,
+                timezone='UTC'
+            )
+            # Start scheduler in background
+            asyncio.create_task(self.layer2_scheduler.start_scheduler())
+            logger.info("✅ Layer 2 scheduler started (runs Sundays at 20:00 UTC)")
+            
+        except Exception as e:
+            logger.error(f"Layer 2 scheduler initialization failed: {e}")
 
         # Register event handlers (await async subscribe)
         await self.event_bus.subscribe(Events.MARKET_SCAN_TRIGGER, self.handle_market_scan_trigger)
