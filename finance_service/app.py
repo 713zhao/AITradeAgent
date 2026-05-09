@@ -247,6 +247,8 @@ class MainOrchestratorAgent:
         # Strategy agent is called directly; no event subscription needed
         await self.event_bus.subscribe(Events.RISK_CHECK_COMPLETE, self.handle_risk_complete)
         await self.event_bus.subscribe(Events.TRADE_EXECUTED, self.handle_trade_executed)
+        # Layer 1: Real-time trade analysis (non-blocking)
+        await self.event_bus.subscribe(Events.TRADE_EXECUTED, self.learning_agent.handle_trade_executed_layer1)
         await self.event_bus.subscribe(Events.GET_PORTFOLIO_STATE, self.handle_get_portfolio_state)
         await self.event_bus.subscribe(Events.GET_SYSTEM_STATUS, self.handle_get_system_status)
         await self.event_bus.subscribe(Events.SCHEDULE, self.handle_schedule)  # health checks, daily report
