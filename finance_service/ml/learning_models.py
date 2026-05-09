@@ -1,18 +1,144 @@
+"""Data models for LearningAgent - Layer 1, 2, 3 trade analysis results."""
+
+from dataclasses import dataclass, field, asdict
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+from enum import Enum
+import json
 
 
-# Migration Helper Functions
-# ===========================
+class PatternType(str, Enum):
+    """Trade pattern classifications from LLM analysis."""
+    CONTINUATION_BREAKOUT = "continuation_breakout"
+    REVERSAL = "reversal"
+    MEAN_REVERSION = "mean_reversion"
+    MOMENTUM = "momentum"
+    SUPPORT_RESISTANCE = "support_resistance"
+    TECHNICAL_BOUNCE = "technical_bounce"
+    FUNDAMENTAL_DRIVEN = "fundamental_driven"
+    MACRO_DRIVEN = "macro_driven"
+    SENTIMENT_DRIVEN = "sentiment_driven"
+    EARNINGS_PLAY = "earnings_play"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class TradeAnalysisLayer1:
+    """
+    Layer 1 Analysis Result: Real-time post-trade pattern analysis using LLM.
+    """
+    trade_id: str
+    symbol: str
+    entry_score: float  # 0-10
+    skill_vs_luck_ratio: float  # 0-1.0
+    pattern_type: str  # PatternType enum value
+    mistakes: List[str] = field(default_factory=list)
+    psychological_notes: List[str] = field(default_factory=list)
+    recommendations: List[Dict[str, Any]] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
+    llm_response: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-serializable dictionary."""
+        data = asdict(self)
+        data['created_at'] = self.created_at.isoformat()
+        data['llm_response'] = json.dumps(self.llm_response) if self.llm_response else "{}"
+        return data
+    
+    def to_db_tuple(self) -> tuple:
+        """Convert to database insertion tuple."""
+        return (
+            self.trade_id,
+            self.symbol,
+            round(self.entry_score, 2),
+            round(self.skill_vs_luck_ratio, 3),
+            self.pattern_type,
+            json.dumps(self.mistakes),
+            json.dumps(self.psychological_notes),
+            json.dumps(self.recommendations),
+            json.dumps(self.tags),
+            json.dumps(self.llm_response),
+            self.created_at.isoformat()
+        )
+
+
+@dataclass
+class TradeAnalysisLayer2:
+    """Layer 2 Analysis Result: Weekly pattern aggregation and root cause analysis."""
+    pattern_type: str
+    week_ending: datetime
+    sample_size: int
+    win_rate: float
+    avg_win_pct: float
+    avg_loss_pct: float
+    profit_factor: float
+    expectancy: float
+    root_causes: List[str] = field(default_factory=list)
+    success_factors: List[str] = field(default_factory=list)
+    recommendations: List[Dict[str, Any]] = field(default_factory=list)
+    llm_response: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    
+    def to_db_tuple(self) -> tuple:
+        """Convert to database insertion tuple."""
+        return (
+            self.pattern_type,
+            self.week_ending.isoformat(),
+            self.sample_size,
+            round(self.win_rate, 2),
+            round(self.avg_win_pct, 4),
+            round(self.avg_loss_pct, 4),
+            round(self.profit_factor, 3),
+            round(self.expectancy, 4),
+            json.dumps(self.root_causes),
+            json.dumps(self.success_factors),
+            json.dumps(self.recommendations),
+            json.dumps(self.llm_response),
+            self.created_at.isoformat()
+        )
+
+
+@dataclass  
+class TradeAnalysisLayer3:
+    """Layer 3 Analysis Result: Parameter optimization recommendations."""
+    optimization_id: str
+    parameter_set: Dict[str, Any]
+    expected_improvement_pct: float
+    confidence_score: float  # 0-1.0
+    trades_backtested: int
+    win_rate_before: float
+    win_rate_after: float
+    profit_factor_before: float
+    profit_factor_after: float
+    risk_assessment: str
+    rollback_conditions: List[str] = field(default_factory=list)
+    llm_response: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    
+    def to_db_tuple(self) -> tuple:
+        """Convert to database insertion tuple."""
+        return (
+            self.optimization_id,
+            json.dumps(self.parameter_set),
+            round(self.expected_improvement_pct, 2),
+            round(self.confidence_score, 3),
+            self.trades_backtested,
+            round(self.win_rate_before, 2),
+            round(self.win_rate_after, 2),
+            round(self.profit_factor_before, 3),
+            round(self.profit_factor_after, 3),
+            self.risk_assessment,
+            json.dumps(self.rollback_conditions),
+            json.dumps(self.llm_response),
+            self.created_at.isoformat()
+        )
+
+
+# ==================== MIGRATION HELPER FUNCTIONS ====================
 
 def migrate_learning_layer1(db) -> bool:
-    """
-    Initialize Layer 1 trade_analysis table if it doesn't exist.
-    
-    Args:
-        db: Database connection object
-    
-    Returns:
-        True if migration succeeded or table already exists
-    """
+    """Initialize Layer 1 trade_analysis table if it doesn't exist."""
     try:
         cursor = db.connection.cursor()
         
@@ -56,16 +182,7 @@ def migrate_learning_layer1(db) -> bool:
 
 
 def insert_trade_analysis_layer1(db, analysis: TradeAnalysisLayer1) -> bool:
-    """
-    Insert a Layer 1 trade analysis result into the database.
-    
-    Args:
-        db: Database connection
-        analysis: TradeAnalysisLayer1 dataclass instance
-    
-    Returns:
-        True if insert succeeded
-    """
+    """Insert a Layer 1 trade analysis result into the database."""
     try:
         cursor = db.connection.cursor()
         cursor.execute('''
@@ -82,16 +199,7 @@ def insert_trade_analysis_layer1(db, analysis: TradeAnalysisLayer1) -> bool:
 
 
 def get_trade_analysis_layer1(db, trade_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Retrieve a Layer 1 trade analysis by trade_id.
-    
-    Args:
-        db: Database connection
-        trade_id: Trade ID to look up
-    
-    Returns:
-        Dictionary with analysis data or None if not found
-    """
+    """Retrieve a Layer 1 trade analysis by trade_id."""
     try:
         cursor = db.connection.cursor()
         cursor.execute(
@@ -123,17 +231,7 @@ def get_trade_analysis_layer1(db, trade_id: str) -> Optional[Dict[str, Any]]:
 
 
 def query_trade_analysis_by_symbol(db, symbol: str, limit: int = 100) -> List[Dict[str, Any]]:
-    """
-    Query all trade analyses for a given symbol.
-    
-    Args:
-        db: Database connection
-        symbol: Trading symbol
-        limit: Max results to return
-    
-    Returns:
-        List of analysis dictionaries
-    """
+    """Query all trade analyses for a given symbol."""
     try:
         cursor = db.connection.cursor()
         cursor.execute(
