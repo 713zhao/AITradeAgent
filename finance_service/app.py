@@ -263,6 +263,20 @@ class MainOrchestratorAgent:
         except Exception as e:
             logger.error(f"Layer 2 scheduler initialization failed: {e}")
 
+        
+        # ─── INITIALIZATION: Set up Layer 3 parameter optimization ───
+        try:
+            from finance_service.ml.learning_models import migrate_learning_layer3
+            
+            db = get_portfolio_db()
+            if migrate_learning_layer3(db):
+                logger.info("✅ Layer 3 optimization table ready")
+            else:
+                logger.warning("⚠️  Layer 3 migration was skipped (table may already exist)")
+            
+        except Exception as e:
+            logger.error(f"Layer 3 initialization failed: {e}")
+
         # Register event handlers (await async subscribe)
         await self.event_bus.subscribe(Events.MARKET_SCAN_TRIGGER, self.handle_market_scan_trigger)
         await self.event_bus.subscribe(Events.MARKET_SCANNED, self.handle_market_scanned)

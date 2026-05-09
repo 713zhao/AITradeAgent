@@ -865,3 +865,282 @@ ID: `{analysis.trade_id}`
         except Exception as e:
             logger.debug(f"Layer 2 Telegram notification failed: {e}")
 
+
+    # ==================== LAYER 3: PARAMETER OPTIMIZATION ====================
+
+    async def layer3_optimize_parameters(self, lookback_days: int = 30) -> Optional['TradeAnalysisLayer3']:
+        """
+        Analyze historical trading performance and recommend parameter optimizations.
+        Uses LLM to suggest specific configuration changes that improve trading results.
+        
+        Args:
+            lookback_days: How many days of history to analyze (default 30)
+            
+        Returns:
+            TradeAnalysisLayer3 optimization recommendation or None
+        """
+        try:
+            from finance_service.ml.learning_models import (
+                insert_trade_analysis_layer3,
+                TradeAnalysisLayer3,
+                migrate_learning_layer3
+            )
+            import uuid
+            
+            logger.info(f"🔧 Starting Layer 3 optimization analysis ({lookback_days} day lookback)")
+            
+            # Ensure Layer 3 table exists
+            db = self.get_db()
+            if db:
+                migrate_learning_layer3(db)
+            
+            # Gather historical performance data
+            performance_data = await self._gather_optimization_context(lookback_days, db)
+            
+            if not performance_data or performance_data['total_trades'] < 5:
+                logger.warning("⏭️  Insufficient trade data for optimization (< 5 trades)")
+                return None
+            
+            logger.info(f"📊 Analyzing {performance_data['total_trades']} trades for optimization")
+            
+            # Load and format LLM prompt
+            prompt_template = self._load_prompt_template_layer3()
+            if not prompt_template:
+                logger.error("Failed to load Layer 3 prompt template")
+                return None
+            
+            prompt = self._format_layer3_optimization_prompt(prompt_template, performance_data)
+            
+            # Call LLM for optimization recommendations
+            llm_response = await asyncio.wait_for(
+                self._call_gemini_for_layer3_optimization(prompt),
+                timeout=15.0
+            )
+            
+            if not llm_response:
+                logger.warning("Empty Layer 3 LLM response")
+                return None
+            
+            # Parse JSON response
+            json_data = self._parse_json_response(llm_response)
+            if not json_data:
+                logger.warning("Failed to parse Layer 3 JSON response")
+                return None
+            
+            # Create optimization result
+            optimization_id = f"OPT_{uuid.uuid4().hex[:8].upper()}"
+            
+            analysis = TradeAnalysisLayer3(
+                optimization_id=optimization_id,
+                parameter_set=json_data.get('parameter_changes', []),
+                expected_improvement_pct=json_data.get('backtest_metrics', {}).get('estimated_improvement_pct', 0),
+                confidence_score=json_data.get('backtest_metrics', {}).get('confidence_score', 0.5),
+                trades_backtested=performance_data['total_trades'],
+                win_rate_before=performance_data['win_rate_before'],
+                win_rate_after=json_data.get('win_rate_improvement', {}).get('projected', performance_data['win_rate_before']),
+                profit_factor_before=performance_data['profit_factor_before'],
+                profit_factor_after=json_data.get('profit_factor_improvement', {}).get('projected', performance_data['profit_factor_before']),
+                risk_assessment=json_data.get('risk_assessment', {}).get('downside_risk', 'MEDIUM'),
+                rollback_conditions=json_data.get('rollback_conditions', []),
+                llm_response=json_data
+            )
+            
+            # Persist to database
+            if db:
+                insert_trade_analysis_layer3(db, analysis)
+            
+            # Send Telegram notification with optimization details
+            await self._notify_telegram_layer3(analysis, performance_data)
+            
+            logger.info(f"✅ Layer 3 optimization complete: {optimization_id}")
+            logger.info(f"   Expected improvement: {analysis.expected_improvement_pct:.1f}%")
+            logger.info(f"   Confidence: {analysis.confidence_score*100:.0f}%")
+            
+            return analysis
+            
+        except asyncio.TimeoutError:
+            logger.warning("⏱️  Layer 3 LLM timeout (15s)")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Layer 3 optimization failed: {e}", exc_info=True)
+            return None
+
+    async def _gather_optimization_context(self, lookback_days: int, db) -> Optional[Dict[str, Any]]:
+        """Gather historical trading data for optimization analysis."""
+        try:
+            from datetime import datetime, timedelta
+            
+            if not db:
+                return None
+            
+            cursor = db.connection.cursor()
+            days_ago = datetime.now().isoformat()
+            
+            # Get all Layer 1 analyses from lookback period
+            cursor.execute('''
+                SELECT pattern_type, entry_score, skill_vs_luck_ratio, created_at
+                FROM trade_analysis
+                WHERE datetime(created_at) > datetime('now', ? || ' days')
+            ''', (f'-{lookback_days}',))
+            
+            trades = cursor.fetchall()
+            
+            if len(trades) < 5:
+                return None
+            
+            # Calculate statistics
+            winning = sum(1 for t in trades if t[1] >= 6)
+            losing = sum(1 for t in trades if t[1] < 4)
+            total = len(trades)
+            
+            win_rate = (winning / total * 100) if total > 0 else 0
+            avg_entry_score = sum(t[1] for t in trades) / total if total > 0 else 0
+            avg_skill_ratio = sum(t[2] for t in trades) / total if total > 0 else 0.5
+            
+            # Group by pattern
+            patterns = {}
+            for trade in trades:
+                pattern = trade[0]
+                if pattern not in patterns:
+                    patterns[pattern] = {'count': 0, 'wins': 0, 'avg_score': 0}
+                patterns[pattern]['count'] += 1
+                if trade[1] >= 6:
+                    patterns[pattern]['wins'] += 1
+                patterns[pattern]['avg_score'] += trade[1]
+            
+            for pattern in patterns:
+                patterns[pattern]['avg_score'] /= patterns[pattern]['count']
+            
+            return {
+                'total_trades': total,
+                'lookback_days': lookback_days,
+                'win_rate_before': round(win_rate, 2),
+                'profit_factor_before': max(1.0, round((winning or 0.1) / max(1, (losing or 1)), 2)),
+                'avg_entry_score': round(avg_entry_score, 2),
+                'avg_skill_ratio': round(avg_skill_ratio, 3),
+                'patterns': patterns,
+                'winning_trades': winning,
+                'losing_trades': losing
+            }
+        except Exception as e:
+            logger.error(f"Failed to gather optimization context: {e}")
+            return None
+
+    def _load_prompt_template_layer3(self) -> Optional[str]:
+        """Load Layer 3 optimization prompt template."""
+        try:
+            template_path = Path(__file__).parent.parent / "ml" / "trade_analysis_layer3.md"
+            if template_path.exists():
+                with open(template_path, 'r') as f:
+                    return f.read()
+            else:
+                logger.warning(f"Layer 3 prompt template not found at {template_path}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to load Layer 3 prompt template: {e}")
+            return None
+
+    def _format_layer3_optimization_prompt(self, template: str, context: Dict[str, Any]) -> str:
+        """Format Layer 3 optimization prompt with historical data."""
+        formatted = template
+        
+        # Pattern performance details
+        pattern_perf = "\n".join([
+            f"  - {p}: {s['count']} trades, {s['wins']}/{s['count']} wins ({s['wins']/s['count']*100:.0f}%), avg score {s['avg_score']:.1f}/10"
+            for p, s in context.get('patterns', {}).items()
+        ])
+        
+        # Substitute variables
+        replacements = {
+            'TOTAL_TRADES': str(context.get('total_trades', 0)),
+            'LOOKBACK_DAYS': str(context.get('lookback_days', 30)),
+            'WIN_RATE_BEFORE': str(context.get('win_rate_before', 50)),
+            'PROFIT_FACTOR_BEFORE': str(context.get('profit_factor_before', 1.0)),
+            'AVG_WIN_BEFORE': str(context.get('avg_entry_score', 6.5)),
+            'AVG_LOSS_BEFORE': str(100 - context.get('avg_entry_score', 6.5)),
+            'PATTERN_PERFORMANCE': pattern_perf,
+            'CURRENT_PARAMETERS': '  - Entry Confirmation: 2 indicators required\n  - Position Size: 1% risk per trade\n  - Stop Loss: 2% from entry\n  - Take Profit: 3:1 risk/reward',
+            'TOP_PATTERNS': 'Top performer data here',
+            'UNDERPERFORMING_PATTERNS': 'Underperformer data here',
+            'BEST_PATTERN_WIN_RATE': str(max([s['wins']/s['count']*100 for s in context.get('patterns', {}).values()], default=0)),
+            'WORST_PATTERN_WIN_RATE': str(min([s['wins']/s['count']*100 for s in context.get('patterns', {}).values()], default=0)),
+            'HIGH_VOL_PERFORMANCE': '55% win rate',
+            'LOW_VOL_PERFORMANCE': '48% win rate'
+        }
+        
+        for key, value in replacements.items():
+            placeholder = "{" + key + "}"
+            formatted = formatted.replace(placeholder, value)
+        
+        return formatted
+
+    async def _call_gemini_for_layer3_optimization(self, prompt: str) -> Optional[str]:
+        """Call Gemini 2.5-pro for parameter optimization (premium model)."""
+        try:
+            if not hasattr(self, 'gemini_client') or not self.gemini_client:
+                logger.warning("Gemini client not available")
+                return None
+            
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.5-pro-exp-05-21",
+                contents=prompt,
+                config=self.gemini_generation_config
+            )
+            
+            return response.text if response else None
+            
+        except Exception as e:
+            logger.error(f"Layer 3 Gemini API error: {e}")
+            return None
+
+    async def _notify_telegram_layer3(self, analysis: 'TradeAnalysisLayer3', context: Dict[str, Any]) -> None:
+        """Send Layer 3 optimization recommendation via Telegram."""
+        try:
+            if not hasattr(self, 'telegram_agent') or not self.telegram_agent:
+                return
+            
+            # Extract optimization details
+            param_changes = analysis.llm_response.get('parameter_changes', [])
+            param_summary = "\n".join([
+                f"  • {p.get('parameter', 'Unknown')}: {p.get('change', 'TBD')}"
+                for p in param_changes[:3]
+            ])
+            
+            improvement = analysis.expected_improvement_pct
+            confidence = int(analysis.confidence_score * 100)
+            
+            # Format message
+            message = f"""
+⚙️  **PARAMETER OPTIMIZATION - {analysis.optimization_id}**
+
+📊 **Current Performance** ({context['total_trades']} trades analyzed)
+   Win Rate: {analysis.win_rate_before:.1f}% → {analysis.win_rate_after:.1f}% (target)
+   Profit Factor: {analysis.profit_factor_before:.2f} → {analysis.profit_factor_after:.2f}
+
+🎯 **Expected Impact**
+   Improvement: +{improvement:.1f}%
+   Confidence: {confidence}%
+
+⚙️  **Recommended Changes**
+{param_summary}
+
+⚠️  **Risk Level:** {analysis.risk_assessment}
+
+📋 **Rollback Triggers**
+{analysis.llm_response.get('coaching_notes', 'Monitor closely during testing phase')}
+
+💡 **Next Steps**
+   1. Review optimization parameters
+   2. Deploy to testing environment
+   3. Monitor metrics for 1-2 weeks
+   4. If successful, promote to production
+
+ID: `{analysis.optimization_id}`
+"""
+            
+            await self.telegram_agent.send_message(message)
+            logger.info("✅ Layer 3 Telegram notification sent")
+            
+        except Exception as e:
+            logger.debug(f"Layer 3 Telegram notification failed: {e}")
+

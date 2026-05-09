@@ -473,3 +473,133 @@ def aggregate_trades_by_pattern(db, week_ending_str: str) -> Dict[str, Dict[str,
     except Exception as e:
         print(f"Failed to aggregate trades: {e}")
         return {}
+
+
+# ==================== LAYER 3: PARAMETER OPTIMIZATION ====================
+
+def migrate_learning_layer3(db) -> bool:
+    """Ensure trade_analysis_layer3 table exists with proper schema."""
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_analysis_layer3 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                optimization_id TEXT NOT NULL UNIQUE,
+                parameter_set TEXT NOT NULL,
+                expected_improvement_pct REAL NOT NULL CHECK (expected_improvement_pct >= 0),
+                confidence_score REAL NOT NULL CHECK (confidence_score >= 0 AND confidence_score <= 1),
+                trades_backtested INTEGER NOT NULL,
+                win_rate_before REAL NOT NULL,
+                win_rate_after REAL NOT NULL,
+                profit_factor_before REAL NOT NULL,
+                profit_factor_after REAL NOT NULL,
+                risk_assessment TEXT NOT NULL,
+                rollback_conditions TEXT NOT NULL DEFAULT '[]',
+                llm_response TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'tested', 'rolled_back'))
+            )
+        ''')
+        
+        # Create indexes for efficient queries
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer3_optimization ON trade_analysis_layer3(optimization_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer3_created ON trade_analysis_layer3(created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer3_status ON trade_analysis_layer3(status)')
+        
+        db.connection.commit()
+        print("✅ Layer 3 migration successful")
+        return True
+    except Exception as e:
+        print(f"⚠️  Layer 3 migration error: {e}")
+        return False
+
+
+def insert_trade_analysis_layer3(db, analysis: TradeAnalysisLayer3) -> bool:
+    """Insert Layer 3 optimization result into database."""
+    try:
+        cursor = db.connection.cursor()
+        data = analysis.to_db_tuple()
+        
+        cursor.execute('''
+            INSERT OR REPLACE INTO trade_analysis_layer3
+            (optimization_id, parameter_set, expected_improvement_pct, confidence_score, 
+             trades_backtested, win_rate_before, win_rate_after, profit_factor_before, 
+             profit_factor_after, risk_assessment, rollback_conditions, llm_response, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', data)
+        
+        db.connection.commit()
+        print(f"✅ Layer 3 optimization inserted: {analysis.optimization_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to insert Layer 3 optimization: {e}")
+        return False
+
+
+def get_trade_analysis_layer3(db, optimization_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve Layer 3 optimization by ID."""
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute('''
+            SELECT id, optimization_id, parameter_set, expected_improvement_pct, confidence_score,
+                   trades_backtested, win_rate_before, win_rate_after, profit_factor_before,
+                   profit_factor_after, risk_assessment, rollback_conditions, llm_response, created_at
+            FROM trade_analysis_layer3
+            WHERE optimization_id = ?
+        ''', (optimization_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return {
+            'id': row[0],
+            'optimization_id': row[1],
+            'parameter_set': json.loads(row[2]),
+            'expected_improvement_pct': row[3],
+            'confidence_score': row[4],
+            'trades_backtested': row[5],
+            'win_rate_before': row[6],
+            'win_rate_after': row[7],
+            'profit_factor_before': row[8],
+            'profit_factor_after': row[9],
+            'risk_assessment': row[10],
+            'rollback_conditions': json.loads(row[11]),
+            'llm_response': json.loads(row[12]),
+            'created_at': row[13]
+        }
+    except Exception as e:
+        print(f"Failed to retrieve Layer 3 optimization: {e}")
+        return None
+
+
+def query_trade_analysis_layer3_active(db) -> List[Dict[str, Any]]:
+    """Query all active Layer 3 optimizations."""
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute('''
+            SELECT optimization_id, parameter_set, expected_improvement_pct, confidence_score,
+                   win_rate_before, win_rate_after, profit_factor_before, profit_factor_after
+            FROM trade_analysis_layer3
+            WHERE status = 'active'
+            ORDER BY created_at DESC
+        ''')
+        
+        rows = cursor.fetchall()
+        results = []
+        for row in rows:
+            results.append({
+                'optimization_id': row[0],
+                'parameter_set': json.loads(row[1]),
+                'expected_improvement_pct': row[2],
+                'confidence_score': row[3],
+                'win_rate_before': row[4],
+                'win_rate_after': row[5],
+                'profit_factor_before': row[6],
+                'profit_factor_after': row[7]
+            })
+        
+        return results
+    except Exception as e:
+        print(f"Failed to query Layer 3 optimizations: {e}")
+        return []
