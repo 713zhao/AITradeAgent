@@ -198,10 +198,10 @@ class PortfolioAgent(Agent):
             logger.info(f"Updating prices for {len(symbols)} positions (live intraday)")
 
             try:
-                # Always call fetch_live_prices — it uses 1-minute bars so prices
-                # reflect the current market value, not yesterday's EOD close.
+                # Fetch latest prices using cached data from the 15-minute price monitor scheduler
+                # Falls back to cached 1d prices if live fetch fails
                 live = await asyncio.to_thread(
-                    self.data_agent.provider.fetch_live_prices,
+                    self.data_agent.provider.fetch_latest,
                     symbols,
                 )
 

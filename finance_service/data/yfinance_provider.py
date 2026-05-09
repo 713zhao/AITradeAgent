@@ -212,8 +212,8 @@ class YfinanceProvider:
         if (df['Open'] == 0).all() and (df['Close'] == 0).all():
             return False
         
-        # Check minimum rows
-        if len(df) < 5:
+        # Check minimum rows - allow at least 1 row for fresh single-day fetches
+        if len(df) < 1:
             return False
         
         return True
@@ -228,7 +228,7 @@ class YfinanceProvider:
         Returns:
             Dictionary of {symbol: latest_price}
         """
-        data = self.fetch_ohlcv(symbols, interval="1d")
+        data = self.fetch_ohlcv(symbols, interval="1d", period="1d")
         results = {}
         
         for symbol, df in data.items():

@@ -281,9 +281,10 @@ def build_report(data: dict, market: dict) -> str:
         for sym, pos in sorted(positions.items()):
             qty      = pos.get("quantity", 0)
             avg      = pos.get("avg_cost", 0)
-            cur      = pos.get("current_price", avg)
-            upnl     = pos.get("unrealized_pnl", (cur - avg) * qty)
-            upnl_pct = ((cur - avg) / avg * 100) if avg else 0
+            cur      = pos.get("current_price", 0) or avg  # Use cached price; fallback to avg only if price is None/0
+            # Use USD-normalized values from API (already applies FX conversion for HK stocks)
+            upnl     = pos.get("unrealized_pnl", 0.0)
+            upnl_pct = pos.get("unrealized_pnl_pct", 0.0)
             name     = (names.get(sym) or sym)[:12]
             pnl_str  = _fmt_pnl(upnl)
             lines.append(

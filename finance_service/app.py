@@ -212,6 +212,19 @@ class MainOrchestratorAgent:
         self.health_agent.portfolio_agent = self.portfolio_agent
         self.portfolio_agent.repository = self.repository
 
+        # ─── INITIALIZATION: Eagerly fetch fresh prices for all positions ───
+        # This ensures prices are up-to-date on startup, regardless of market hours
+        try:
+            symbols = list(self.repository.positions.keys())
+            if symbols:
+                logger.info(f"Fetching fresh prices for {len(symbols)} positions on startup...")
+                fresh_prices = self.data_agent.provider.fetch_latest(symbols)
+                if fresh_prices:
+                    self.repository.update_position_prices(fresh_prices)
+                    logger.info(f"✅ Initialized {len(fresh_prices)} fresh prices")
+        except Exception as e:
+            logger.warning(f"Failed to fetch fresh prices on startup: {e}")
+
         # Register event handlers (await async subscribe)
         await self.event_bus.subscribe(Events.MARKET_SCAN_TRIGGER, self.handle_market_scan_trigger)
         await self.event_bus.subscribe(Events.MARKET_SCANNED, self.handle_market_scanned)
