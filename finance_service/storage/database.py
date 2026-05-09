@@ -222,6 +222,76 @@ class Database:
             )
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_store_updated ON trade_store(updated_at)')
+        
+        # Layer 1: Trade Analysis (real-time post-trade pattern analysis)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id TEXT NOT NULL UNIQUE,
+                symbol TEXT NOT NULL,
+                entry_score REAL NOT NULL CHECK (entry_score >= 0 AND entry_score <= 10),
+                skill_vs_luck_ratio REAL NOT NULL CHECK (skill_vs_luck_ratio >= 0 AND skill_vs_luck_ratio <= 1),
+                pattern_type TEXT NOT NULL,
+                mistakes TEXT NOT NULL DEFAULT '[]',
+                psychological_notes TEXT NOT NULL DEFAULT '[]',
+                recommendations TEXT NOT NULL DEFAULT '[]',
+                tags TEXT NOT NULL DEFAULT '[]',
+                llm_response TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_analysis_trade_id ON trade_analysis(trade_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_analysis_symbol ON trade_analysis(symbol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_analysis_pattern ON trade_analysis(pattern_type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_analysis_created ON trade_analysis(created_at)')
+        
+        # Layer 2: Weekly Pattern Analysis
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_analysis_layer2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_type TEXT NOT NULL,
+                week_ending TIMESTAMP NOT NULL,
+                sample_size INTEGER NOT NULL,
+                win_rate REAL NOT NULL,
+                avg_win_pct REAL NOT NULL,
+                avg_loss_pct REAL NOT NULL,
+                profit_factor REAL NOT NULL,
+                expectancy REAL NOT NULL,
+                root_causes TEXT NOT NULL DEFAULT '[]',
+                success_factors TEXT NOT NULL DEFAULT '[]',
+                recommendations TEXT NOT NULL DEFAULT '[]',
+                llm_response TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(pattern_type, week_ending)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer2_pattern ON trade_analysis_layer2(pattern_type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer2_week ON trade_analysis_layer2(week_ending)')
+        
+        # Layer 3: Parameter Optimization
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_analysis_layer3 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                optimization_id TEXT NOT NULL UNIQUE,
+                parameter_set TEXT NOT NULL,
+                expected_improvement_pct REAL NOT NULL,
+                confidence_score REAL NOT NULL,
+                trades_backtested INTEGER NOT NULL,
+                win_rate_before REAL NOT NULL,
+                win_rate_after REAL NOT NULL,
+                profit_factor_before REAL NOT NULL,
+                profit_factor_after REAL NOT NULL,
+                risk_assessment TEXT NOT NULL,
+                rollback_conditions TEXT NOT NULL DEFAULT '[]',
+                llm_response TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer3_optimization ON trade_analysis_layer3(optimization_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_layer3_created ON trade_analysis_layer3(created_at)')
     
     def insert_position(self, position: Dict[str, Any]) -> int:
         """Insert a new position"""
@@ -387,7 +457,8 @@ class Database:
         tables = [
             'trades', 'positions', 'portfolio_snapshots',
             'config_audit_log', 'backtest_runs', 'analysis_cache',
-            'event_log', 'trade_store'
+            'event_log', 'trade_store', 'trade_analysis',
+            'trade_analysis_layer2', 'trade_analysis_layer3'
         ]
         for table in tables:
             try:

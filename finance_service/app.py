@@ -225,6 +225,19 @@ class MainOrchestratorAgent:
         except Exception as e:
             logger.warning(f"Failed to fetch fresh prices on startup: {e}")
 
+        # ─── INITIALIZATION: Set up Layer 1 trade analysis database ───
+        try:
+            from finance_service.ml.learning_models import migrate_learning_layer1
+            from finance_service.storage.database import get_portfolio_db
+            
+            db = get_portfolio_db()
+            if migrate_learning_layer1(db):
+                logger.info("✅ Layer 1 trade analysis table ready")
+            else:
+                logger.warning("⚠️  Layer 1 migration was skipped (table may already exist)")
+        except Exception as e:
+            logger.error(f"Layer 1 initialization failed: {e}")
+
         # Register event handlers (await async subscribe)
         await self.event_bus.subscribe(Events.MARKET_SCAN_TRIGGER, self.handle_market_scan_trigger)
         await self.event_bus.subscribe(Events.MARKET_SCANNED, self.handle_market_scanned)

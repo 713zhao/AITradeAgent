@@ -7,6 +7,7 @@ Features:
 - Optuna-based hyperparameter optimization (optional)
 """
 import os
+import asyncio
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta

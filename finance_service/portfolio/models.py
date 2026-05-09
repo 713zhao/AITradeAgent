@@ -264,19 +264,11 @@ class Portfolio:
     
     def realized_pnl(self) -> float:
         """Total realized P&L from closed positions."""
-        # Realized P&L = Initial cash - closing trade value
-        # For now, calculate from trades that are closed
-        initial_spent = sum(
-            trade.quantity * trade.price 
-            for trade in self.trades 
-            if trade.side == "BUY" and trade.status == TradeStatus.FILLED
-        )
-        realized = self.initial_cash - initial_spent - self.current_cash
-        return realized
+        return self.total_pnl() - self.unrealized_pnl()
     
     def total_pnl(self) -> float:
         """Total P&L = realized + unrealized."""
-        return self.realized_pnl() + self.unrealized_pnl()
+        return self.total_equity() - self.initial_cash
     
     def total_return_pct(self) -> float:
         """Total return as percentage of initial capital."""

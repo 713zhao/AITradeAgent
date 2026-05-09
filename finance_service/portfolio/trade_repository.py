@@ -140,6 +140,7 @@ class TradeRepository:
         side = trade.side.upper()
         stop_loss = trade.stop_loss
         take_profit = trade.take_profit
+        trade_time = trade.filled_at or trade.ordered_at or datetime.utcnow()
         
         position = self.positions.get(symbol)
         if side == "BUY":
@@ -169,6 +170,7 @@ class TradeRepository:
                 )
                 self.positions[symbol] = position
             position.trades.append(trade.trade_id)
+            position.updated_at = trade_time
         elif side == "SELL":
             if position:
                 # Reduce or close position
@@ -185,13 +187,16 @@ class TradeRepository:
                             position.stop_loss_price = stop_loss
                         if take_profit is not None:
                             position.take_profit_price = take_profit
+                        position.trades.append(trade.trade_id)
+                        position.updated_at = trade_time
                     else:
                         # Exact zero close
                         del self.positions[symbol]
                         return
                 else:
                     position.quantity = new_qty
-                position.trades.append(trade.trade_id)
+                    position.trades.append(trade.trade_id)
+                    position.updated_at = trade_time
             else:
                 # Short selling (not enabled typically)
                 position = Position(
@@ -205,6 +210,7 @@ class TradeRepository:
                 )
                 self.positions[symbol] = position
                 position.trades.append(trade.trade_id)
+                position.updated_at = trade_time
         else:
             logger.warning(f"Unknown side {side} for trade {trade.trade_id}")
     
