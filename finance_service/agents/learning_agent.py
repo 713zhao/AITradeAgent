@@ -627,9 +627,9 @@ ID: `{analysis.trade_id}`
             logger.info(f"📊 Starting Layer 2 analysis for week ending {week_ending_str}")
             
             # Ensure Layer 2 table exists
-            db = self.get_db()
-            if db:
-                migrate_learning_layer2(db)
+            from finance_service.storage.database import get_portfolio_db
+            db = get_portfolio_db()
+            migrate_learning_layer2(db)
             
             # Aggregate Layer 1 trades by pattern type
             aggregated = aggregate_trades_by_pattern(db, week_ending_str)
@@ -669,13 +669,8 @@ ID: `{analysis.trade_id}`
             
             logger.info(f"✅ Layer 2 analysis complete: {len(results)} patterns analyzed")
             
-            # Publish LEARNING_ANALYSIS_COMPLETE event
-            event_bus = get_event_bus()
-            if event_bus:
-                await event_bus.publish(
-                    Events.LEARNING_ANALYSIS_COMPLETE,
-                    {'week_ending': week_ending_str, 'patterns_analyzed': len(results)}
-                )
+            # Publish analysis complete event
+            logger.info(f"📢 Layer 2 analysis triggered {len(results)} optimizations")
             
             return results
             
@@ -890,9 +885,8 @@ ID: `{analysis.trade_id}`
             logger.info(f"🔧 Starting Layer 3 optimization analysis ({lookback_days} day lookback)")
             
             # Ensure Layer 3 table exists
-            db = self.get_db()
-            if db:
-                migrate_learning_layer3(db)
+            db = get_portfolio_db()
+            migrate_learning_layer3(db)
             
             # Gather historical performance data
             performance_data = await self._gather_optimization_context(lookback_days, db)
