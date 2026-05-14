@@ -277,6 +277,26 @@ class MainOrchestratorAgent:
         except Exception as e:
             logger.error(f"Layer 3 initialization failed: {e}")
 
+        # ─── INITIALIZATION: Layer 4 ETF Intelligence ───
+        try:
+            from finance_service.agents.etf_intelligence_agent import ETFIntelligenceAgent
+            from finance_service.ml.layer4_scheduler import Layer4Scheduler
+            from finance_service.ml.etf_models import migrate_etf_tables
+
+            db = get_portfolio_db()
+            if migrate_etf_tables(db):
+                logger.info("✅ Layer 4 ETF Intelligence tables ready")
+            else:
+                logger.warning("⚠️  Layer 4 migration skipped (tables may already exist)")
+
+            self.etf_agent = ETFIntelligenceAgent(config_engine)
+            self.etf_agent.telegram_agent = self.telegram_agent
+            self.layer4_scheduler = Layer4Scheduler(etf_agent=self.etf_agent)
+            asyncio.create_task(self.layer4_scheduler.start_scheduler())
+            logger.info("✅ Layer 4 ETF Intelligence started (snapshot 21:30, hedge 22:00, rotation Mon 09:00, corr Sun 20:30)")
+        except Exception as e:
+            logger.error(f"Layer 4 ETF Intelligence initialization failed: {e}")
+
         # Register event handlers (await async subscribe)
         await self.event_bus.subscribe(Events.MARKET_SCAN_TRIGGER, self.handle_market_scan_trigger)
         await self.event_bus.subscribe(Events.MARKET_SCANNED, self.handle_market_scanned)

@@ -200,6 +200,7 @@ The diagram shows the event-driven pipeline with these key timing patterns:
 | 18 | MarketRegimeAgent | `market_regime_agent` | `market_regime_agent.py` | ✅ Broad market context from 5 indices (SP500/NASDAQ/DOW/VIX/RUSSELL2000); risk-on/off flag, volatility regime, trend strength |
 | 19 | MacroNewsAgent | `macro_news_agent` | `macro_news_agent.py` | ✅ Macro news aggregation from SPY/QQQ/DIA feeds; VADER sentiment; categories: monetary_policy, geopolitical, economic_data, regulatory, sector_rotation |
 | 20 | SymbolSelectorAgent | `symbol_selector_agent` | `symbol_selector_agent.py` | ✅ LLM-powered symbol ranking; 50 candidates → top 5–10 high-conviction picks; 5-dimension scoring; Telegram report with token usage |
+| 21 | ETFIntelligenceAgent | `etf_intelligence_agent` | `etf_intelligence_agent.py` | ✅ Layer 4: Daily ETF snapshot (200+ symbols), AI-driven sector rotation, hedge analysis, correlation scan; Gemini LLM; Telegram delivery |
 
 > **Docs:** [MARKET_REGIME_AGENT.md](MARKET_REGIME_AGENT.md) · [MACRO_NEWS_AGENT.md](MACRO_NEWS_AGENT.md) · [SYMBOL_SELECTOR_AGENT.md](SYMBOL_SELECTOR_AGENT.md)
 
