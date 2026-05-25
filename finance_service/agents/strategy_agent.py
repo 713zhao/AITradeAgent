@@ -122,36 +122,45 @@ class RuleStrategy:
     def evaluate_exit(self, indicators_snapshot: IndicatorsSnapshot) -> Tuple[bool, List[str]]:
         """
         Evaluate exit rules against indicators
-        
+
         Args:
             indicators_snapshot: IndicatorsSnapshot with all indicators
-        
+
         Returns:
             Tuple of:
                 - should_sell (bool): True if exit conditions met
                 - triggered_rules (list): Names of rules that triggered
         """
         triggered = []
-        
+
         for rule in self.exit_rules:
             if not rule.enabled:
                 continue
-            
+
             # Get indicator result
             ind = indicators_snapshot.indicators.get(rule.indicator)
             if not ind:
                 logger.warning(f"Rule {rule.name}: indicator {rule.indicator} not found")
                 continue
-            
+
+            # Determine value to compare based on rule's compare_to_price flag
+            if getattr(rule, 'compare_to_price', False):
+                # Compare current price to indicator value (e.g., price < sma)
+                compare_value = indicators_snapshot.current_price
+                threshold_value = ind.value
+            else:
+                compare_value = ind.value
+                threshold_value = rule.value
+
             # Evaluate condition
-            if self._check_condition(ind.value, rule.condition, rule.value):
+            if self._check_condition(compare_value, rule.condition, threshold_value):
                 triggered.append(rule.name)
-        
+
         should_sell = len(triggered) > 0
-        
+
         if should_sell:
             logger.info(f"Exit evaluation: {len(triggered)} rules triggered: {triggered}")
-        
+
         return should_sell, triggered
     
     @staticmethod
