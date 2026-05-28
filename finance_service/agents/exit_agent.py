@@ -5,7 +5,7 @@ from finance_service.core.flow_logger import flow
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from finance_service.agents.agent_interface import Agent, AgentReport
-from finance_service.core.event_bus import Event, Events, get_event_bus
+from finance_service.core.event_bus import get_event_bus
 from skills.exit.exit import ExitStrategy
 
 logger = logging.getLogger(__name__)
@@ -171,41 +171,46 @@ class ExitAgent(Agent):
                 elif take_profit and current_price >= take_profit:
                     reason = f"ATR take profit triggered: price ${current_price:.2f} >= ${take_profit:.2f}"
                 elif not stop_loss and not take_profit and entry_price:
-                    # Fallback: use fixed_pct when ATR stops were not stored at entry
-                    sl_pct = (
-                        self.config.get("risk", "stop_loss_default_pct", default=0.08)
+                    # Fallback: use fixed_pct when ATR stops were not stored at entry.
+                    # Config stores values as percentages (e.g. 1.5 = 1.5%); divide by 100.
+                    sl_raw = (
+                        self.config.get("risk", "stop_loss_default_pct", default=8.0)
                         if self.config
-                        else 0.08
+                        else 8.0
                     )
-                    tp_pct = (
-                        self.config.get("risk", "take_profit_default_pct", default=0.20)
+                    tp_raw = (
+                        self.config.get("risk", "take_profit_default_pct", default=20.0)
                         if self.config
-                        else 0.20
+                        else 20.0
                     )
+                    sl_pct = sl_raw / 100.0
+                    tp_pct = tp_raw / 100.0
                     stop_fallback = entry_price * (1 - sl_pct)
                     take_fallback = entry_price * (1 + tp_pct)
                     if current_price <= stop_fallback:
-                        reason = f"Fallback stop triggered ({sl_pct * 100:.0f}%): price ${current_price:.2f} <= ${stop_fallback:.2f}"
+                        reason = f"Fallback stop triggered ({sl_raw:.1f}%): price ${current_price:.2f} <= ${stop_fallback:.2f}"
                     elif current_price >= take_fallback:
-                        reason = f"Fallback take profit triggered ({tp_pct * 100:.0f}%): price ${current_price:.2f} >= ${take_fallback:.2f}"
+                        reason = f"Fallback take profit triggered ({tp_raw:.1f}%): price ${current_price:.2f} >= ${take_fallback:.2f}"
             elif self.exit_strategy == "fixed_pct":
-                # Use configured fixed percentages (stop_loss_default_pct, take_profit_default_pct) if not stored
-                sl_pct = (
-                    self.config.get("risk.stop_loss_default_pct", 0.015)
+                # Config stores values as percentages (e.g. 1.5 = 1.5%); divide by 100.
+                sl_raw = (
+                    self.config.get("risk", "stop_loss_default_pct", default=8.0)
                     if self.config
-                    else 0.015
+                    else 8.0
                 )
-                tp_pct = (
-                    self.config.get("risk.take_profit_default_pct", 0.03)
+                tp_raw = (
+                    self.config.get("risk", "take_profit_default_pct", default=20.0)
                     if self.config
-                    else 0.03
+                    else 20.0
                 )
+                sl_pct = sl_raw / 100.0
+                tp_pct = tp_raw / 100.0
                 stop = entry_price * (1 - sl_pct)
                 take = entry_price * (1 + tp_pct)
                 if current_price <= stop:
-                    reason = f"Fixed % stop triggered ({sl_pct * 100:.1f}%): price ${current_price:.2f} <= ${stop:.2f}"
+                    reason = f"Fixed % stop triggered ({sl_raw:.1f}%): price ${current_price:.2f} <= ${stop:.2f}"
                 elif current_price >= take:
-                    reason = f"Fixed % take profit triggered ({tp_pct * 100:.1f}%): price ${current_price:.2f} >= ${take:.2f}"
+                    reason = f"Fixed % take profit triggered ({tp_raw:.1f}%): price ${current_price:.2f} >= ${take:.2f}"
             elif self.exit_strategy == "partial_trail":
                 # Use ATR-based stop (from position) and a partial target
                 partial_target = entry_price * (1 + self.partial_target_pct)
@@ -341,23 +346,6 @@ class ExitAgent(Agent):
                     logger.info(
                         f"Position degraded for {symbol}: {degraded_record['reason']}"
                     )
-
-                    # Try to emit POSITION_DEGRADED event for orchestrator
-                    try:
-                        await self.event_bus.publish(
-                            Event(
-                                event_type=Events.POSITION_DEGRADED,
-                                data={"degraded": [degraded_record]},
-                            )
-                        )
-                        logger.info(f"Emitted POSITION_DEGRADED event for {symbol}")
-                    except AttributeError:
-                        # Event type might not exist, log but don't fail
-                        logger.debug(
-                            "Events.POSITION_DEGRADED not available in current event system"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not emit POSITION_DEGRADED event: {e}")
 
             except Exception as e:
                 logger.error(

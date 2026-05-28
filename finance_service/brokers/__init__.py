@@ -514,6 +514,44 @@ class PaperBroker(BrokerInterface):
             })
         return trades
 
+    def sync_positions_from_repository(
+        self,
+        repo_positions: Dict[str, Any],
+        current_cash: Optional[float] = None,
+    ) -> None:
+        """Populate broker's internal state from the portfolio repository.
+
+        Called once at startup so SELL orders aren't rejected as 'Insufficient shares'
+        for positions that were opened in a previous session, and so BUY order cash
+        checks reflect actual remaining cash rather than the full initial_cash.
+
+        Args:
+            repo_positions: Dict[symbol, portfolio.models.Position] from TradeRepository.
+            current_cash: If provided, override broker's cash to match the portfolio's
+                          computed remaining cash.
+        """
+        from finance_service.core.models import Position as CorePosition
+        synced = 0
+        for symbol, repo_pos in repo_positions.items():
+            qty = getattr(repo_pos, 'quantity', None) or getattr(repo_pos, 'qty', 0.0)
+            avg_cost = getattr(repo_pos, 'avg_cost', 0.0)
+            current_price = getattr(repo_pos, 'current_price', avg_cost) or avg_cost
+            if qty > 0:
+                self._positions[symbol] = CorePosition(
+                    symbol=symbol,
+                    qty=qty,
+                    avg_cost=avg_cost,
+                    current_price=current_price,
+                )
+                synced += 1
+        if current_cash is not None:
+            self._cash = current_cash
+        import logging
+        logging.getLogger(__name__).info(
+            f"PaperBroker: synced {synced} position(s) from repository"
+            + (f", cash set to ${current_cash:,.2f}" if current_cash is not None else "")
+        )
+
     def reset_broker(self):
         """Reset to initial state."""
         self._cash = self._initial_cash

@@ -212,6 +212,21 @@ class MainOrchestratorAgent:
         self.health_agent.portfolio_agent = self.portfolio_agent
         self.portfolio_agent.repository = self.repository
 
+        # ─── INITIALIZATION: Sync broker positions from repository ───
+        # PaperBroker starts with empty _positions each run; populate from DB so
+        # SELL orders for previously-opened positions aren't rejected.
+        try:
+            from finance_service.brokers import PaperBroker
+            if isinstance(broker, PaperBroker) and self.repository.positions:
+                initial_cash = config_engine.get("portfolio", "initial_cash", default=100000.0)
+                portfolio_state = self.repository.calculate_portfolio(initial_cash)
+                broker.sync_positions_from_repository(
+                    self.repository.positions,
+                    current_cash=portfolio_state.current_cash,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to sync broker positions from repository: {e}")
+
         # ─── INITIALIZATION: Eagerly fetch fresh prices for all positions ───
         # This ensures prices are up-to-date on startup, regardless of market hours
         try:
