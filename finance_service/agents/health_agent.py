@@ -92,7 +92,8 @@ class HealthAgent(Agent):
             return AgentReport(agent_id=self.agent_id, status="success", message="Daily summary sent")
         
         elif event_type == Events.HOURLY_PORTFOLIO_TRIGGER:
-            await self.send_hourly_portfolio_report()
+            force = payload.get("force", False) if isinstance(payload, dict) else False
+            await self.send_hourly_portfolio_report(force=force)
             return AgentReport(agent_id=self.agent_id, status="success", message="Hourly portfolio report sent")
 
         elif event_type == Events.GET_SYSTEM_STATUS:
@@ -264,8 +265,9 @@ class HealthAgent(Agent):
         reason = result.get("reason", "")
         realized_pnl = result.get("realized_pnl", 0.0)
         pnl_pct = result.get("pnl_pct", 0.0)
-        hold_days = result.get("hold_days", 0)
-        
+        avg_cost = result.get("avg_cost", 0.0)
+        opened_at_raw = result.get("opened_at")
+
         # Get current portfolio info for context (with timeout to avoid blocking)
         portfolio_summary = "Portfolio info unavailable"
         if self.portfolio_agent:
@@ -288,13 +290,35 @@ class HealthAgent(Agent):
                 logger.warning("Portfolio state fetch timed out in trade notification; proceeding without portfolio context")
             except Exception as e:
                 logger.warning(f"Could not get portfolio state for trade notification: {e}")
-        
+
         message = f"🦞 Trade Executed\n"
         message += f"• Symbol: {symbol}\n"
         message += f"• Action: {action}\n"
         message += f"• Quantity: {quantity}\n"
         message += f"• Price: ${price:,.2f}\n"
         message += f"• Status: {status}\n"
+        if action.upper() == "SELL":
+            if reason:
+                message += f"• Reason: {reason}\n"
+            if avg_cost:
+                message += f"• Bought at: ${avg_cost:,.2f}\n"
+            if opened_at_raw:
+                try:
+                    from datetime import timezone
+                    if isinstance(opened_at_raw, str):
+                        opened_dt = datetime.fromisoformat(opened_at_raw.replace("Z", "+00:00"))
+                    else:
+                        opened_dt = opened_at_raw
+                    now = datetime.now(timezone.utc)
+                    if opened_dt.tzinfo is None:
+                        opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+                    hold_days = (now - opened_dt).days
+                    buy_date_str = opened_dt.strftime("%Y-%m-%d")
+                    message += f"• Bought on: {buy_date_str} ({hold_days}d held)\n"
+                except Exception:
+                    pass
+            pnl_sign = "+" if realized_pnl >= 0 else ""
+            message += f"• P&L: {pnl_sign}${realized_pnl:,.2f} ({pnl_sign}{pnl_pct:.1f}%)\n"
         message += f"\n{portfolio_summary}"
         
         await self.telegram_agent.send_message(chat_id=chat_id, message=message)
@@ -396,12 +420,12 @@ class HealthAgent(Agent):
         except Exception as e:
             logger.error(f"Error sending daily summary: {e}")
 
-    async def send_hourly_portfolio_report(self):
-        """Send a compact hourly portfolio summary — only while a market is open."""
+    async def send_hourly_portfolio_report(self, force: bool = False):
+        """Send a compact hourly portfolio summary — only while a market is open (or force=True)."""
         from finance_service.utils.market_hours import is_us_market_open, is_hk_market_open
         us_open = is_us_market_open()
         hk_open = is_hk_market_open()
-        if not (us_open or hk_open):
+        if not force and not (us_open or hk_open):
             logger.info("Hourly portfolio report: markets closed, skipping.")
             return
 
@@ -498,6 +522,19 @@ class HealthAgent(Agent):
             dd        = metrics.get("drawdown_pct", 0.0)
             n_pos     = len(positions)
 
+            # Fetch company names for held positions (best-effort)
+            company_names: dict = {}
+            try:
+                import yfinance as yf
+                for sym in list(positions.keys()):
+                    try:
+                        info = yf.Ticker(sym).info or {}
+                        company_names[sym] = info.get("longName") or info.get("shortName") or sym
+                    except Exception:
+                        company_names[sym] = sym
+            except Exception:
+                pass
+
             # Which market(s) open right now?
             open_markets = []
             if us_open:
@@ -533,33 +570,55 @@ class HealthAgent(Agent):
             lines.append(f"{data_line}\n")
 
             if positions:
-                lines.append("*Positions:*")
-                lines.append("```")
-                lines.append(f"{'Sym':<6} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L':>9} {'%':>6}")
-                lines.append("-" * 45)
-                for sym, pos in sorted(positions.items()):
+                sl_default_pct = self.config_engine.get("risk", "stop_loss_default_pct", default=10.0) if self.config_engine else 10.0
+                tp_default_pct = self.config_engine.get("risk", "take_profit_default_pct", default=20.0) if self.config_engine else 20.0
+                header = f"{'Sym':<8} {'Name':<10} {'Qty':>5} {'Avg':>7} {'Cur':>7} {'P&L%':>6} {'Lo':>7} {'Hi':>7} {'Wt':>5}"
+                divider = "-" * 74
+
+                def _pos_row(sym, pos):
                     qty      = pos.get("quantity", 0)
                     avg      = pos.get("avg_cost", 0)
                     cur      = pos.get("current_price", avg)
-                    upnl     = pos.get("unrealized_pnl", (cur - avg) * qty)
                     upnl_pct = pos.get("unrealized_pnl_pct", ((cur - avg) / avg * 100) if avg else 0)
-                    sign     = "+" if upnl >= 0 else ""
-                    lines.append(f"{sym:<6} {qty:>5} {avg:>7.2f} {cur:>7.2f} {sign}{upnl:>8,.0f} {upnl_pct:>+5.1f}%")
-                lines.append("```")
-                lines.append("")
-                lines.append("*Allocation:*")
-                lines.append("```")
-                lines.append(f"{'Sym':<6} {'Qty':>5} {'Avg':>8} {'Value':>10} {'Wt':>6}")
-                lines.append("-" * 40)
-                for sym, pos in sorted(positions.items()):
-                    mv  = pos.get("market_value", pos.get("cost_basis", 0))
-                    qty = pos.get("quantity", 0)
-                    avg = pos.get("avg_cost", 0)
-                    wt  = mv / equity * 100 if equity else 0
-                    lines.append(f"{sym:<6} {qty:>5} {avg:>8.2f} {mv:>10,.0f} {wt:>5.1f}%")
-                lines.append("```")
+                    sl       = pos.get("stop_loss_price") or (avg * (1 - sl_default_pct / 100) if avg else None)
+                    tp       = pos.get("take_profit_price") or (avg * (1 + tp_default_pct / 100) if avg else None)
+                    mv       = pos.get("market_value", cur * qty)
+                    wt       = mv / equity * 100 if equity else 0
+                    sl_s     = f"{sl:>7.2f}" if sl else "    N/A"
+                    hi_s     = f"{tp:>7.2f}" if tp else "    N/A"
+                    name     = (company_names.get(sym) or sym)[:10]
+                    flag     = "⚠" if (sl and cur and cur < sl) else " "
+                    return f"{flag}{sym:<8} {name:<10} {qty:>5} {avg:>7.2f} {cur:>7.2f} {upnl_pct:>+5.1f}% {sl_s} {hi_s} {wt:>4.1f}%"
+
+                hk_pos = {s: p for s, p in positions.items() if s.endswith(".HK")}
+                us_pos = {s: p for s, p in positions.items() if not s.endswith(".HK")}
+
+                if hk_pos:
+                    lines.append("*🇭🇰 HK Positions:*")
+                    lines.append("```")
+                    lines.append(header)
+                    lines.append(divider)
+                    for sym, pos in sorted(hk_pos.items()):
+                        lines.append(_pos_row(sym, pos))
+                    lines.append("```")
+
+                if us_pos:
+                    lines.append("*🇺🇸 US Positions:*")
+                    lines.append("```")
+                    lines.append(header)
+                    lines.append(divider)
+                    for sym, pos in sorted(us_pos.items()):
+                        lines.append(_pos_row(sym, pos))
+                    lines.append("```")
 
             message = "\n".join(lines)
+            TELEGRAM_LIMIT = 4000
+            if len(message) > TELEGRAM_LIMIT:
+                truncated = message[:TELEGRAM_LIMIT]
+                # Close any unclosed ``` code block to keep Markdown valid
+                if truncated.count("```") % 2 == 1:
+                    truncated += "\n```"
+                message = truncated + "\n…_(truncated)_"
             await self.telegram_agent.send_message(chat_id=chat_id, message=message, parse_mode="Markdown")
             logger.info(f"Sent hourly portfolio report ({n_pos} positions)")
         except asyncio.TimeoutError:

@@ -110,6 +110,8 @@ class Position:
             "updated_at": self.updated_at.isoformat(),
             "trades": self.trades,
             "metadata": self.metadata,
+            "stop_loss_price": self.stop_loss_price,
+            "take_profit_price": self.take_profit_price,
         }
 
 
@@ -263,8 +265,12 @@ class Portfolio:
         return sum(pos.unrealized_pnl() for pos in self.positions.values())
     
     def realized_pnl(self) -> float:
-        """Total realized P&L from closed positions."""
-        return self.total_pnl() - self.unrealized_pnl()
+        """Total realized P&L — summed from filled SELL trade metadata."""
+        return sum(
+            t.metadata.get('realized_pnl', 0.0)
+            for t in self.trades
+            if t.side == 'SELL' and t.status == TradeStatus.FILLED
+        )
     
     def total_pnl(self) -> float:
         """Total P&L = realized + unrealized."""

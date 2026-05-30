@@ -2,20 +2,33 @@
 """Get your Telegram chat ID - Run this and send any message to the bot."""
 import asyncio
 import logging
+import os
+from pathlib import Path
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "8694519756:AAGxp6d7Fho3-696h4ae4tHvjcVmtazQUOw"
+# Load .env from project root
+_env_path = Path(__file__).parent.parent.parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+if not BOT_TOKEN:
+    raise SystemExit("TELEGRAM_BOT_TOKEN not set in .env")
 
 async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Respond with chat ID."""
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     user_name = update.effective_user.username or update.effective_user.first_name
-    
+
     message = (
         f"✅ <b>Your Chat ID Found!</b>\n\n"
         f"📱 Chat ID: <code>{chat_id}</code>\n"
@@ -24,11 +37,12 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Add this to config/finance.yaml:</b>\n\n"
         f"<code>notifications:\n"
         f"  telegram:\n"
-        f"    bot_token: \"{BOT_TOKEN}\"\n"
         f"    chat_id: \"{chat_id}\"</code>\n\n"
+        f"<b>Bot token is read from .env:</b>\n"
+        f"<code>TELEGRAM_BOT_TOKEN=&lt;your-token&gt;</code>\n\n"
         f"Then restart the service!"
     )
-    
+
     await context.bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")
     logger.info(f"✅ Chat ID: {chat_id}")
     print(f"\n{'='*60}")

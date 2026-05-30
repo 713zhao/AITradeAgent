@@ -151,7 +151,10 @@ class PortfolioAgent(Agent):
                     decision={}, confidence=1.0, reason=reason,
                     stop_loss=stop_loss, take_profit=take_profit
                 )
-                
+                trade.metadata['realized_pnl'] = realized_pnl
+                trade.metadata['pnl_pct'] = pnl_pct
+                trade.metadata['hold_days'] = hold_days
+
                 # Store calculated PnL in trade_info for HealthAgent to use
                 trade_info['realized_pnl'] = realized_pnl
                 trade_info['pnl_pct'] = pnl_pct

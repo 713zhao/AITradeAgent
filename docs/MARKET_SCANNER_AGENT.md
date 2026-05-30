@@ -3,8 +3,8 @@
 **Agent ID:** `market_scanner_agent`  
 **File:** `finance_service/agents/market_scanner_agent.py`  
 **Status:** ✅ Production-ready, 3-tier architecture  
-**Version:** 2.0  
-**Last Updated:** 2026-03-30
+**Version:** 2.1  
+**Last Updated:** 2026-05-30
 
 ---
 
@@ -42,18 +42,18 @@ MarketScannerAgent implements a **3-tier scanning architecture** that separates 
                         │  └───────────────────────────┘   │
                         └──────────────────────────────────┘
                                      │
-         ┌───────────────────────────┼────────────────────────┐
-         │                           │                        │
-         ▼                           ▼                        ▼
-  ┌──────────────┐          ┌────────────────┐       ┌──────────────┐
-  │  Tier 1:     │          │  Tier 2:       │       │  Tier 3:     │
-  │  Discovery   │          │  Price Monitor │       │  Exit Agent  │
-  │  scanner.run │          │  refresh_watch │       │  exit.run()  │
-  │              │          │  list_prices() │       │              │
-  │  →MARKET_    │          │  →PRICE_       │       │  →exits      │
-  │   SCANNED    │          │   REFRESH_     │       │  →degraded   │
-  │              │          │   COMPLETE     │       │              │
-  └──────────────┘          └────────────────┘       └──────────────┘
+          ┌───────────────────────────┼────────────────────────┐
+          │                           │                        │
+          ▼                           ▼                        ▼
+   ┌──────────────┐          ┌────────────────┐       ┌──────────────┐
+   │  Tier 1:     │          │  Tier 2:       │       │  Tier 3:     │
+   │  Discovery   │          │  Price Monitor │       │  Exit Agent  │
+   │  scanner.run │          │  refresh_watch │       │  exit.run()  │
+   │              │          │  list_prices() │       │              │
+   │  →MARKET_    │          │  →PRICE_       │       │  →exits      │
+   │   SCANNED    │          │   REFRESH_     │       │  →degraded   │
+   │              │          │   COMPLETE     │       │              │
+   └──────────────┘          └────────────────┘       └──────────────┘
 ```
 
 ---
@@ -88,25 +88,132 @@ finance:
 ### Trigger
 `MARKET_SCAN_TRIGGER` event from SchedulerAgent (daily)
 
+### Scan Flow
+
+```
+Universe symbols (100)
+  → Liquidity filter (min avg daily volume)
+    → Downtrend filter  ← hard exclude before scoring
+      → Composite scoring (5 components)
+        → Top N per theme (downtrend-excluded stocks never appear)
+          → Watchlist (≤ 50 symbols)
+```
+
 ### Process
 1. **Per-theme scanning**: For each theme, fetch OHLCV data for all symbols
-2. **Liquidity filtering**: Remove symbols below minimum volume threshold
-3. **Composite ranking**: Score each symbol using 5-factor model
-4. **Top-N selection**: Select top `discovery_top_n_per_theme` per theme
-5. **Watchlist construction**: Merge results into unified watchlist with ratings
-6. **Event publication**: Publish `MARKET_SCANNED` with rated symbols
+2. **Liquidity filtering**: Remove symbols below minimum volume threshold (e.g., average daily volume)
+3. **Downtrend filtering**: Run a hard exclude check. Downtrending stocks are disqualified (score forced to 0.0, excluded from watchlist).
+4. **Composite ranking**: Score remaining symbols using 5-factor model
+5. **Top-N selection**: Select top `discovery_top_n_per_theme` per theme (downtrend-excluded stocks never appear)
+6. **Watchlist construction**: Merge results into unified watchlist with ratings
+7. **Event publication**: Publish `MARKET_SCANNED` with rated symbols
 
-### 5-Factor Composite Scoring
+---
 
-| Factor | Weight | Description |
-|--------|--------|-------------|
-| Technical | 30% | RSI, MACD, Bollinger position |
-| Momentum | 20% | 5-day vs 20-day returns, acceleration |
-| Value | 20% | Distance from 52-week range |
-| Trend | 20% | SMA50/SMA200 alignment, price vs SMA |
-| Liquidity | 10% | Volume vs 20-day average |
+## Downtrend Filter (Hard Exclude)
 
-### Discovery Output Payload
+A stock is **disqualified** (score forced to 0.0, excluded from watchlist) if **either** condition is true:
+
+| Condition | Threshold | Rationale |
+|---|---|---|
+| Price < SMA50 | — | Medium-term downtrend confirmed |
+| 3-month return | < −10% | Significant capital deterioration |
+
+**Why this matters for a momentum strategy:**
+Entry rules (RSI > 55, MACD > 0) require confirmed upward momentum. Feeding them downtrending stocks produces contradictory signals — the entry rules reject most, but occasionally trigger a buy into a falling knife (as happened with 0175.HK Geely, which fell 14.6% post-entry while the scanner kept rating it rank 3 in the HK theme).
+
+**Trade-off:** Strict. A stock briefly below SMA50 on a normal dip is excluded until it recovers. In a broad bear market, fewer stocks pass and the watchlist shrinks — this is intentional.
+
+---
+
+## 5-Factor Composite Scoring
+
+```
+Composite = Technical(30%) + Momentum(20%) + Value(20%) + Trend(20%) + Liquidity(10%)
+```
+
+### 1. Technical Score (30%)
+
+Short-term price momentum: 5-day average vs 20-day average.
+
+```
+score = clamp(0.5 + (SMA5 − SMA20) / SMA20 × 5,  0, 1)
+```
+
+| Example | Score |
+|---|---|
+| +2% above 20d avg | 0.60 |
+| +10% above 20d avg | 1.00 |
+| Flat (0%) | 0.50 |
+
+### 2. Momentum Score (20%)
+
+Volume acceleration — confirms buying conviction:
+
+```
+score = clamp((recent_5d_vol / avg_20d_vol − 0.5) / 1.5,  0, 1)
+```
+
+Volume 2× average → ~0.83. Elevated volume on up-moves is a strong signal.
+
+### 3. Value Score (20%)
+
+PE ratio only (falls back to 0.5 if unavailable):
+
+```
+score = clamp(1.0 − (PE − 10) / 30,  0, 1)
+```
+
+PE = 10 → 1.0; PE = 40 → 0.0. **Known limitation:** penalises high-growth tech stocks with elevated PE.
+
+### 4. Trend Score (20%)
+
+SMA alignment score — price position relative to key moving averages:
+
+| Condition | Adjustment |
+|---|---|
+| Base | 0.50 |
+| Price > SMA20 | +0.20 |
+| Price > SMA50 | +0.20 |
+| SMA50 > SMA200 (golden cross) | +0.10 |
+| SMA50 < SMA200 (death cross) | −0.20 |
+
+> Since the downtrend filter already excludes `price < SMA50`, the +0.20 for SMA50 alignment almost always triggers for stocks that reach scoring. The effective differentiator is the golden/death cross (+0.10 / −0.20) and SMA20 alignment (+0.20).
+
+### 5. Liquidity Score (10%)
+
+```
+score = clamp(avg_daily_volume / 100_000_000,  0, 1)
+```
+
+Returns 0.5 for volumes below 10M (not penalised, not rewarded).
+
+---
+
+## Is This Strategy Good? — Assessment
+
+**Yes, for a momentum/trend-following strategy.** The system's entry rules (RSI > 55, MACD > 0) are designed to confirm existing upward momentum, not to catch bottoms. Feeding them downtrending stocks is an internal contradiction.
+
+**Known weaknesses that remain:**
+
+| Issue | Impact |
+|---|---|
+| PE-only value signal | Growth stocks (PE > 40) are unfairly penalised |
+| Volume momentum ignores direction | High sell-off volume scores well |
+| SMA50 filter has no band | A stock 0.5% below SMA50 on a 1-day dip is excluded |
+| No fundamental quality screen | Technically strong but fundamentally weak stocks can rank high |
+| Fixed theme lists | Misses breakout stocks not in any configured theme |
+
+**Potential improvements (not yet implemented):**
+- Replace PE-only value score with PEG ratio or revenue growth rate
+- Add direction-aware volume (up-day volume vs down-day volume ratio)
+- Soften SMA50 filter to SMA50 × 0.97 (3% tolerance band)
+- Add a fundamental quality gate (e.g. positive revenue growth, debt/equity < 2)
+- Allow dynamic theme list additions
+
+---
+
+## Discovery Output Payload
 
 ```python
 {
@@ -235,19 +342,23 @@ SchedulerAgent (every 15 min)
 | `scanner.price_monitor_top_n` | 50 | Max symbols for price monitoring |
 | `scanner.price_monitor_interval_minutes` | 15 | Price refresh interval |
 | `scanner.discovery_interval` | daily | How often to run full discovery |
-| `investment_themes.*.symbols` | (per theme) | Symbol universe per theme |
+| `universe.themes` | (per theme) | Symbol universe per theme |
 
 ---
 
-## Recent Fixes (2026-03-31)
+## Recent Fixes
 
-| Fix | Description |
-|-----|-------------|
-| Ranking now uses real data | Previously `run()` was called without `data_agent`, causing all ratings to default to 0.5. Fixed orchestrator to pass `data_agent=self.data_agent`. Watchlist now shows differentiated 0-1 composite scores. |
-| Event bus timeout increased | Timeout for `MARKET_SCAN_TRIGGER` raised from 60s to 300s to allow full 100-symbol scan to complete without giving up. |
-| Concurrent scanning improvement | Data fetches run in parallel across symbols; ranking is sequential but now uses cached data when available, reducing total runtime. |
+### 2026-05-30 Fixes
+- **Downtrend Filter Bug (Trend Score Market-Cap Proxy):** Previously `_calc_trend_score(fundamentals)` measured **market cap size**, not price trend. Large-cap stocks in confirmed downtrends (e.g. Geely 0175.HK at −14.6%) received full trend scores of 1.0, allowing them into the watchlist despite months of falling prices. Fixed by having `_calc_trend_score(prices)` measure SMA stack alignment, and adding the separate `_is_downtrend(prices)` hard filter to eliminate downtrending stocks before scoring.
+- **Top N Selection Bug:** `ranked[:top_n]` was selecting the top-N from all scored stocks, including downtrend-filtered stocks with score 0.0. If a theme had fewer than N clean candidates, downtrend stocks would fill the remaining slots. Fixed by filtering to `score > 0.0` before slicing.
+- **Scoring Near-0.5 Fallback Bug:** `_extract_prices` and `_extract_volumes` iterated `df_dict.values()` looking for row-major records `{"close": 22.05}`. But `df.to_dict()` returns **column-major** format `{"close": {0: 22.05, 1: 21.9, ...}}`. Every iteration saw a dict with integer keys, `"close" in record` was always `False`, and both methods returned empty lists. As a result, all scoring sub-functions fell back to `0.5`, the downtrend filter never triggered, and every stock in every scan had a score near `0.5` regardless of actual price behaviour. Fixed by reading the column directly via `df_dict.get("close")`.
 
-**Note:** For scans triggered outside market hours, the orchestrator still enforces market hours check (skips if both US and HK closed). This can be temporarily disabled for debugging.
+### 2026-03-31 Fixes
+- **Ranking now uses real data:** Previously `run()` was called without `data_agent`, causing all ratings to default to 0.5. Fixed orchestrator to pass `data_agent=self.data_agent`. Watchlist now shows differentiated 0-1 composite scores.
+- **Event bus timeout increased:** Timeout for `MARKET_SCAN_TRIGGER` raised from 60s to 300s to allow full 100-symbol scan to complete without giving up.
+- **Concurrent scanning improvement:** Data fetches run in parallel across symbols; ranking is sequential but now uses cached data when available, reducing total runtime.
+
+*(Note: For scans triggered outside market hours, the orchestrator still enforces market hours check (skips if both US and HK closed). This can be temporarily disabled for debugging.)*
 
 ---
 
@@ -263,8 +374,8 @@ python -m pytest tests/test_market_scanner_agent.py -v
 
 ## Summary
 
-MarketScannerAgent v2.0 implements a 3-tier architecture:
-- **Daily discovery** ranks 100 symbols using 5-factor composite scoring, selecting top 10 per theme
+MarketScannerAgent v2.1 implements a 3-tier architecture:
+- **Daily discovery** ranks 100 symbols using 5-factor composite scoring (Technical, Momentum, Value, Trend, Liquidity) and applies a strict downtrend filter, selecting top 10 per theme
 - **15-min price monitor** provides lightweight quote refresh for the watchlist + held positions
 - **5-min exit monitor** (delegated to ExitAgent) checks positions for stop-loss and strategic degradation
 

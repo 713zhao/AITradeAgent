@@ -4,9 +4,10 @@ risk:
   max_daily_loss_pct: 2.0
   max_drawdown_pct: 15.0
   default_risk_budget_pct: 1.0
-  stop_loss_default_pct: 1.5
-  take_profit_default_pct: 3.0
+  stop_loss_default_pct: 10.0     # fallback only (ATR strategy uses stored per-position prices)
+  take_profit_default_pct: 20.0   # fallback only (ATR strategy uses stored per-position prices)
   max_concurrent_positions: 10
+  min_position_size_pct: 3.0
   min_position_size_usd: 100
   allow_short_selling: false
   margin_enabled: false
@@ -492,7 +493,6 @@ scanner:
   discovery_interval: daily
 notifications:
   telegram:
-    bot_token: 8694519756:AAGxp6d7Fho3-696h4ae4tHvjcVmtazQUOw
     chat_id: '8383381149'
     message_thread_id: null
     enabled: true

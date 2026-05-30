@@ -365,6 +365,7 @@ class StrategyAgent(Agent):
                 existing_qty = 0
                 max_position_size_pct = 10.0  # default from risk policy
                 portfolio_equity = self.initial_cash
+                available_cash = self.initial_cash
                 if self.portfolio_agent:
                     try:
                         from finance_service.core.event_bus import Events
@@ -377,8 +378,20 @@ class StrategyAgent(Agent):
                                     existing_qty = pos["quantity"]
                                     break
                             portfolio_equity = portfolio_data["equity_metrics"]["total_equity"]
+                            available_cash = portfolio_data["equity_metrics"].get("current_cash", portfolio_equity)
                             # get max position size from risk config (fallback)
                             max_position_size_pct = self.config_engine.get("risk", "max_position_size_pct", default=10.0)
+                            # Enforce max concurrent positions limit
+                            max_concurrent = self.config_engine.get("risk", "max_concurrent_positions", default=10)
+                            active_positions = [p for p in portfolio_data.get("positions", []) if p.get("quantity", 0) > 0]
+                            if len(active_positions) >= max_concurrent and existing_qty == 0:
+                                logger.info(f"Max concurrent positions ({max_concurrent}) reached ({len(active_positions)} open). Skipping new entry for {symbol}.")
+                                return AgentReport(
+                                    agent_id=self.agent_id,
+                                    status="success",
+                                    message=f"Max concurrent positions ({max_concurrent}) reached, skipping {symbol}",
+                                    payload={"proposals": []}
+                                )
                     except Exception as e:
                         logger.warning(f"Failed to query portfolio_agent for position cooling: {e}")
                 
@@ -402,19 +415,22 @@ class StrategyAgent(Agent):
                 # Position sizing: risk-based, respecting existing exposure
                 risk_per_share = current_price - stop_loss_price
                 risk_per_share_usd = risk_per_share / fx_rate  # convert risk to USD
+                # Minimum buy: N% of total capital (use initial_cash as floor to prevent stale-price underestimation)
+                min_position_pct = self.config_engine.get("risk", "min_position_size_pct", default=3.0)
+                sizing_equity = max(portfolio_equity, self.initial_cash)
+                min_qty = max(1, int(sizing_equity * (min_position_pct / 100.0) / price_usd))
+
                 if risk_per_share_usd <= 0:
-                    logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share_usd:.4f} USD. Using default 1 share.")
-                    quantity = 1
+                    logger.warning(f"Invalid risk_per_share for {symbol}: {risk_per_share_usd:.4f} USD. Using minimum {min_qty} shares ({min_position_pct:.0f}% of capital).")
+                    quantity = min_qty
                 else:
                     # Maximum loss amount we're willing to take for this trade
                     risk_budget_usd = portfolio_equity * (self.risk_budget_pct / 100.0)
                     desired_quantity = int(risk_budget_usd / risk_per_share_usd)
-                    desired_quantity = max(1, desired_quantity)
-                    
-                    # --- FIX 2: Adjust quantity to respect max position size ---
-                    # Compute total position after trade
+                    desired_quantity = max(min_qty, desired_quantity)
+
+                    # Cap 1: total position ≤ max_position_size_pct% of portfolio equity
                     total_qty = existing_qty + desired_quantity
-                    # Max allowed qty based on % of portfolio (price converted to USD)
                     max_allowed_value = portfolio_equity * (max_position_size_pct / 100.0)
                     max_allowed_qty = int(max_allowed_value / price_usd)
                     if total_qty > max_allowed_qty:
@@ -427,10 +443,41 @@ class StrategyAgent(Agent):
                                 message=f"Position size limit reached for {symbol}",
                                 payload={"proposals": []}
                             )
-                        else:
-                            logger.info(f"Reduced quantity from {desired_quantity} to {quantity} due to position size limit (existing: {existing_qty})")
+                        logger.info(f"Reduced quantity from {desired_quantity} to {quantity} due to position size limit (existing: {existing_qty})")
                     else:
                         quantity = desired_quantity
+
+                    # Cap 2: new trade cost ≤ max_position_size_pct% of available cash
+                    # Prevents proposing trades that will be rejected for insufficient cash.
+                    max_cash_trade_value = available_cash * (max_position_size_pct / 100.0)
+                    max_cash_qty = int(max_cash_trade_value / price_usd)
+                    if quantity > max_cash_qty:
+                        if max_cash_qty <= 0:
+                            logger.info(f"Insufficient cash for {symbol}: cash=${available_cash:.2f}, max trade=${max_cash_trade_value:.2f}. Skipping.")
+                            return AgentReport(
+                                agent_id=self.agent_id,
+                                status="success",
+                                message=f"Insufficient cash for {symbol}",
+                                payload={"proposals": []}
+                            )
+                        logger.info(f"Reduced quantity from {quantity} to {max_cash_qty} to fit within {max_position_size_pct:.0f}% of available cash (${available_cash:.2f})")
+                        quantity = max_cash_qty
+
+                    # Minimum position guard: skip if cash can't cover min_qty shares.
+                    # Prevents tiny 1-share orders when the account is nearly fully allocated.
+                    if quantity < min_qty:
+                        min_value = min_qty * price_usd
+                        logger.info(
+                            f"Skipping {symbol}: quantity {quantity} < min {min_qty} "
+                            f"(need ${min_value:,.0f}, cash=${available_cash:,.0f}). "
+                            f"Account too fully allocated for a {min_position_pct:.0f}% position."
+                        )
+                        return AgentReport(
+                            agent_id=self.agent_id,
+                            status="success",
+                            message=f"Insufficient cash for minimum {min_position_pct:.0f}% position in {symbol}",
+                            payload={"proposals": []}
+                        )
                 
                 proposal = TradeProposal(
                     symbol=symbol,

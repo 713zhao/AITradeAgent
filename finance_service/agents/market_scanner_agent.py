@@ -170,8 +170,9 @@ class MarketScannerAgent(Agent):
                 # Rank within theme
                 ranked = await self._rank_symbols(liquid_symbols, data_agent)
 
-                # Take top N for this theme with ratings
-                for rank_idx, (symbol, score) in enumerate(ranked[:top_n]):
+                # Take top N for this theme — exclude downtrend-filtered stocks (score == 0.0)
+                qualified = [(s, sc) for s, sc in ranked if sc > 0.0]
+                for rank_idx, (symbol, score) in enumerate(qualified[:top_n]):
                     all_rated.append({
                         "symbol": symbol,
                         "theme": theme,
@@ -480,6 +481,12 @@ class MarketScannerAgent(Agent):
                 prices = self._extract_prices(df_dict)
                 volumes = self._extract_volumes(df_dict)
 
+                # Hard downtrend filter — disqualify before scoring
+                if self._is_downtrend(prices):
+                    logger.info(f"[Scanner] {symbol} excluded: downtrend filter (price < SMA50 or -10% in 3m)")
+                    scored.append((symbol, 0.0))
+                    continue
+
                 # 1. Technical strength (30%)
                 technical_score = self._calc_technical_score(prices)
 
@@ -489,8 +496,8 @@ class MarketScannerAgent(Agent):
                 # 3. Value (20%)
                 value_score = self._calc_value_score(fundamentals)
 
-                # 4. Trend alignment (20%)
-                trend_score = self._calc_trend_score(fundamentals)
+                # 4. Trend alignment (20%) — now uses SMA stack, not market cap
+                trend_score = self._calc_trend_score(prices)
 
                 # 5. Liquidity (10%)
                 liquidity_score = self._calc_liquidity_score(volumes)
@@ -513,51 +520,71 @@ class MarketScannerAgent(Agent):
 
     # ─── Score calculation helpers ────────────────────────────────
 
+    def _extract_col(self, df_dict, col: str) -> List[float]:
+        """Extract a column from df.to_dict() column-major format: {col: {idx: val, ...}}."""
+        if not isinstance(df_dict, dict):
+            return []
+        series = df_dict.get(col) or df_dict.get(col.capitalize())
+        if not isinstance(series, dict):
+            return []
+        result = []
+        for v in series.values():
+            try:
+                f = float(v)
+                if f == f:  # filter NaN
+                    result.append(f)
+            except (TypeError, ValueError):
+                pass
+        return result
+
     def _extract_prices(self, df_dict) -> List[float]:
-        prices = []
-        if isinstance(df_dict, dict):
-            for record in df_dict.values():
-                if isinstance(record, dict) and "close" in record:
-                    try:
-                        prices.append(float(record["close"]))
-                    except (ValueError, TypeError):
-                        pass
-        return prices
+        return self._extract_col(df_dict, "close")
 
     def _extract_volumes(self, df_dict) -> List[float]:
-        volumes = []
-        if isinstance(df_dict, dict):
-            for record in df_dict.values():
-                if isinstance(record, dict) and "volume" in record:
-                    try:
-                        volumes.append(float(record["volume"]))
-                    except (ValueError, TypeError):
-                        pass
-        return volumes
+        return self._extract_col(df_dict, "volume")
+
+    def _sma(self, prices: List[float], period: int) -> float:
+        """Simple moving average over the last `period` prices. Returns 0 if insufficient data."""
+        if len(prices) < period:
+            return 0.0
+        return sum(prices[-period:]) / period
+
+    def _is_downtrend(self, prices: List[float]) -> bool:
+        """
+        Hard downtrend filter for a momentum strategy.
+        Returns True (disqualify) if ANY of:
+          - Price < SMA50  (medium-term downtrend)
+          - 3-month return < -10%  (significant capital deterioration)
+        """
+        if len(prices) < 50:
+            return False  # not enough history to judge
+        cur = prices[-1]
+        sma50 = self._sma(prices, 50)
+        if sma50 > 0 and cur < sma50:
+            return True
+        if len(prices) >= 63:  # ~3 months of trading days
+            three_month_ago = prices[-63]
+            if three_month_ago > 0 and (cur - three_month_ago) / three_month_ago < -0.10:
+                return True
+        return False
 
     def _calc_technical_score(self, prices: List[float]) -> float:
+        """Short-term price momentum: 5-day avg vs 20-day avg."""
         if len(prices) < 20:
             return 0.5
-        recent = prices[-5:]
-        older = prices[-20:-15]
-        if not older:
-            return 0.5
-        recent_avg = sum(recent) / len(recent)
-        older_avg = sum(older) / len(older)
+        recent_avg = self._sma(prices, 5)
+        older_avg = self._sma(prices, 20)
         if older_avg <= 0:
             return 0.5
         momentum = (recent_avg - older_avg) / older_avg
-        return min(1.0, max(0.0, (momentum + 0.5) / 1.0))
+        return min(1.0, max(0.0, 0.5 + momentum * 5))
 
     def _calc_momentum_score(self, volumes: List[float]) -> float:
+        """Volume momentum: recent 5-day avg vs 20-day avg."""
         if len(volumes) < 20:
             return 0.5
-        recent = volumes[-5:]
-        older = volumes[-20:-15]
-        if not older:
-            return 0.5
-        recent_avg = sum(recent) / len(recent)
-        older_avg = sum(older) / len(older)
+        recent_avg = sum(volumes[-5:]) / 5
+        older_avg = sum(volumes[-20:]) / 20
         if older_avg <= 0:
             return 0.5
         ratio = recent_avg / older_avg
@@ -569,14 +596,25 @@ class MarketScannerAgent(Agent):
             return min(1.0, max(0.0, 1.0 - (pe - 10) / 30))
         return 0.5
 
-    def _calc_trend_score(self, fundamentals: Dict) -> float:
-        mc = fundamentals.get("market_cap")
-        if mc and isinstance(mc, (int, float)) and mc > 0:
-            if 1e9 <= mc <= 1e11:
-                return 1.0
-            if 5e8 <= mc < 1e9 or 1e11 < mc <= 5e11:
-                return 0.7
-        return 0.5
+    def _calc_trend_score(self, prices: List[float]) -> float:
+        """
+        SMA alignment score — replaces the old market-cap proxy.
+        Scores based on price position relative to SMA20/50/200 stack.
+        Full uptrend: price > SMA20 > SMA50, golden cross (SMA50 > SMA200).
+        Death cross (SMA50 < SMA200) is penalised.
+        """
+        if len(prices) < 20:
+            return 0.5
+        cur = prices[-1]
+        sma20  = self._sma(prices, 20)
+        sma50  = self._sma(prices, 50)  if len(prices) >= 50  else 0.0
+        sma200 = self._sma(prices, 200) if len(prices) >= 200 else 0.0
+        score = 0.5
+        if sma20  > 0 and cur   > sma20:  score += 0.2   # above short-term MA
+        if sma50  > 0 and cur   > sma50:  score += 0.2   # above medium-term MA
+        if sma200 > 0 and sma50 > sma200: score += 0.1   # golden cross bonus
+        if sma200 > 0 and sma50 < sma200: score -= 0.2   # death cross penalty
+        return min(1.0, max(0.0, score))
 
     def _calc_liquidity_score(self, volumes: List[float]) -> float:
         if not volumes:

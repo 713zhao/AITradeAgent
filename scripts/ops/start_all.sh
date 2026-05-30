@@ -41,11 +41,7 @@ cd "$PROJECT_ROOT"
 
 # Start finance service in background
 echo -e "${BLUE}📊 Starting Finance Service (port 8801)...${NC}"
-<<<<<<< HEAD:scripts/ops/start_all.sh
 python3 finance_service/run_finance_service.py &
-=======
-python3 scripts/run_finance_service.py &
->>>>>>> master:start_all.sh
 FINANCE_PID=$!
 echo -e "${GREEN}✓ Finance Service PID: $FINANCE_PID${NC}"
 

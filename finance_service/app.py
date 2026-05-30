@@ -754,8 +754,33 @@ class MainOrchestratorAgent:
             degraded = report.payload.get("degraded_positions", [])
             if exits:
                 logger.info(f"ExitAgent found {len(exits)} exit signals")
+                pos_by_symbol = {p.get("symbol"): p for p in filtered_positions}
                 for exit_signal in exits:
-                    await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exit_signal))
+                    sym = exit_signal.get("symbol")
+                    sell_price = exit_signal.get("current_price", 0)
+                    qty = exit_signal.get("quantity", 0)
+                    pos = pos_by_symbol.get(sym, {})
+                    avg_cost = pos.get("avg_cost", 0)
+                    opened_at = pos.get("opened_at")
+                    realized_pnl = (sell_price - avg_cost) * qty if avg_cost and qty else 0
+                    pnl_pct = ((sell_price - avg_cost) / avg_cost * 100) if avg_cost else 0
+                    exec_result = {
+                        "execution_result": {
+                            "symbol": sym,
+                            "action": "SELL",
+                            "quantity": qty,
+                            "price": sell_price,
+                            "filled_price": sell_price,
+                            "status": "filled",
+                            "timestamp": exit_signal.get("triggered_at", datetime.utcnow().isoformat()),
+                            "reason": exit_signal.get("reason", "exit triggered"),
+                            "avg_cost": avg_cost,
+                            "opened_at": opened_at,
+                            "realized_pnl": realized_pnl,
+                            "pnl_pct": pnl_pct,
+                        }
+                    }
+                    await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_result))
             if degraded:
                 logger.warning(f"ExitAgent found {len(degraded)} degraded positions")
                 await self.event_bus.publish(Event(event_type=Events.POSITION_DEGRADED, data={"degraded": degraded}))
@@ -775,6 +800,8 @@ class MainOrchestratorAgent:
                 logger.warning(f"Degraded record missing symbol/quantity: {record}")
                 continue
             logger.info(f"Executing strategic exit for {symbol}: {reason}")
+            avg_cost = record.get("avg_cost") or record.get("entry_price", 0)
+            opened_at = record.get("opened_at")
             trade_proposal = {
                 "symbol": symbol,
                 "action": "SELL",
@@ -784,7 +811,6 @@ class MainOrchestratorAgent:
                 "rationale": [reason],
             }
             try:
-                # Wrap trade_proposal in an AgentReport payload to match ExecutionAgent.run() signature
                 exit_approval_report = AgentReport(
                     agent_id="exit_agent",
                     status="success",
@@ -793,6 +819,17 @@ class MainOrchestratorAgent:
                 )
                 exec_report = await self.execution_agent.run(exit_approval_report)
                 if exec_report and exec_report.status == "success":
+                    sell_price = current_price or 0
+                    realized_pnl = (sell_price - avg_cost) * quantity if avg_cost and quantity else 0
+                    pnl_pct = ((sell_price - avg_cost) / avg_cost * 100) if avg_cost else 0
+                    result = exec_report.payload.get("execution_result", {})
+                    result.update({
+                        "avg_cost": avg_cost,
+                        "opened_at": opened_at,
+                        "realized_pnl": realized_pnl,
+                        "pnl_pct": pnl_pct,
+                        "reason": reason,
+                    })
                     await self.event_bus.publish(Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload))
                     logger.info(f"Strategic exit executed for {symbol}")
                 else:
@@ -1077,7 +1114,7 @@ class MainOrchestratorAgent:
 
     async def handle_hourly_portfolio_report(self, event: Event):
         """Dispatch HOURLY_PORTFOLIO_TRIGGER to HealthAgent."""
-        await self.health_agent.run(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, payload={})
+        await self.health_agent.run(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, payload=event.data or {})
 
     # Helper methods
     async def _get_symbol_snapshot(self, symbol: str) -> Optional[Dict]:
@@ -1280,8 +1317,9 @@ def create_app():
                 "as_of_date": as_of_date,
             })
         elif trigger_type == "hourly-report":
-            await _orchestrator.event_bus.publish(Event(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, data={}))
-            return jsonify({"status": "queued", "trigger": "hourly_report"})
+            force = request.args.get("force", "false").lower() in ("1", "true", "yes")
+            await _orchestrator.event_bus.publish(Event(event_type=Events.HOURLY_PORTFOLIO_TRIGGER, data={"force": force}))
+            return jsonify({"status": "queued", "trigger": "hourly_report", "force": force})
         else:
             return jsonify({"error": "unknown trigger_type"}), 400
 

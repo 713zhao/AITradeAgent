@@ -335,6 +335,8 @@ class ExitAgent(Agent):
                         "symbol": symbol,
                         "quantity": pos.get("quantity"),
                         "entry_price": entry_price,
+                        "avg_cost": pos.get("avg_cost", entry_price),
+                        "opened_at": pos.get("opened_at"),
                         "current_price": current_price,
                         "pnl": pnl,
                         "exit_rules": exit_rules,

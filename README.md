@@ -125,30 +125,44 @@ AITradeAgent/
 └── logs/
 ```
 
-## Service Management (systemd)
+## Service Management
 
-The service is registered as a systemd user service and **auto-starts at boot**.
-Unit file location: `~/.config/systemd/user/aitrade.service`
+The service is started via `start.sh` (nohup background process, not systemd).
 
 ```bash
-# Check status
-systemctl --user status aitrade.service
+# Start
+./start.sh
 
-# Start / Stop / Restart
-systemctl --user start aitrade.service
-systemctl --user stop aitrade.service
-systemctl --user restart aitrade.service
+# Stop
+pkill -f run_finance_service.py
 
-# Enable / disable auto-start at boot
-systemctl --user enable aitrade.service
-systemctl --user disable aitrade.service
+# Restart
+pkill -f run_finance_service.py; sleep 2; ./start.sh
+
+# Check if running
+ps aux | grep run_finance_service
 
 # Tail runtime log
-tail -f logs/finance_service_restart.log
+tail -f finance_service.out
 ```
 
-The service uses `Restart=on-failure` — auto-recovers after crashes.
-`Linger=yes` is set on the user account so the service starts at boot even without a login session.
+## Health Watchdog
+
+An external liveness watchdog polls `/health` every 5 minutes and sends a Telegram alert on failure, attempting an auto-restart before alerting:
+
+```
+~/.openclaw/workspace/heartbeat_check.py
+```
+
+It runs as a background loop (started separately from the finance service):
+
+```bash
+# Check if watchdog is running
+ps aux | grep heartbeat_check
+
+# Start watchdog manually
+python3 ~/.openclaw/workspace/heartbeat_check.py --loop --interval-minutes 5
+```
 
 ## Common Commands
 

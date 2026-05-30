@@ -128,8 +128,7 @@ class PydanticConfig(BaseSettings):
             "STRATEGY_TYPE": finance_cfg.get("strategy", {}).get("type", "baseline_rule"),
             # Execution
             # Scheduling
-            # Notifications (read from YAML, override from env)
-            "TELEGRAM_BOT_TOKEN": finance_cfg.get("notifications", {}).get("telegram", {}).get("bot_token", ""),
+            # Notifications (TELEGRAM_BOT_TOKEN read from .env only)
             "TELEGRAM_CHAT_ID": finance_cfg.get("notifications", {}).get("telegram", {}).get("chat_id", ""),
             "TELEGRAM_MESSAGE_THREAD_ID": finance_cfg.get("notifications", {}).get("telegram", {}).get("message_thread_id"),
             "SLACK_BOT_TOKEN": finance_cfg.get("notifications", {}).get("slack", {}).get("webhook_url", ""),
