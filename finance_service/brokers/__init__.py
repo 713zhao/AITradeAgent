@@ -245,9 +245,13 @@ class PaperBroker(BrokerInterface):
         order_type = order.get('order_type', 'market')
         limit_price = order.get('price')
 
-        # For paper trading, assume immediate fill at provided price
-        fill_price = limit_price if order_type == 'limit' and limit_price else order.get('price', 0.0)
-        if fill_price == 0.0:
+        # Limit orders fill at the specified price; market orders use last known position price
+        if order_type == 'limit' and limit_price is not None:
+            fill_price = limit_price
+        else:
+            pos = self._positions.get(symbol)
+            fill_price = pos.current_price if pos else None
+        if not fill_price:
             return OrderResult(
                 order_id="",
                 symbol=symbol,

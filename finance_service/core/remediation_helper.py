@@ -183,8 +183,8 @@ class RemediationHelper:
             logger.info("Remediation: Starting finance service")
             start_cmd = (
                 f"cd {self.workspace_path} && "
-                f"nohup {self.venv_path}/bin/python run_finance_service.py "
-                f"> finance.log 2>&1 &"
+                f"nohup python3 finance_service/run_finance_service.py "
+                f">> finance_service.out 2>&1 &"
             )
             await self._run_command_shell(start_cmd, timeout=5)
             

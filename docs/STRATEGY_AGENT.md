@@ -10,9 +10,11 @@
 
 ## Overview
 
-StrategyAgent converts technical indicators into actionable trade proposals. It houses one or more strategy implementations (e.g., `sma20_trend`, `sma50_trend_regime`) and ranks them by performance. It determines the **action** (BUY/SELL/WAIT), confidence, and suggested position size.
+StrategyAgent converts technical indicators into actionable **BUY trade proposals**. It evaluates entry rules from the active strategy, computes ATR-based stop/take-profit levels, and sizes the position.
 
-**Key Responsibility:** Produce trade proposals from `IndicatorsSnapshot`.
+**Key Responsibility:** Produce BUY `TradeProposal` objects with `stop_loss_price` attached. SELL decisions are handled exclusively by `ExitAgent` — StrategyAgent's `run()` method never generates SELL proposals.
+
+**Secondary role:** StrategyAgent hosts `RuleStrategy` (loaded from `finance.yaml`), which contains both entry and exit rules. `ExitAgent` borrows `strategy_agent.rule_strategy` to re-evaluate held positions against exit rules during strategic degradation checks (Mode 2). See `docs/EXIT_AGENT.md` for the full connection.
 
 ---
 

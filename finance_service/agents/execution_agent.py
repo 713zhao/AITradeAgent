@@ -55,7 +55,7 @@ class ExecutionAgent(Agent):
                     "symbol": trade_proposal.symbol,
                     "action": trade_proposal.action.upper(),
                     "quantity": trade_proposal.quantity or 1.0,
-                    "order_type": "limit",
+                    "order_type": "limit" if trade_proposal.target_price else "market",
                     "price": trade_proposal.target_price,
                 }
                 order_result = await self.broker.submit_order(order_dict)

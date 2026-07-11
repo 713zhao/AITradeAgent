@@ -103,6 +103,83 @@ curl "http://127.0.0.1:8801/api/trades/history?period=this_month&side=BUY&limit=
 
 Response includes `filter`, `summary` (count/buys/sells/total_trade_value) and a `trades` list.
 
+## Manual Trading
+
+Bypass the automated scanner/strategy pipeline and place orders directly.
+
+### Buy
+
+```bash
+# Market buy — 10 shares of AAPL at current market price
+curl -X POST http://127.0.0.1:8801/api/trade/buy \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 10}'
+
+# Limit buy — 10 shares of AAPL at $175.00
+curl -X POST http://127.0.0.1:8801/api/trade/buy \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 10, "price": 175.00}'
+```
+
+### Sell
+
+```bash
+# Sell all shares of TSLA (quantity auto-resolved from open position)
+curl -X POST http://127.0.0.1:8801/api/trade/sell \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "TSLA"}'
+
+# Sell a specific quantity at market price
+curl -X POST http://127.0.0.1:8801/api/trade/sell \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "TSLA", "quantity": 5}'
+
+# Limit sell — 5 shares of TSLA at $280.00
+curl -X POST http://127.0.0.1:8801/api/trade/sell \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "TSLA", "quantity": 5, "price": 280.00}'
+```
+
+### Response
+
+Both endpoints return the execution result immediately:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "trade_id": "...",
+    "symbol": "AAPL",
+    "action": "BUY",
+    "quantity": 10,
+    "price": 175.00,
+    "filled_price": 175.00,
+    "status": "filled",
+    "timestamp": "2026-05-30T12:00:00"
+  }
+}
+```
+
+Orders are executed through the active broker (paper or live Alpaca) and portfolio state is updated immediately. Telegram notifications fire if configured.
+
+### Via PicoClaw Tools
+
+```python
+from picoclaw_tools.finance_engine_tools import manual_buy, manual_sell
+
+# Market buy
+manual_buy("AAPL", quantity=10)
+
+# Limit buy
+manual_buy("AAPL", quantity=10, price=175.00)
+
+# Sell all
+manual_sell("TSLA")
+
+# Partial sell at limit
+manual_sell("TSLA", quantity=5, price=280.00)
+```
+
 ## Project Layout
 
 ```text

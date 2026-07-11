@@ -37,7 +37,6 @@ class ExitAgent(Agent):
         self.config = config_engine
         self.event_bus = get_event_bus()
         self.data_agent = data_agent
-        self.execution_agent = execution_agent
         self.analysis_agent = analysis_agent
         self.strategy_agent = strategy_agent
         logger.info("ExitAgent initialized with enhanced re-analysis capability.")
@@ -155,7 +154,11 @@ class ExitAgent(Agent):
                 except Exception as e:
                     logger.warning(f"Failed to fetch price for {symbol}: {e}")
 
-            if current_price is None or entry_price is None or quantity is None:
+            # entry_price is only needed for the percentage fallback path;
+            # skip only when we can't determine current price, quantity, or have
+            # no explicit stops AND no entry price to derive fallbacks from.
+            needs_entry = not stop_loss and not take_profit
+            if current_price is None or quantity is None or (needs_entry and entry_price is None):
                 logger.debug(
                     f"Skipping {symbol}: missing essential data (price/entry/qty)"
                 )
@@ -167,7 +170,7 @@ class ExitAgent(Agent):
             if self.exit_strategy == "atr":
                 # Use stored stop_loss and take_profit (set at trade execution)
                 if stop_loss and current_price <= stop_loss:
-                    reason = f"ATR stop triggered: price ${current_price:.2f} <= ${stop_loss:.2f}"
+                    reason = f"ATR stop loss triggered: price ${current_price:.2f} <= ${stop_loss:.2f}"
                 elif take_profit and current_price >= take_profit:
                     reason = f"ATR take profit triggered: price ${current_price:.2f} >= ${take_profit:.2f}"
                 elif not stop_loss and not take_profit and entry_price:
@@ -236,36 +239,6 @@ class ExitAgent(Agent):
                 }
                 exits.append(exit_record)
                 logger.info(f"Exit triggered for {symbol}: {reason}")
-
-                # Execute sell order if we have execution agent
-                if self.execution_agent:
-                    try:
-                        trade_proposal = {
-                            "symbol": symbol,
-                            "action": "SELL",
-                            "confidence": 1.0,
-                            "quantity": quantity,
-                            "target_price": current_price,
-                            "rationale": [reason],
-                        }
-                        exit_approval_report = AgentReport(
-                            agent_id="exit_agent",
-                            status="success",
-                            message="Reactive exit triggered",
-                            payload={"trade_proposals": [trade_proposal]},
-                        )
-                        await self.execution_agent.run(
-                            approval_report=exit_approval_report
-                        )
-                        logger.info(f"Exit order executed for {symbol}")
-                    except Exception as e:
-                        logger.error(
-                            f"Error executing exit for {symbol}: {e}", exc_info=True
-                        )
-                else:
-                    logger.warning(
-                        f"ExecutionAgent not set, cannot auto-execute exit for {symbol}"
-                    )
 
         return exits
 
@@ -339,6 +312,8 @@ class ExitAgent(Agent):
                         "opened_at": pos.get("opened_at"),
                         "current_price": current_price,
                         "pnl": pnl,
+                        "rsi": indicators.get("rsi"),
+                        "trend": indicators.get("trend"),
                         "exit_rules": exit_rules,
                         "reason": f"Position exit signal: {', '.join(exit_rules) if exit_rules else 'strategy exit'}",
                         "recommendation": "Strategic exit triggered",

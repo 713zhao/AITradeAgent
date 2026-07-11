@@ -750,7 +750,7 @@ class MainOrchestratorAgent:
         # Run exit agent with strategic re-analysis every other check
         report = await self.exit_agent.run(positions=filtered_positions, perform_strategy_check=True)
         if report.status == "success":
-            exits = report.payload.get("exits", [])
+            exits = report.payload.get("reactive_exits", [])
             degraded = report.payload.get("degraded_positions", [])
             if exits:
                 logger.info(f"ExitAgent found {len(exits)} exit signals")
@@ -1624,6 +1624,162 @@ def create_app():
                 return jsonify({"status": report.status, "message": report.message})
         except Exception as e:
             logger.error(f"Force scan error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/trade/buy", methods=["POST"])
+    async def api_trade_buy():
+        """
+        Place a manual buy order.
+
+        Body (JSON):
+            symbol      : ticker symbol (required)
+            quantity    : number of shares to buy (required, positive)
+            price       : limit price (optional; market order if omitted)
+        """
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+
+        data = await request.get_json(silent=True) or {}
+        symbol = str(data.get("symbol", "")).strip().upper()
+        if not symbol:
+            return jsonify({"error": "symbol is required"}), 400
+
+        try:
+            quantity = float(data["quantity"])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"error": "quantity is required and must be a positive number"}), 400
+        if quantity <= 0:
+            return jsonify({"error": "quantity must be positive"}), 400
+
+        price = data.get("price")
+        if price is not None:
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                return jsonify({"error": "price must be a positive number"}), 400
+            if price <= 0:
+                return jsonify({"error": "price must be positive"}), 400
+
+        try:
+            from dataclasses import asdict
+            from finance_service.core.models import TradeProposal
+
+            proposal = TradeProposal(
+                symbol=symbol,
+                action="BUY",
+                quantity=quantity,
+                target_price=price,
+                confidence=1.0,
+                rationale=["Manual buy order via API"],
+            )
+            approval = AgentReport(
+                agent_id="manual_trade",
+                status="success",
+                message="Manual buy approved",
+                payload={
+                    "trade_proposals": [asdict(proposal)],
+                    "risk_assessments": [],
+                    "all_passed": True,
+                    "decision": "APPROVED",
+                },
+            )
+            exec_report = await _orchestrator.execution_agent.run(approval)
+            if exec_report.status != "success":
+                return jsonify({"status": "error", "error": exec_report.message}), 400
+
+            await _orchestrator.event_bus.publish(
+                Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload)
+            )
+            result = exec_report.payload.get("execution_result", {})
+            return jsonify(_sanitize_floats({"status": "success", "data": result}))
+        except Exception as e:
+            logger.error(f"Manual buy error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/trade/sell", methods=["POST"])
+    async def api_trade_sell():
+        """
+        Place a manual sell order.
+
+        Body (JSON):
+            symbol      : ticker symbol (required)
+            quantity    : number of shares to sell (optional; sells entire position if omitted)
+            price       : limit price (optional; market order if omitted)
+        """
+        global _orchestrator
+        if not _orchestrator:
+            return jsonify({"error": "Orchestrator not initialized"}), 503
+
+        data = await request.get_json(silent=True) or {}
+        symbol = str(data.get("symbol", "")).strip().upper()
+        if not symbol:
+            return jsonify({"error": "symbol is required"}), 400
+
+        quantity = data.get("quantity")
+        if quantity is not None:
+            try:
+                quantity = float(quantity)
+            except (TypeError, ValueError):
+                return jsonify({"error": "quantity must be a positive number"}), 400
+            if quantity <= 0:
+                return jsonify({"error": "quantity must be positive"}), 400
+        else:
+            pf_report = await _orchestrator.portfolio_agent.get_detailed_portfolio_state()
+            if pf_report.status != "success":
+                return jsonify({"error": "Failed to fetch portfolio state"}), 500
+            positions = pf_report.payload.get("positions", [])
+            position = next((p for p in positions if p.get("symbol") == symbol), None)
+            if not position:
+                return jsonify({"error": f"No open position found for {symbol}"}), 400
+            quantity = position.get("quantity") or position.get("qty")
+            if not quantity or float(quantity) <= 0:
+                return jsonify({"error": f"Position for {symbol} has no tradeable quantity"}), 400
+            quantity = float(quantity)
+
+        price = data.get("price")
+        if price is not None:
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                return jsonify({"error": "price must be a positive number"}), 400
+            if price <= 0:
+                return jsonify({"error": "price must be positive"}), 400
+
+        try:
+            from dataclasses import asdict
+            from finance_service.core.models import TradeProposal
+
+            proposal = TradeProposal(
+                symbol=symbol,
+                action="SELL",
+                quantity=quantity,
+                target_price=price,
+                confidence=1.0,
+                rationale=["Manual sell order via API"],
+            )
+            approval = AgentReport(
+                agent_id="manual_trade",
+                status="success",
+                message="Manual sell approved",
+                payload={
+                    "trade_proposals": [asdict(proposal)],
+                    "risk_assessments": [],
+                    "all_passed": True,
+                    "decision": "APPROVED",
+                },
+            )
+            exec_report = await _orchestrator.execution_agent.run(approval)
+            if exec_report.status != "success":
+                return jsonify({"status": "error", "error": exec_report.message}), 400
+
+            await _orchestrator.event_bus.publish(
+                Event(event_type=Events.TRADE_EXECUTED, data=exec_report.payload)
+            )
+            result = exec_report.payload.get("execution_result", {})
+            return jsonify(_sanitize_floats({"status": "success", "data": result}))
+        except Exception as e:
+            logger.error(f"Manual sell error: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
 
     return app

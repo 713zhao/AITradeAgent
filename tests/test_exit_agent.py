@@ -43,8 +43,8 @@ class TestReactiveExits:
     @pytest.mark.asyncio
     async def test_stop_loss_triggered(self):
         """Test stop-loss exit is triggered when price <= stop_loss."""
-        agent = ExitAgent(config_engine=Mock())
-        
+        agent = ExitAgent(config_engine=None)
+
         positions = [
             {
                 "symbol": "NVDA",
@@ -67,7 +67,7 @@ class TestReactiveExits:
     @pytest.mark.asyncio
     async def test_take_profit_triggered(self):
         """Test take-profit exit is triggered when price >= take_profit."""
-        agent = ExitAgent(config_engine=Mock())
+        agent = ExitAgent(config_engine=None)
         
         positions = [
             {
@@ -91,7 +91,7 @@ class TestReactiveExits:
     @pytest.mark.asyncio
     async def test_no_exit_when_price_between_stops(self):
         """Test no exit when price is between stop-loss and take-profit."""
-        agent = ExitAgent(config_engine=Mock())
+        agent = ExitAgent(config_engine=None)
         
         positions = [
             {
@@ -120,7 +120,10 @@ class TestStrategicDegradation:
         config = Mock()
         data_agent = AsyncMock()
         analysis_agent = AsyncMock()
-        
+        strategy_agent = Mock()
+        strategy_agent.rule_strategy = Mock()
+        strategy_agent.rule_strategy.evaluate_exit.return_value = (True, ["rsi_overbought_exit"])
+
         # Mock data agent response
         data_agent.run.return_value = AgentReport(
             agent_id="data_agent",
@@ -131,7 +134,7 @@ class TestStrategicDegradation:
                 "dataframe": {"close": [100, 102, 105, 108, 110]}
             }
         )
-        
+
         # Mock analysis agent response with overbought RSI
         analysis_agent.run.return_value = AgentReport(
             agent_id="analysis_agent",
@@ -145,11 +148,12 @@ class TestStrategicDegradation:
                 }
             }
         )
-        
+
         agent = ExitAgent(
             config_engine=config,
             data_agent=data_agent,
-            analysis_agent=analysis_agent
+            analysis_agent=analysis_agent,
+            strategy_agent=strategy_agent,
         )
         
         positions = [
@@ -176,14 +180,17 @@ class TestStrategicDegradation:
         config = Mock()
         data_agent = AsyncMock()
         analysis_agent = AsyncMock()
-        
+        strategy_agent = Mock()
+        strategy_agent.rule_strategy = Mock()
+        strategy_agent.rule_strategy.evaluate_exit.return_value = (True, ["macd_bearish_exit"])
+
         data_agent.run.return_value = AgentReport(
             agent_id="data_agent",
             status="success",
             message="Data fetched",
             payload={"dataframe": {"close": [120, 118, 115, 112, 110]}}
         )
-        
+
         analysis_agent.run.return_value = AgentReport(
             agent_id="analysis_agent",
             status="success",
@@ -196,11 +203,12 @@ class TestStrategicDegradation:
                 }
             }
         )
-        
+
         agent = ExitAgent(
             config_engine=config,
             data_agent=data_agent,
-            analysis_agent=analysis_agent
+            analysis_agent=analysis_agent,
+            strategy_agent=strategy_agent,
         )
         
         positions = [
@@ -384,21 +392,26 @@ class TestIntegration:
         data_agent.run = mock_data_run
         analysis_agent.run = mock_analysis_run
         
+        strategy_agent = Mock()
+        strategy_agent.rule_strategy = Mock()
+        strategy_agent.rule_strategy.evaluate_exit.return_value = (True, ["rsi_overbought_exit"])
+
         agent = ExitAgent(
-            config_engine=config,
+            config_engine=None,
             data_agent=data_agent,
-            analysis_agent=analysis_agent
+            analysis_agent=analysis_agent,
+            strategy_agent=strategy_agent,
         )
-        
+
         report = await agent.run(positions=positions, perform_strategy_check=True)
-        
+
         assert report.status == "success"
         payload = report.payload or {}
-        
+
         # Should have exits and/or degradations
         exits = payload.get("reactive_exits", [])
         degraded = payload.get("degraded_positions", [])
-        
+
         assert len(exits) + len(degraded) > 0, f"Expected checks to trigger, exits={exits}, degraded={degraded}"
 
 
@@ -408,7 +421,7 @@ class TestOutputFormat:
     @pytest.mark.asyncio
     async def test_exit_record_structure(self):
         """Test that exit records have required fields."""
-        agent = ExitAgent(config_engine=Mock())
+        agent = ExitAgent(config_engine=None)
         
         positions = [
             {
@@ -501,55 +514,37 @@ if __name__ == "__main__":
 # ========== Additional Coverage Tests ==========
 
 class TestReactiveExitExecution:
-    """Tests for the execution path within reactive exits."""
+    """Tests for reactive exit detection — execution is delegated to the orchestrator."""
 
     @pytest.mark.asyncio
-    async def test_execution_agent_called_on_stop_loss(self):
-        """When execution_agent is present, it should auto-execute a SELL on exit trigger."""
-        mock_execution = AsyncMock()
-        mock_execution.run = AsyncMock(return_value=AgentReport(
-            agent_id="execution_agent", status="success",
-            message="Executed", payload={"order_id": "123"}
-        ))
-        agent = ExitAgent(
-            config_engine=None,
-            data_agent=AsyncMock(),
-            execution_agent=mock_execution,
-        )
+    async def test_stop_loss_exit_recorded_in_payload(self):
+        """Stop-loss exit is recorded in reactive_exits for the orchestrator to act on."""
+        agent = ExitAgent(config_engine=None, data_agent=AsyncMock())
         positions = [{
             "symbol": "AAPL", "quantity": 10,
             "current_price": 90.0, "stop_loss_price": 95.0, "take_profit_price": 200.0
         }]
         report = await agent.run(positions=positions, perform_strategy_check=False)
         assert report.payload["exits_count"] == 1
-        mock_execution.run.assert_called_once()
-        call_args = mock_execution.run.call_args
-        trade = call_args.kwargs["approved_trade_proposal"]
-        assert trade["action"] == "SELL"
-        assert trade["symbol"] == "AAPL"
+        exit_record = report.payload["reactive_exits"][0]
+        assert exit_record["symbol"] == "AAPL"
+        assert exit_record["exit_type"] == "reactive"
 
     @pytest.mark.asyncio
-    async def test_execution_agent_error_does_not_break(self):
-        """If execution_agent.run() raises, the exit should still be recorded."""
-        mock_execution = AsyncMock()
-        mock_execution.run = AsyncMock(side_effect=RuntimeError("Broker connection failed"))
-        agent = ExitAgent(
-            config_engine=None,
-            data_agent=AsyncMock(),
-            execution_agent=mock_execution,
-        )
+    async def test_take_profit_exit_recorded_in_payload(self):
+        """Take-profit exit is recorded in reactive_exits for the orchestrator to act on."""
+        agent = ExitAgent(config_engine=None, data_agent=None)
         positions = [{
             "symbol": "TSLA", "quantity": 5,
-            "current_price": 80.0, "stop_loss_price": 85.0, "take_profit_price": 300.0
+            "current_price": 310.0, "stop_loss_price": 85.0, "take_profit_price": 300.0
         }]
         report = await agent.run(positions=positions, perform_strategy_check=False)
-        # Exit should still be recorded even if execution fails
         assert report.payload["exits_count"] == 1
         assert report.payload["reactive_exits"][0]["symbol"] == "TSLA"
 
     @pytest.mark.asyncio
-    async def test_no_execution_agent_logs_warning(self):
-        """When execution_agent is None, exits are recorded but not executed."""
+    async def test_no_exit_agent_param_accepted(self):
+        """execution_agent kwarg is accepted for backward compatibility but ignored."""
         agent = ExitAgent(config_engine=None, data_agent=None, execution_agent=None)
         positions = [{
             "symbol": "GOOG", "quantity": 3,
@@ -658,8 +653,9 @@ class TestStrategicEdgeCases:
         assert report.payload["degraded_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_position_degraded_event_emitted(self):
-        """When a position is degraded, POSITION_DEGRADED event should be published."""
+    async def test_position_degraded_recorded_in_payload(self):
+        """When a position is degraded, it is recorded in degraded_positions payload.
+        The POSITION_DEGRADED event is published by the orchestrator, not ExitAgent."""
         mock_data = AsyncMock()
         mock_data.run = AsyncMock(return_value=AgentReport(
             agent_id="data_agent", status="success",
@@ -672,19 +668,17 @@ class TestStrategicEdgeCases:
                 "indicators_snapshot": {"rsi": 80.0, "trend": "bullish", "close": 150.0}
             }
         ))
+        mock_strategy = Mock()
+        mock_strategy.rule_strategy = Mock()
+        mock_strategy.rule_strategy.evaluate_exit.return_value = (True, ["rsi_overbought_exit"])
+
         agent = ExitAgent(
             config_engine=None, data_agent=mock_data,
-            execution_agent=None, analysis_agent=mock_analysis
+            execution_agent=None, analysis_agent=mock_analysis,
+            strategy_agent=mock_strategy,
         )
-        # Mock event_bus.publish
-        agent.event_bus = AsyncMock()
-        agent.event_bus.publish = AsyncMock()
 
         positions = [{"symbol": "META", "quantity": 8, "entry_price": 100.0, "current_price": 150.0}]
         report = await agent.run(positions=positions, perform_strategy_check=True)
         assert report.payload["degraded_count"] == 1
-        # Verify event was published
-        agent.event_bus.publish.assert_called()
-        published_event = agent.event_bus.publish.call_args[0][0]
-        assert published_event.event_type == Events.POSITION_DEGRADED
-        assert published_event.data["symbol"] == "META"
+        assert report.payload["degraded_positions"][0]["symbol"] == "META"

@@ -133,6 +133,24 @@ def engine_last_report(report_type: str) -> Dict[str, Any]:
     return _client._call_endpoint("POST", "/reports/last", payload)
 
 
+def manual_buy(symbol: str, quantity: float, price: Optional[float] = None) -> Dict[str, Any]:
+    """Manual Trade: Place a buy order for a symbol. Omit price for market order."""
+    payload: Dict[str, Any] = {"symbol": symbol, "quantity": quantity}
+    if price is not None:
+        payload["price"] = price
+    return _client._call_endpoint("POST", "/api/trade/buy", payload)
+
+
+def manual_sell(symbol: str, quantity: Optional[float] = None, price: Optional[float] = None) -> Dict[str, Any]:
+    """Manual Trade: Place a sell order. Omit quantity to sell entire position. Omit price for market order."""
+    payload: Dict[str, Any] = {"symbol": symbol}
+    if quantity is not None:
+        payload["quantity"] = quantity
+    if price is not None:
+        payload["price"] = price
+    return _client._call_endpoint("POST", "/api/trade/sell", payload)
+
+
 def cleanup():
     """Close client connection"""
     _client.close()

@@ -59,7 +59,7 @@ class HealthAgent(Agent):
         
         # Initialize remediation helper for auto-recovery
         try:
-            workspace = Path(__file__).parent.parent.parent.parent
+            workspace = Path(__file__).parent.parent.parent
             venv = workspace / "venv"
             self.remediation = RemediationHelper(
                 config={},

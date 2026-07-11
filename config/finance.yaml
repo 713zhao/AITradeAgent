@@ -4,6 +4,7 @@ risk:
   max_daily_loss_pct: 2.0
   max_drawdown_pct: 15.0
   default_risk_budget_pct: 1.0
+  exit_strategy: "atr"            # "atr" | "fixed_pct" | "partial_trail"
   stop_loss_default_pct: 10.0     # fallback only (ATR strategy uses stored per-position prices)
   take_profit_default_pct: 20.0   # fallback only (ATR strategy uses stored per-position prices)
   max_concurrent_positions: 10
