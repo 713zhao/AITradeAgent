@@ -2,6 +2,12 @@
 per-symbol pipeline concurrently, mirroring the baseline's Orchestrator
 but as an explicit, linear async function per symbol (easier to trace
 and test) plus event publication for observability/telegram-style hooks.
+
+Also wires the memory loop: StrategyAgent's decision_id is tracked so
+that when a position eventually closes (SELL), the realized P&L is
+backfilled onto that decision in MemoryStore, and LearningAgent can be
+run (via `run_learning_cycle`) to review newly-resolved decisions and
+write lessons back for StrategyAgent's future prompts.
 """
 from __future__ import annotations
 
@@ -10,12 +16,14 @@ import logging
 from trading_system.agents.analysis_agent import AnalysisAgent
 from trading_system.agents.data_agent import DataAgent
 from trading_system.agents.execution_agent import ExecutionAgent
+from trading_system.agents.learning_agent import LearningAgent
 from trading_system.agents.portfolio_agent import PortfolioAgent
 from trading_system.agents.risk_agent import RiskAgent
 from trading_system.agents.scanner_agent import ScannerAgent
 from trading_system.agents.strategy_agent import StrategyAgent
 from trading_system.core.event_bus import Event, EventBus, Events
 from trading_system.core.models import Action
+from trading_system.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +40,8 @@ class Orchestrator:
         portfolio: PortfolioAgent,
         event_bus: EventBus | None = None,
         lookback_days: int = 250,
+        memory: MemoryStore | None = None,
+        learning: LearningAgent | None = None,
     ) -> None:
         self.scanner = scanner
         self.data = data
@@ -42,6 +52,8 @@ class Orchestrator:
         self.portfolio = portfolio
         self.bus = event_bus or EventBus()
         self.lookback_days = lookback_days
+        self.memory = memory
+        self.learning = learning
 
     async def run_symbol(self, symbol: str) -> dict:
         result: dict = {"symbol": symbol}
@@ -70,6 +82,7 @@ class Orchestrator:
             ),
         )
         proposal = strategy_report.payload["proposal"]
+        decision_id = strategy_report.payload.get("decision_id")
         result["proposal"] = proposal
         await self.bus.publish(Event(Events.TRADE_PROPOSAL_GENERATED, {"symbol": symbol, "action": proposal.action}))
 
@@ -95,8 +108,14 @@ class Orchestrator:
         await self.bus.publish(Event(Events.TRADE_EXECUTED, {"symbol": symbol, "action": execution_result.action}))
 
         await self.portfolio.run(execution_result, stop_loss_price=decision.stop_loss_price)
+
+        if self.memory is not None and decision_id is not None and execution_result.action == Action.BUY:
+            self.memory.mark_executed(decision_id)
+
         if execution_result.action == Action.SELL:
             realized = self.portfolio.store.trade_history(limit=1)[0]["realized_pnl"]
+            if self.memory is not None:
+                self.memory.backfill_outcome_for_symbol(symbol, realized)
             if realized < 0:
                 self.risk.register_loss(symbol)
         await self.bus.publish(Event(Events.PORTFOLIO_UPDATED, {"symbol": symbol}))
@@ -117,3 +136,12 @@ class Orchestrator:
                 await self.bus.publish(Event(Events.PIPELINE_ERROR, {"symbol": symbol, "error": str(exc)}))
                 results.append({"symbol": symbol, "error": str(exc)})
         return results
+
+    async def run_learning_cycle(self) -> dict | None:
+        """Reviews newly-resolved decisions and writes a lesson if the
+        LearningAgent finds an actionable pattern. Safe to call after
+        every scan cycle; it's a no-op when nothing new has resolved."""
+        if self.learning is None:
+            return None
+        report = await self.learning.run()
+        return {"status": report.status, "message": report.message, "payload": report.payload}

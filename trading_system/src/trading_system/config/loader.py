@@ -34,7 +34,9 @@ class AppConfig(BaseModel):
     lookback_days: int = 250
     starting_cash: float = 100_000.0
     db_path: str = "storage/portfolio.sqlite"
+    memory_db_path: str = "storage/memory.sqlite"
     scan_interval_minutes: int = 15
+    run_learning_after_each_cycle: bool = True
     risk: RiskConfig = RiskConfig()
     llm: LLMConfig = LLMConfig()
     broker: BrokerConfig = BrokerConfig()

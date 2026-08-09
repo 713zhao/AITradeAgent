@@ -12,7 +12,9 @@ scan_limit: 8
 lookback_days: 250
 starting_cash: 100000.0
 db_path: storage/portfolio.sqlite
+memory_db_path: storage/memory.sqlite
 scan_interval_minutes: 15
+run_learning_after_each_cycle: true
 
 risk:
   max_position_weight: 0.15

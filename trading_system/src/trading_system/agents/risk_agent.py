@@ -5,6 +5,10 @@ portfolio equity and a target weight (not a fixed share count picked by
 the strategy layer), a hard per-symbol exposure cap, a max concurrent
 positions cap, a daily-loss circuit breaker, and a per-symbol cooldown
 after a loss to avoid immediately re-entering a stopped-out name.
+
+Memory: cooldowns and circuit-breaker triggers are persisted via
+MemoryStore (risk_events table) so they survive a process restart,
+instead of living only in an in-memory dict.
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ from trading_system.core.models import (
     RiskDecision,
     TradeProposal,
 )
+from trading_system.memory.store import MemoryStore
 
 
 class RiskPolicy:
@@ -40,9 +45,10 @@ class RiskPolicy:
 
 
 class RiskAgent(Agent):
-    def __init__(self, policy: RiskPolicy | None = None) -> None:
+    def __init__(self, policy: RiskPolicy | None = None, memory: MemoryStore | None = None) -> None:
         self.policy = policy or RiskPolicy()
-        self._cooldowns: dict[str, datetime] = {}
+        self.memory = memory
+        self._local_cooldowns: dict[str, datetime] = {}
 
     @property
     def agent_id(self) -> str:
@@ -53,12 +59,15 @@ class RiskAgent(Agent):
         return "Approve, resize, or reject trade proposals against risk policy"
 
     def register_loss(self, symbol: str) -> None:
-        self._cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(
-            minutes=self.policy.cooldown_minutes_after_loss
-        )
+        until = datetime.now(timezone.utc) + timedelta(minutes=self.policy.cooldown_minutes_after_loss)
+        self._local_cooldowns[symbol] = until
+        if self.memory is not None:
+            self.memory.set_cooldown(symbol, until, reason="loss_on_close")
 
     def _in_cooldown(self, symbol: str) -> bool:
-        until = self._cooldowns.get(symbol)
+        until = self._local_cooldowns.get(symbol)
+        if until is None and self.memory is not None:
+            until = self.memory.cooldown_until(symbol)
         return until is not None and datetime.now(timezone.utc) < until
 
     async def run(
@@ -73,11 +82,13 @@ class RiskAgent(Agent):
     ) -> AgentReport:
         p = self.policy
 
-        def reject(reason: str) -> AgentReport:
+        def reject(reason: str, log_event: str | None = None) -> AgentReport:
             decision = RiskDecision(
                 symbol=proposal.symbol, action=proposal.action, approved=False,
                 reason=reason, original_proposal=proposal,
             )
+            if log_event is not None and self.memory is not None:
+                self.memory.record_risk_event(proposal.symbol, log_event, reason)
             return AgentReport(
                 agent_id=self.agent_id, status="rejected", message=reason,
                 payload={"decision": decision},
@@ -97,7 +108,8 @@ class RiskAgent(Agent):
             daily_loss_pct = -realized_pnl_today / starting_equity_today
             if daily_loss_pct >= p.max_daily_loss_pct:
                 return reject(
-                    f"Daily loss circuit breaker triggered ({daily_loss_pct:.2%} >= {p.max_daily_loss_pct:.2%})"
+                    f"Daily loss circuit breaker triggered ({daily_loss_pct:.2%} >= {p.max_daily_loss_pct:.2%})",
+                    log_event="circuit_breaker",
                 )
 
         if proposal.action == Action.SELL:

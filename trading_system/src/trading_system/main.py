@@ -14,6 +14,7 @@ import json
 from trading_system.agents.analysis_agent import AnalysisAgent
 from trading_system.agents.data_agent import DataAgent, YFinanceProvider
 from trading_system.agents.execution_agent import ExecutionAgent
+from trading_system.agents.learning_agent import LearningAgent
 from trading_system.agents.portfolio_agent import PortfolioAgent, PortfolioStore
 from trading_system.agents.risk_agent import RiskAgent, RiskPolicy
 from trading_system.agents.scanner_agent import ScannerAgent
@@ -23,6 +24,7 @@ from trading_system.config.loader import load_config
 from trading_system.core.market_hours import is_us_market_open
 from trading_system.core.models import ExecutionResult, RiskDecision, TradeProposal
 from trading_system.llm.client import NullLLMClient, OpenAICompatibleClient
+from trading_system.memory.store import MemoryStore
 from trading_system.orchestrator import Orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -40,20 +42,23 @@ def build_orchestrator(config_path: str) -> Orchestrator:
         else:
             llm_client = OpenAICompatibleClient(api_key=api_key, model=cfg.llm.model, base_url=cfg.llm.base_url)
 
+    memory = MemoryStore(cfg.memory_db_path)
+
     scanner = ScannerAgent(cfg.universe, limit=cfg.scan_limit)
     data_agent = DataAgent(YFinanceProvider())
     analysis_agent = AnalysisAgent()
-    strategy_agent = StrategyAgent(llm_client=llm_client)
-    risk_agent = RiskAgent(RiskPolicy(**cfg.risk.model_dump()))
+    strategy_agent = StrategyAgent(llm_client=llm_client, memory=memory)
+    risk_agent = RiskAgent(RiskPolicy(**cfg.risk.model_dump()), memory=memory)
     broker = PaperBroker(**cfg.broker.model_dump())
     execution_agent = ExecutionAgent(broker)
     store = PortfolioStore(cfg.db_path, starting_cash=cfg.starting_cash)
     portfolio_agent = PortfolioAgent(store)
+    learning_agent = LearningAgent(memory=memory, llm_client=llm_client)
 
     return Orchestrator(
         scanner=scanner, data=data_agent, analysis=analysis_agent, strategy=strategy_agent,
         risk=risk_agent, execution=execution_agent, portfolio=portfolio_agent,
-        lookback_days=cfg.lookback_days,
+        lookback_days=cfg.lookback_days, memory=memory, learning=learning_agent,
     )
 
 
@@ -78,13 +83,25 @@ def _summarize(results: list[dict]) -> None:
             logger.info("%s: proposal=%s (no action)", symbol, proposal.action if proposal else "?")
 
 
+async def _maybe_run_learning(orchestrator: Orchestrator, cfg) -> None:
+    if not cfg.run_learning_after_each_cycle:
+        return
+    result = await orchestrator.run_learning_cycle()
+    if result and result["status"] == "success":
+        logger.info("LearningAgent: %s", result["payload"].get("lesson"))
+    elif result:
+        logger.info("LearningAgent: %s", result["message"])
+
+
 async def run_once(config_path: str, bypass_market_hours: bool) -> None:
     if not bypass_market_hours and not is_us_market_open():
         logger.info("US market closed; skipping scan (use --bypass-market-hours to force)")
         return
+    cfg = load_config(config_path)
     orchestrator = build_orchestrator(config_path)
     results = await orchestrator.run_scan_cycle()
     _summarize(results)
+    await _maybe_run_learning(orchestrator, cfg)
 
 
 async def run_loop(config_path: str, bypass_market_hours: bool) -> None:
@@ -95,6 +112,7 @@ async def run_loop(config_path: str, bypass_market_hours: bool) -> None:
         if bypass_market_hours or is_us_market_open():
             results = await orchestrator.run_scan_cycle()
             _summarize(results)
+            await _maybe_run_learning(orchestrator, cfg)
         else:
             logger.info("Market closed; sleeping")
         await asyncio.sleep(interval)

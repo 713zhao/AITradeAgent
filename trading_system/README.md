@@ -70,6 +70,50 @@ Agents:
 - **PortfolioAgent** / **PortfolioStore** — single writer of cash,
   positions, trade history, and daily equity, persisted to SQLite so
   state survives restarts.
+- **LearningAgent** — reviews decisions whose outcome just resolved (a
+  position closed) and distills a short lesson via LLM (or a stats
+  fallback with no LLM configured), persisted to memory for
+  StrategyAgent's future prompts. Runs after each scan cycle by default
+  (`run_learning_after_each_cycle` in config).
+
+## Memory: which agents are stateful "real" agents
+
+Only the judgment-making agents carry persistent memory/context across
+cycles; the mechanical pipeline stages stay stateless pure functions
+(their state is already the DataAgent cache and the PortfolioStore
+ledger — adding a second memory layer there would be redundant).
+
+`MemoryStore` (`storage/memory.sqlite` by default) has three tables:
+
+- `decisions` — every proposal StrategyAgent ever makes (not just
+  executed ones): symbol, action, confidence, reasoning, and (once the
+  resulting position closes) `outcome_pnl`. This is StrategyAgent's
+  **episodic memory** — before each call it injects this symbol's win
+  rate and last 5 decisions with outcomes into the LLM prompt, so it can
+  see whether similar past setups worked.
+- `lessons` — short distilled text LearningAgent writes after reviewing
+  newly-resolved decisions. This is StrategyAgent's **semantic memory**
+  — recent global lessons are injected into every prompt alongside the
+  live indicators.
+- `risk_events` — cooldowns and circuit-breaker triggers. RiskAgent's
+  post-loss cooldown previously lived only in an in-memory dict (lost on
+  restart); it's now persisted here so a restarted process still honors
+  an active cooldown.
+
+Data flow: StrategyAgent proposes -> logged to `decisions` (pending
+outcome) -> if executed, ExecutionAgent/PortfolioAgent fill it ->
+Orchestrator marks the decision executed -> when the position is later
+sold, Orchestrator backfills `outcome_pnl` onto that decision ->
+LearningAgent periodically reviews newly-resolved decisions and writes a
+`lessons` row -> next StrategyAgent call for any symbol sees that lesson.
+
+What deliberately stays out of scope: each agent is **not** an isolated
+process/service with its own conversation state (e.g. a separate `rlm`
+child per agent). RiskAgent's checks need a consistent live view of
+equity/open-position-count and PortfolioAgent must remain a single
+writer, so the pipeline stays one process with shared, consistent state;
+memory is what makes StrategyAgent/RiskAgent/LearningAgent "real" stateful
+agents, not process isolation.
 
 ## Running
 
@@ -86,7 +130,8 @@ uv run python -m trading_system.main --config config.yaml --loop
 ```
 
 Portfolio state persists to `storage/portfolio.sqlite` (path configurable
-via `db_path` in `config.yaml`).
+via `db_path` in `config.yaml`); agent memory persists to
+`storage/memory.sqlite` (path configurable via `memory_db_path`).
 
 ### Enabling the LLM strategy agent
 
@@ -112,10 +157,15 @@ trading.
 uv run pytest -q
 ```
 
-27 tests cover every agent in isolation (with fake data providers and a
-fake LLM client — no network or API key required) plus full
-scanner-to-portfolio integration scenarios (buy on uptrend, hold on flat
-market, independent multi-symbol scans, buy-then-sell realized P&L).
+46 tests cover every agent in isolation (with fake data providers and a
+fake LLM client — no network or API key required), the memory store
+(episodic decisions, semantic lessons, persistent cooldowns), the
+learning agent (LLM and stats-fallback lesson generation), and full
+integration scenarios: scanner-to-portfolio (buy on uptrend, hold on
+flat market, independent multi-symbol scans, buy-then-sell realized
+P&L) and the full memory loop (proposal logged -> executed -> outcome
+backfilled -> lesson written -> lesson visible in the next
+StrategyAgent prompt).
 
 ## What's real here vs. simulated
 
