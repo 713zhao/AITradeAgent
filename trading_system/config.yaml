@@ -1,0 +1,34 @@
+universe:
+  - AAPL
+  - MSFT
+  - NVDA
+  - GOOGL
+  - AMZN
+  - META
+  - TSLA
+  - AVGO
+
+scan_limit: 8
+lookback_days: 250
+starting_cash: 100000.0
+db_path: storage/portfolio.sqlite
+scan_interval_minutes: 15
+
+risk:
+  max_position_weight: 0.15
+  max_positions: 12
+  min_confidence: 0.55
+  max_daily_loss_pct: 0.03
+  cooldown_minutes_after_loss: 60
+  default_stop_loss_pct: 0.08
+
+llm:
+  enabled: false
+  provider: openai
+  model: gpt-4o-mini
+  base_url: null
+  api_key_env: OPENAI_API_KEY
+
+broker:
+  slippage_bps: 5.0
+  commission_bps: 1.0

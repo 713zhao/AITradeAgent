@@ -1,0 +1,131 @@
+"""StrategyAgent: turns an IndicatorSet into a TradeProposal.
+
+Architecture decision vs. the AITradeAgent baseline: the baseline's
+StrategyAgent was a fixed rule (`sma20_trend`) with no market context or
+reasoning trace. Here the primary strategy is an LLM given the full
+indicator snapshot plus current position context, asked to return a
+structured decision with a reasoning string (auditable) and a target
+portfolio weight instead of a hardcoded share count, so RiskAgent/
+PortfolioAgent do the actual sizing math against live equity.
+
+A deterministic rule-based strategy is kept as:
+  1. the default when no LLM API key is configured, and
+  2. an automatic fallback if the LLM call fails or returns an
+     unparseable/invalid response,
+so the pipeline is never blocked on LLM availability.
+"""
+from __future__ import annotations
+
+import logging
+
+from trading_system.agents.base import Agent
+from trading_system.core.models import Action, AgentReport, IndicatorSet, TradeProposal
+from trading_system.llm.client import LLMClient
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_PROMPT = """You are a disciplined swing-trading strategy agent for a paper-trading system. You receive one symbol's technical indicators and current position (if any). Return ONLY a JSON object with keys:
+  action: "BUY" | "SELL" | "HOLD"
+  confidence: float 0..1
+  target_weight: float 0..1 (fraction of total portfolio equity this position should     occupy if the action is BUY; ignored for SELL/HOLD)
+  stop_loss_pct: float or null (fraction below entry price for a stop, e.g. 0.05)
+  reasoning: short string (max 40 words) explaining the decision using the indicators given
+
+Rules: Be conservative. Only BUY when trend and momentum indicators agree (e.g. price above sma_20/sma_50, MACD histogram positive, RSI between 40-70). Only SELL an existing position on clear trend reversal or overbought exhaustion (RSI > 75) or breakdown below sma_50. Otherwise HOLD. Never invent data not provided."""
+
+
+def rule_based_proposal(indicators: IndicatorSet, has_position: bool) -> TradeProposal:
+    """Deterministic fallback strategy: SMA20/50 trend-follow with RSI filter."""
+    price = indicators.price
+    sma20 = indicators.sma_20
+    sma50 = indicators.sma_50
+    rsi = indicators.rsi_14
+    macd_hist = indicators.macd_hist
+
+    if sma20 is None or sma50 is None:
+        return TradeProposal(
+            symbol=indicators.symbol, action=Action.HOLD, confidence=0.3,
+            reasoning="Insufficient history for SMA signals.", proposed_by="rule_fallback",
+        )
+
+    bullish = price > sma20 > sma50 and (macd_hist or 0) > 0 and (rsi is None or rsi < 70)
+    bearish = has_position and (price < sma50 or (rsi is not None and rsi > 75))
+
+    if bullish:
+        return TradeProposal(
+            symbol=indicators.symbol, action=Action.BUY, confidence=0.6,
+            target_weight=0.08, stop_loss_pct=0.06,
+            reasoning="Price above SMA20/50 with positive MACD momentum.",
+            proposed_by="rule_fallback",
+        )
+    if bearish:
+        return TradeProposal(
+            symbol=indicators.symbol, action=Action.SELL, confidence=0.6,
+            reasoning="Price broke below SMA50 or RSI overbought exhaustion.",
+            proposed_by="rule_fallback",
+        )
+    return TradeProposal(
+        symbol=indicators.symbol, action=Action.HOLD, confidence=0.5,
+        reasoning="No clear trend/momentum alignment.", proposed_by="rule_fallback",
+    )
+
+
+def _build_user_prompt(indicators: IndicatorSet, has_position: bool, position_summary: str) -> str:
+    return (
+        f"Symbol: {indicators.symbol}\n"
+        f"As of: {indicators.as_of}\n"
+        f"Price: {indicators.price}\n"
+        f"SMA20: {indicators.sma_20} SMA50: {indicators.sma_50} SMA200: {indicators.sma_200}\n"
+        f"EMA12: {indicators.ema_12} EMA26: {indicators.ema_26}\n"
+        f"RSI14: {indicators.rsi_14}\n"
+        f"MACD: {indicators.macd} Signal: {indicators.macd_signal} Hist: {indicators.macd_hist}\n"
+        f"ATR14: {indicators.atr_14}\n"
+        f"Bollinger upper/lower: {indicators.bb_upper} / {indicators.bb_lower}\n"
+        f"5d change: {indicators.pct_change_5d} 20d change: {indicators.pct_change_20d}\n"
+        f"Current position: {position_summary}\n"
+    )
+
+
+class StrategyAgent(Agent):
+    def __init__(self, llm_client: LLMClient | None = None) -> None:
+        self._llm = llm_client
+
+    @property
+    def agent_id(self) -> str:
+        return "strategy_agent"
+
+    @property
+    def goal(self) -> str:
+        return "Produce a trade proposal (BUY/SELL/HOLD) with reasoning from indicators"
+
+    async def run(
+        self, indicators: IndicatorSet, has_position: bool = False, position_summary: str = "none",
+    ) -> AgentReport:
+        if self._llm is not None:
+            try:
+                raw = await self._llm.complete_json(
+                    SYSTEM_PROMPT, _build_user_prompt(indicators, has_position, position_summary),
+                )
+                proposal = TradeProposal(
+                    symbol=indicators.symbol,
+                    action=Action(str(raw["action"]).upper()),
+                    confidence=float(raw.get("confidence", 0.5)),
+                    target_weight=float(raw.get("target_weight") or 0.0),
+                    stop_loss_pct=raw.get("stop_loss_pct"),
+                    reasoning=str(raw.get("reasoning", ""))[:400],
+                    proposed_by="llm_strategy",
+                )
+                return AgentReport(
+                    agent_id=self.agent_id, status="success",
+                    message=f"LLM proposal for {indicators.symbol}: {proposal.action}",
+                    payload={"proposal": proposal},
+                )
+            except Exception as exc:
+                logger.warning("LLM strategy failed for %s (%s); falling back to rules", indicators.symbol, exc)
+
+        proposal = rule_based_proposal(indicators, has_position)
+        return AgentReport(
+            agent_id=self.agent_id, status="success",
+            message=f"Rule-based proposal for {indicators.symbol}: {proposal.action}",
+            payload={"proposal": proposal},
+        )
